@@ -29,7 +29,10 @@ class Config:
         default_factory=lambda: Path.home()
         / "Library/Application Support/BeeperTexts/account.db"
     )
+    beeper_api_url: str = "http://localhost:23373"
+    beeper_api_token: str = ""
     sync_timeout_ms: int = 30000
+    poll_interval: int = 30
     classifier_model: str = "claude-sonnet-4-6"
     synthesis_model: str = "claude-sonnet-4-6"
     synthesis_hour: int = 6
@@ -64,7 +67,10 @@ class Config:
             ),
             matrix_access_token=token,
             beeper_db_path=beeper_db,
+            beeper_api_url=os.environ.get("BEEPER_API_URL", "http://localhost:23373"),
+            beeper_api_token=os.environ.get("BEEPER_API_TOKEN", ""),
             sync_timeout_ms=int(os.environ.get("SYNC_TIMEOUT_MS", "30000")),
+            poll_interval=int(os.environ.get("POLL_INTERVAL", "30")),
             classifier_model=os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-6"),
             synthesis_model=os.environ.get("SYNTHESIS_MODEL", "claude-sonnet-4-6"),
             synthesis_hour=int(os.environ.get("SYNTHESIS_HOUR", "6")),
