@@ -21,6 +21,38 @@ logger = logging.getLogger("vibez.sync")
 
 DEFAULT_API_BASE = "http://localhost:23373"
 POLL_INTERVAL = 30  # seconds between polls
+TOKEN_WARN_DAYS = 3  # warn when token expires within this many days
+
+
+def check_token_health(base_url: str, token: str) -> None:
+    """Check token validity and warn if near expiry."""
+    try:
+        data = urllib.request.urlopen(
+            urllib.request.Request(
+                f"{base_url}/oauth/introspect",
+                data=urllib.parse.urlencode({
+                    "token": token, "token_type_hint": "access_token",
+                }).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            ),
+            timeout=10,
+        )
+        info = json.loads(data.read())
+        if not info.get("active"):
+            logger.error("Beeper API token is INACTIVE. Sync will fail.")
+            return
+        exp = info.get("exp")
+        if exp:
+            remaining = exp - time.time()
+            days_left = remaining / 86400
+            if days_left < TOKEN_WARN_DAYS:
+                logger.warning("Beeper API token expires in %.1f days! Re-auth soon.", days_left)
+            else:
+                logger.info("Token valid, expires in %.0f days", days_left)
+        else:
+            logger.info("Token valid (no expiry set)")
+    except Exception:
+        logger.warning("Could not check token health (non-fatal)")
 
 
 def api_get(base_url: str, path: str, token: str, params: dict | None = None) -> dict:
@@ -198,6 +230,7 @@ async def sync_loop(
     init_db(db_path)
     backoff = 1
 
+    check_token_health(api_base, api_token)
     logger.info("Discovering WhatsApp groups...")
     groups = get_whatsapp_groups(api_base, api_token)
     logger.info("Monitoring %d WhatsApp groups", len(groups))

@@ -11,6 +11,13 @@
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/braydon/projects/personal/vibez-monitor</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>VIBEZ_DB_PATH</key>
+        <string>/Users/braydon/projects/personal/vibez-monitor/vibez.db</string>
+        <key>BEEPER_API_URL</key>
+        <string>http://localhost:23373</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
