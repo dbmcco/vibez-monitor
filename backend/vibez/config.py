@@ -11,7 +11,7 @@ from pathlib import Path
 def read_beeper_token(beeper_db_path: str | Path) -> str:
     """Read the Matrix access token from Beeper's local database."""
     conn = sqlite3.connect(str(beeper_db_path))
-    cursor = conn.execute("SELECT token FROM account LIMIT 1")
+    cursor = conn.execute("SELECT access_token FROM account LIMIT 1")
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -50,7 +50,7 @@ class Config:
                 "BEEPER_DB_PATH",
                 str(Path.home() / "Library/Application Support/BeeperTexts/account.db"),
             )
-        )
+        ).expanduser()
 
         token = os.environ.get("MATRIX_ACCESS_TOKEN", "")
         if not token and beeper_db.exists():
@@ -72,5 +72,5 @@ class Config:
                 os.environ.get(
                     "LOG_DIR", str(Path.home() / "Library/Logs/vibez-monitor")
                 )
-            ),
+            ).expanduser(),
         )

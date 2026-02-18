@@ -35,7 +35,7 @@ def test_read_beeper_token(tmp_path):
     mock_db = tmp_path / "account.db"
     conn = sqlite3.connect(str(mock_db))
     conn.execute(
-        "CREATE TABLE account (user_id TEXT, device_id TEXT, token TEXT, homeserver TEXT)"
+        "CREATE TABLE account (user_id TEXT, device_id TEXT, access_token TEXT, homeserver TEXT)"
     )
     conn.execute(
         "INSERT INTO account VALUES ('user', 'dev', 'syt_test_token', 'https://matrix.beeper.com/')"

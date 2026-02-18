@@ -29,6 +29,9 @@ Braydon's active projects: {projects}
 Messages (chronological, with classifications):
 {messages_block}
 
+CONTRIBUTION THEMES from classifier (cluster these):
+{contribution_themes_block}
+
 Respond with JSON:
 {{
   "briefing": [
@@ -41,9 +44,13 @@ Respond with JSON:
   ],
   "contributions": [
     {{
-      "thread": "<which thread>",
-      "why": "<why Braydon's knowledge is relevant>",
-      "action": "<specific suggested action>"
+      "theme": "<contribution theme slug, e.g. multi-agent-orchestration>",
+      "type": "<'reply' for time-sensitive thread responses, 'create' for evergreen topic contributions>",
+      "freshness": "<'hot' if <24h, 'warm' if 1-3 days, 'cool' if 3-7 days, 'archive' if >7 days>",
+      "threads": ["<related thread titles from briefing>"],
+      "why": "<why Braydon's knowledge is relevant to this theme>",
+      "action": "<specific suggested action: reply to thread, share a tool, write a post, etc.>",
+      "message_count": <how many messages touched this theme>
     }}
   ],
   "trends": {{
@@ -61,7 +68,13 @@ Respond with JSON:
   ]
 }}
 
-Focus on the top 3-5 most important threads. Be specific about contribution opportunities."""
+CONTRIBUTION RULES:
+- Cluster contribution opportunities by THEME, not individual messages.
+- A theme with many recent messages is higher priority than one with a single old message.
+- "reply" type: fresh threads (<3 days) where Braydon can jump in with a direct response.
+- "create" type: recurring themes that warrant a dedicated share (tool, deck, post) even if individual messages are older.
+- Rank contributions by: theme_relevance * freshness_weight * message_density.
+- Focus on the top 3-5 most important threads and top 3-5 contribution themes."""
 
 
 def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
@@ -70,7 +83,8 @@ def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str
     cursor = conn.execute(
         """SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
                   c.relevance_score, c.topics, c.entities,
-                  c.contribution_flag, c.contribution_hint, c.alert_level
+                  c.contribution_flag, c.contribution_hint, c.alert_level,
+                  c.contribution_themes
            FROM messages m
            LEFT JOIN classifications c ON m.id = c.message_id
            WHERE m.timestamp >= ? AND m.timestamp < ?
@@ -87,6 +101,7 @@ def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str
             "entities": json.loads(r[7]) if r[7] else [],
             "contribution_flag": bool(r[8]),
             "contribution_hint": r[9] or "", "alert_level": r[10] or "none",
+            "contribution_themes": json.loads(r[11]) if r[11] else [],
         }
         for r in rows
     ]
@@ -110,6 +125,18 @@ def build_synthesis_prompt(
             f"{m['body'][:500]}\n"
         )
 
+    # Aggregate contribution themes across all messages
+    theme_counts: dict[str, int] = {}
+    for m in messages:
+        for theme in m.get("contribution_themes", []):
+            theme_counts[theme] = theme_counts.get(theme, 0) + 1
+    contribution_themes_block = ""
+    if theme_counts:
+        for theme, count in sorted(theme_counts.items(), key=lambda x: -x[1]):
+            contribution_themes_block += f"  {theme}: {count} messages\n"
+    else:
+        contribution_themes_block = "  (none flagged yet)\n"
+
     previous_context = ""
     if previous_briefing:
         previous_context = f"Yesterday's key threads (for continuity):\n{previous_briefing[:1000]}\n"
@@ -119,6 +146,7 @@ def build_synthesis_prompt(
         topics=", ".join(value_config.get("topics", [])),
         projects=", ".join(value_config.get("projects", [])),
         previous_context=previous_context, messages_block=messages_block,
+        contribution_themes_block=contribution_themes_block,
     )
 
 
@@ -192,9 +220,19 @@ def render_briefing_markdown(report: dict[str, Any], report_date: str) -> str:
     if report.get("contributions"):
         lines.append("## Contribution Opportunities\n")
         for c in report["contributions"]:
-            lines.append(f"- **{c.get('thread', '')}**: {c.get('why', '')}")
-            lines.append(f"  - Action: {c.get('action', '')}")
-        lines.append("")
+            ctype = c.get("type", "reply")
+            freshness = c.get("freshness", "")
+            theme = c.get("theme", "")
+            badge = f"[{ctype.upper()}]" if ctype else ""
+            fresh_badge = f"[{freshness}]" if freshness else ""
+            lines.append(f"### {badge} {fresh_badge} {theme}")
+            if c.get("threads"):
+                lines.append(f"**Related threads:** {', '.join(c['threads'])}")
+            lines.append(f"\n{c.get('why', '')}")
+            lines.append(f"\n**Action:** {c.get('action', '')}")
+            if c.get("message_count"):
+                lines.append(f"*({c['message_count']} messages on this theme)*")
+            lines.append("")
     trends = report.get("trends", {})
     if trends:
         lines.append("## Trends\n")

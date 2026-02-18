@@ -22,6 +22,7 @@ export interface Message {
   topics: string | null;
   entities: string | null;
   contribution_flag: number | null;
+  contribution_themes: string | null;
   contribution_hint: string | null;
   alert_level: string | null;
 }
@@ -47,7 +48,7 @@ export function getMessages(opts: {
   const db = getDb();
   let query = `
     SELECT m.*, c.relevance_score, c.topics, c.entities,
-           c.contribution_flag, c.contribution_hint, c.alert_level
+           c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
     FROM messages m
     LEFT JOIN classifications c ON m.id = c.message_id
     WHERE 1=1

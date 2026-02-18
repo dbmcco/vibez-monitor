@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS classifications (
     topics TEXT NOT NULL DEFAULT '[]',
     entities TEXT NOT NULL DEFAULT '[]',
     contribution_flag BOOLEAN NOT NULL DEFAULT 0,
+    contribution_themes TEXT NOT NULL DEFAULT '[]',
     contribution_hint TEXT,
     alert_level TEXT NOT NULL DEFAULT 'none',
     classified_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -88,10 +89,21 @@ def get_connection(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Run schema migrations on existing databases."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(classifications)")}
+    if "contribution_themes" not in cols:
+        conn.execute(
+            "ALTER TABLE classifications ADD COLUMN contribution_themes TEXT NOT NULL DEFAULT '[]'"
+        )
+        conn.commit()
+
+
 def init_db(db_path: str | Path) -> None:
     """Initialize the database schema. Idempotent."""
     conn = get_connection(db_path)
     conn.executescript(SCHEMA)
+    _migrate(conn)
     cursor = conn.execute("SELECT COUNT(*) FROM value_config")
     if cursor.fetchone()[0] == 0:
         for key, value in DEFAULT_VALUE_CONFIG.items():

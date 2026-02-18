@@ -37,8 +37,9 @@ Respond with JSON:
   "relevance_score": <0-10, how relevant to Braydon's interests>,
   "topics": [<topic tags from the message>],
   "entities": [<tools, repos, concepts, people mentioned>],
-  "contribution_flag": <true if Braydon could add value>,
-  "contribution_hint": "<if flagged, why and what could he contribute>",
+  "contribution_flag": <true if Braydon could add value based on his projects/expertise>,
+  "contribution_themes": [<if flagged, 1-3 theme slugs for what Braydon could contribute to, e.g. "multi-agent-orchestration", "local-first-tools", "context-management">],
+  "contribution_hint": "<if flagged, specific action: what could he share, build, or respond with>",
   "alert_level": "<'hot' if needs attention now, 'digest' if include in daily summary, 'none' if low value>"
 }}"""
 
@@ -73,6 +74,7 @@ def parse_classification(raw: str) -> dict[str, Any]:
         "topics": [],
         "entities": [],
         "contribution_flag": False,
+        "contribution_themes": [],
         "contribution_hint": "",
         "alert_level": "none",
     }
@@ -128,14 +130,15 @@ def save_classification(db_path: Path, message_id: str, classification: dict[str
     conn = get_connection(db_path)
     conn.execute(
         """INSERT OR REPLACE INTO classifications
-           (message_id, relevance_score, topics, entities, contribution_flag, contribution_hint, alert_level)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (message_id, relevance_score, topics, entities, contribution_flag, contribution_themes, contribution_hint, alert_level)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             message_id,
             classification["relevance_score"],
             json.dumps(classification["topics"]),
             json.dumps(classification["entities"]),
             classification["contribution_flag"],
+            json.dumps(classification.get("contribution_themes", [])),
             classification["contribution_hint"],
             classification["alert_level"],
         ),
