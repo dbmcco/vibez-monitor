@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,8 @@ def parse_classification(raw: str) -> dict[str, Any]:
     }
     try:
         cleaned = raw.strip()
+        # Strip <think>...</think> blocks from models like qwen3
+        cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.split("\n", 1)[1]
         if cleaned.endswith("```"):
