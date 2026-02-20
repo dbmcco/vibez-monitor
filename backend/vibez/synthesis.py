@@ -197,10 +197,11 @@ def parse_synthesis_report(raw: str) -> dict[str, Any]:
     }
     try:
         cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-        if cleaned.endswith("```"):
-            cleaned = cleaned.rsplit("```", 1)[0]
+        # Strip markdown code fences
+        import re
+        fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", cleaned, re.DOTALL)
+        if fence_match:
+            cleaned = fence_match.group(1)
         data = json.loads(cleaned.strip())
         return {**defaults, **data}
     except (json.JSONDecodeError, KeyError):
@@ -219,9 +220,11 @@ def get_previous_briefing(db_path: Path) -> str | None:
     if row and row[0]:
         try:
             data = json.loads(row[0])
-            titles = [t.get("title", "") for t in data.get("briefing", [])]
+            # briefing_json is stored as a direct array of thread objects
+            threads = data if isinstance(data, list) else data.get("briefing", [])
+            titles = [t.get("title", "") for t in threads if isinstance(t, dict)]
             return "Previous threads: " + ", ".join(titles)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, AttributeError):
             pass
     return None
 
