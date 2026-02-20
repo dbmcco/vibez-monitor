@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
-  { href: "/", label: "Live Feed" },
-  { href: "/briefing", label: "Briefing" },
+  { href: "/", label: "Briefing" },
   { href: "/contribute", label: "Contribute" },
+  { href: "/chat", label: "Chat" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -16,7 +16,7 @@ export function Nav() {
     <nav className="border-b border-zinc-800 bg-zinc-950 px-6 py-3">
       <div className="mx-auto flex max-w-6xl items-center justify-between">
         <span className="text-lg font-semibold text-zinc-100">
-          vibez-monitor
+          vibez
         </span>
         <div className="flex gap-1">
           {links.map((link) => (

@@ -24,6 +24,8 @@ CLASSIFY_TEMPLATE = """Classify this WhatsApp message.
 Braydon's interest topics: {topics}
 Braydon's active projects: {projects}
 
+{dossier_context}
+
 Message:
   From: {sender_name}
   Group: {room_name}
@@ -48,6 +50,7 @@ def build_classify_prompt(
     message: dict[str, Any],
     value_config: dict[str, Any],
     context_messages: list[dict[str, Any]] | None = None,
+    dossier_context: str = "",
 ) -> str:
     """Build the classification prompt for a single message."""
     context_lines = ""
@@ -60,6 +63,7 @@ def build_classify_prompt(
     return CLASSIFY_TEMPLATE.format(
         topics=", ".join(value_config.get("topics", [])),
         projects=", ".join(value_config.get("projects", [])),
+        dossier_context=dossier_context,
         sender_name=message.get("sender_name", "Unknown"),
         room_name=message.get("room_name", "Unknown"),
         body=message.get("body", ""),
@@ -173,13 +177,19 @@ def write_hot_alert(db_path: Path, message: dict, classification: dict) -> None:
 
 async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> None:
     """Classify a batch of messages using Sonnet."""
+    from vibez.dossier import load_dossier, format_dossier_for_classifier
+
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     value_cfg = load_value_config(config.db_path)
+
+    # Load dossier once for the batch
+    dossier = load_dossier()
+    dossier_ctx = format_dossier_for_classifier(dossier) if dossier else ""
 
     for msg in messages:
         try:
             context = get_recent_context(config.db_path, msg["room_id"], msg["timestamp"])
-            prompt = build_classify_prompt(msg, value_cfg, context)
+            prompt = build_classify_prompt(msg, value_cfg, context, dossier_context=dossier_ctx)
 
             response = client.messages.create(
                 model=config.classifier_model,

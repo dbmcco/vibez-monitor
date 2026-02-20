@@ -115,3 +115,57 @@ export function getValueConfig(): Record<string, unknown> {
   }
   return config;
 }
+
+export function searchMessages(opts: {
+  query: string;
+  lookbackDays?: number;
+  limit?: number;
+}): Message[] {
+  const db = getDb();
+  const cutoffTs = Date.now() - (opts.lookbackDays || 7) * 24 * 60 * 60 * 1000;
+  const keywords = opts.query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+  const limit = opts.limit || 50;
+
+  let rows: Message[];
+  if (keywords.length === 0) {
+    rows = db
+      .prepare(
+        `SELECT m.*, c.relevance_score, c.topics, c.entities,
+                c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         WHERE m.timestamp >= ?
+         ORDER BY c.relevance_score DESC
+         LIMIT ?`
+      )
+      .all(cutoffTs, limit) as Message[];
+  } else {
+    const whereParts = keywords.slice(0, 5).map(() => "LOWER(m.body) LIKE ?");
+    const params = keywords.slice(0, 5).map((kw) => `%${kw}%`);
+    rows = db
+      .prepare(
+        `SELECT m.*, c.relevance_score, c.topics, c.entities,
+                c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         WHERE m.timestamp >= ? AND (${whereParts.join(" OR ")})
+         ORDER BY m.timestamp DESC
+         LIMIT ?`
+      )
+      .all(cutoffTs, ...params, limit) as Message[];
+  }
+  db.close();
+  return rows;
+}
+
+export function getLatestBriefingMd(): string | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT briefing_md FROM daily_reports ORDER BY report_date DESC LIMIT 1")
+    .get() as { briefing_md: string } | undefined;
+  db.close();
+  return row?.briefing_md || null;
+}

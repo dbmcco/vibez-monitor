@@ -12,6 +12,7 @@ import anthropic
 
 from vibez.config import Config
 from vibez.db import get_connection, init_db
+from vibez.dossier import load_dossier, format_dossier_for_synthesis, get_voice_profile
 
 logger = logging.getLogger("vibez.synthesis")
 
@@ -24,6 +25,8 @@ SYNTHESIS_TEMPLATE = """Generate today's briefing from {msg_count} messages acro
 Braydon's interest topics: {topics}
 Braydon's active projects: {projects}
 
+{dossier_context}
+
 {previous_context}
 
 Messages (chronological, with classifications):
@@ -31,6 +34,8 @@ Messages (chronological, with classifications):
 
 CONTRIBUTION THEMES from classifier (cluster these):
 {contribution_themes_block}
+
+{braydon_messages_block}
 
 Respond with JSON:
 {{
@@ -48,8 +53,9 @@ Respond with JSON:
       "type": "<'reply' for time-sensitive thread responses, 'create' for evergreen topic contributions>",
       "freshness": "<'hot' if <24h, 'warm' if 1-3 days, 'cool' if 3-7 days, 'archive' if >7 days>",
       "threads": ["<related thread titles from briefing>"],
-      "why": "<why Braydon's knowledge is relevant to this theme>",
-      "action": "<specific suggested action: reply to thread, share a tool, write a post, etc.>",
+      "why": "<why Braydon's SPECIFIC knowledge/projects are relevant — reference his expertise and active work>",
+      "action": "<specific suggested action>",
+      "draft_message": "<a ready-to-send WhatsApp message written in Braydon's voice. Warm, question-driven, uses concrete examples from his projects. 2-4 sentences. Should sound natural, not robotic.>",
       "message_count": <how many messages touched this theme>
     }}
   ],
@@ -74,7 +80,15 @@ CONTRIBUTION RULES:
 - "reply" type: fresh threads (<3 days) where Braydon can jump in with a direct response.
 - "create" type: recurring themes that warrant a dedicated share (tool, deck, post) even if individual messages are older.
 - Rank contributions by: theme_relevance * freshness_weight * message_density.
-- Focus on the top 3-5 most important threads and top 3-5 contribution themes."""
+- Focus on the top 3-5 most important threads and top 3-5 contribution themes.
+
+DRAFT MESSAGE RULES:
+- Write as Braydon would actually type in WhatsApp — casual, warm, question-driven.
+- Reference his real projects and experience where relevant.
+- Lead with a question or observation, not "I think you should..."
+- Use his connective tissue: "so", "right", "kind of", "I think", "you know"
+- Keep it 2-4 sentences. Natural, not performative.
+- Consider what Braydon has already said in the group (see his recent messages below) to avoid repeating himself."""
 
 
 def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
@@ -107,10 +121,26 @@ def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str
     ]
 
 
+def get_braydon_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
+    """Get Braydon's own messages in the time range for context."""
+    conn = get_connection(db_path)
+    cursor = conn.execute(
+        """SELECT room_name, body, timestamp FROM messages
+           WHERE sender_name = 'Braydon' AND timestamp >= ? AND timestamp < ?
+           ORDER BY timestamp DESC LIMIT 20""",
+        (start_ts, end_ts),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"room_name": r[0], "body": r[1], "timestamp": r[2]} for r in rows]
+
+
 def build_synthesis_prompt(
     messages: list[dict[str, Any]],
     value_config: dict[str, Any],
     previous_briefing: str | None = None,
+    dossier_context: str = "",
+    braydon_messages: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the synthesis prompt from classified messages."""
     groups = set(m["room_name"] for m in messages)
@@ -141,12 +171,21 @@ def build_synthesis_prompt(
     if previous_briefing:
         previous_context = f"Yesterday's key threads (for continuity):\n{previous_briefing[:1000]}\n"
 
+    # Format Braydon's own messages
+    braydon_messages_block = ""
+    if braydon_messages:
+        braydon_messages_block = "BRAYDON'S RECENT MESSAGES (avoid repeating these):\n"
+        for bm in braydon_messages[:10]:
+            braydon_messages_block += f"  [{bm['room_name']}]: {bm['body'][:200]}\n"
+
     return SYNTHESIS_TEMPLATE.format(
         msg_count=len(messages), group_count=len(groups),
         topics=", ".join(value_config.get("topics", [])),
         projects=", ".join(value_config.get("projects", [])),
+        dossier_context=dossier_context,
         previous_context=previous_context, messages_block=messages_block,
         contribution_themes_block=contribution_themes_block,
+        braydon_messages_block=braydon_messages_block,
     )
 
 
@@ -230,6 +269,8 @@ def render_briefing_markdown(report: dict[str, Any], report_date: str) -> str:
                 lines.append(f"**Related threads:** {', '.join(c['threads'])}")
             lines.append(f"\n{c.get('why', '')}")
             lines.append(f"\n**Action:** {c.get('action', '')}")
+            if c.get("draft_message"):
+                lines.append(f"\n**Draft message:**\n> {c['draft_message']}")
             if c.get("message_count"):
                 lines.append(f"*({c['message_count']} messages on this theme)*")
             lines.append("")
@@ -270,7 +311,19 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
 
     value_cfg = load_value_config(config.db_path)
     previous = get_previous_briefing(config.db_path)
-    prompt = build_synthesis_prompt(messages, value_cfg, previous)
+
+    # Load dossier context
+    dossier = load_dossier()
+    dossier_context = format_dossier_for_synthesis(dossier) if dossier else ""
+
+    # Load Braydon's own messages for context
+    braydon_msgs = get_braydon_messages(config.db_path, start_ts, end_ts)
+
+    prompt = build_synthesis_prompt(
+        messages, value_cfg, previous,
+        dossier_context=dossier_context,
+        braydon_messages=braydon_msgs,
+    )
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     response = client.messages.create(
