@@ -52,6 +52,8 @@ Respond with JSON:
       "theme": "<contribution theme slug, e.g. multi-agent-orchestration>",
       "type": "<'reply' for time-sensitive thread responses, 'create' for evergreen topic contributions>",
       "freshness": "<'hot' if <24h, 'warm' if 1-3 days, 'cool' if 3-7 days, 'archive' if >7 days>",
+      "channel": "<exact WhatsApp group name where this reply should go>",
+      "reply_to": "<who to reply to and what they said — e.g. 'Dan's message about Maestro enforcing tool discipline via role separation'. Include enough detail to find the message.>",
       "threads": ["<related thread titles from briefing>"],
       "why": "<why Braydon's SPECIFIC knowledge/projects are relevant — reference his expertise and active work>",
       "action": "<specific suggested action>",
@@ -81,6 +83,11 @@ CONTRIBUTION RULES:
 - "create" type: recurring themes that warrant a dedicated share (tool, deck, post) even if individual messages are older.
 - Rank contributions by: theme_relevance * freshness_weight * message_density.
 - Focus on the top 3-5 most important threads and top 3-5 contribution themes.
+
+REPLY CONTEXT RULES:
+- "channel" MUST be the exact WhatsApp group name from the messages (e.g. "AGI House", "GoodSense Grocers").
+- "reply_to" should identify the specific message to reply to: person's name + what they said + approximate time. Include enough context so Braydon can scroll to it and long-press to reply.
+- For "create" type contributions, channel is where to post and reply_to can be empty.
 
 DRAFT MESSAGE RULES:
 - Write as Braydon would actually type in WhatsApp — casual, warm, question-driven.
@@ -197,14 +204,37 @@ def parse_synthesis_report(raw: str) -> dict[str, Any]:
     }
     try:
         cleaned = raw.strip()
-        # Strip markdown code fences
+        # Strip markdown code fences (closed or truncated)
         import re
-        fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", cleaned, re.DOTALL)
+        fence_match = re.search(r"```(?:json)?\s*\n(.*?)(?:```|$)", cleaned, re.DOTALL)
         if fence_match:
             cleaned = fence_match.group(1)
-        data = json.loads(cleaned.strip())
-        return {**defaults, **data}
-    except (json.JSONDecodeError, KeyError):
+        cleaned = cleaned.strip()
+        # Try parsing as-is first
+        try:
+            data = json.loads(cleaned)
+            return {**defaults, **data}
+        except json.JSONDecodeError:
+            pass
+        # If truncated, try to repair by closing braces
+        repair = cleaned
+        open_braces = repair.count("{") - repair.count("}")
+        open_brackets = repair.count("[") - repair.count("]")
+        if open_braces > 0 or open_brackets > 0:
+            # Truncate to last complete object/array element
+            for _ in range(open_brackets):
+                repair += "]"
+            for _ in range(open_braces):
+                repair += "}"
+            try:
+                data = json.loads(repair)
+                logger.info("Repaired truncated JSON (%d braces, %d brackets added)", open_braces, open_brackets)
+                return {**defaults, **data}
+            except json.JSONDecodeError:
+                pass
+        logger.warning("Failed to parse synthesis report: %s", raw[:200])
+        return defaults
+    except Exception:
         logger.warning("Failed to parse synthesis report: %s", raw[:200])
         return defaults
 
@@ -330,7 +360,7 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     response = client.messages.create(
-        model=config.synthesis_model, max_tokens=4096,
+        model=config.synthesis_model, max_tokens=8192,
         system=SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )

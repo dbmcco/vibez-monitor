@@ -12,6 +12,8 @@ interface Contribution {
   threads: string[];
   why: string;
   action: string;
+  channel?: string;
+  reply_to?: string;
   draft_message?: string;
   message_count: number;
 }
@@ -79,6 +81,22 @@ export function BriefingView({ briefing_json, contributions_json, trends, report
                       <span className="text-xs text-zinc-500">{c.message_count} msgs</span>
                     )}
                   </div>
+                  {(c.channel || c.reply_to) && (
+                    <div className="mt-2 flex flex-col gap-1 rounded bg-zinc-800 px-3 py-2">
+                      {c.channel && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-zinc-500">Channel:</span>
+                          <span className="text-sm text-zinc-200">{c.channel}</span>
+                        </div>
+                      )}
+                      {c.reply_to && (
+                        <div className="flex items-start gap-2">
+                          <span className="shrink-0 text-xs font-medium text-zinc-500">Reply to:</span>
+                          <span className="text-sm text-zinc-300">{c.reply_to}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <p className="mt-2 text-sm text-zinc-300">{c.why}</p>
                   <p className="mt-1 text-sm text-zinc-400">{c.action}</p>
                   {c.draft_message && (
