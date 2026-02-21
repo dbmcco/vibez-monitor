@@ -4,6 +4,76 @@ import path from "path";
 const DB_PATH =
   process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
 
+const DEFAULT_EXCLUDED_GROUPS = [
+  "BBC News",
+  "Bloomberg News",
+  "MTB Rides",
+  "Plum",
+];
+
+interface RoomScope {
+  mode: "active_groups" | "excluded_groups" | "all";
+  activeGroupIds: string[];
+  excludedGroups: string[];
+}
+
+function parseJsonStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => String(item).trim())
+      .filter((item) => item.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function loadExcludedGroups(): string[] {
+  const raw = process.env.VIBEZ_EXCLUDED_GROUPS;
+  if (raw === undefined) return [...DEFAULT_EXCLUDED_GROUPS];
+  return raw
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
+function loadRoomScope(db: Database.Database): RoomScope {
+  const activeGroupsRow = db
+    .prepare("SELECT value FROM sync_state WHERE key = ?")
+    .get("beeper_active_group_ids") as { value: string } | undefined;
+  const activeGroupIds = parseJsonStringArray(activeGroupsRow?.value);
+  const excludedGroups = loadExcludedGroups();
+
+  if (activeGroupIds.length > 0) {
+    return { mode: "active_groups", activeGroupIds, excludedGroups };
+  }
+  if (excludedGroups.length > 0) {
+    return { mode: "excluded_groups", activeGroupIds: [], excludedGroups };
+  }
+  return { mode: "all", activeGroupIds: [], excludedGroups: [] };
+}
+
+function buildRoomScopeWhere(alias: string, scope: RoomScope): {
+  clause: string;
+  params: string[];
+} {
+  if (scope.activeGroupIds.length > 0) {
+    return {
+      clause: `${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`,
+      params: scope.activeGroupIds,
+    };
+  }
+  if (scope.excludedGroups.length > 0) {
+    return {
+      clause: `${alias}.room_name NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      params: scope.excludedGroups,
+    };
+  }
+  return { clause: "", params: [] };
+}
+
 export function getDb() {
   const db = new Database(DB_PATH, { readonly: true });
   db.pragma("journal_mode = WAL");
@@ -95,9 +165,16 @@ export function getReport(date: string): DailyReport | null {
 
 export function getRooms(): string[] {
   const db = getDb();
+  const scope = loadRoomScope(db);
+  const roomScope = buildRoomScopeWhere("m", scope);
   const rows = db
-    .prepare("SELECT DISTINCT room_name FROM messages ORDER BY room_name")
-    .all() as { room_name: string }[];
+    .prepare(
+      `SELECT DISTINCT m.room_name
+       FROM messages m
+       ${roomScope.clause ? `WHERE ${roomScope.clause}` : ""}
+       ORDER BY m.room_name`
+    )
+    .all(...roomScope.params) as { room_name: string }[];
   db.close();
   return rows.map((r) => r.room_name);
 }
@@ -249,6 +326,11 @@ export interface SeasonalityStats {
 export interface StatsDashboard {
   window_days: number;
   generated_at: string;
+  scope: {
+    mode: "active_groups" | "excluded_groups" | "all";
+    active_group_count: number;
+    excluded_groups: string[];
+  };
   totals: {
     messages: number;
     users: number;
@@ -335,6 +417,8 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
   const safeWindow = Math.max(7, Math.min(windowDays, 365));
   const cutoffTs = Date.now() - safeWindow * 24 * 60 * 60 * 1000;
   const db = getDb();
+  const scope = loadRoomScope(db);
+  const roomScope = buildRoomScopeWhere("m", scope);
 
   const rows = db
     .prepare(
@@ -342,9 +426,10 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
        FROM messages m
        LEFT JOIN classifications c ON m.id = c.message_id
        WHERE m.timestamp >= ?
+       ${roomScope.clause ? `AND ${roomScope.clause}` : ""}
        ORDER BY m.timestamp ASC`
     )
-    .all(cutoffTs) as {
+    .all(cutoffTs, ...roomScope.params) as {
     timestamp: number;
     sender_name: string;
     room_name: string;
@@ -356,9 +441,10 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
       `SELECT m.timestamp, c.topics
        FROM messages m
        LEFT JOIN classifications c ON m.id = c.message_id
-       WHERE c.topics IS NOT NULL`
+       WHERE c.topics IS NOT NULL
+       ${roomScope.clause ? `AND ${roomScope.clause}` : ""}`
     )
-    .all() as { timestamp: number; topics: string | null }[];
+    .all(...roomScope.params) as { timestamp: number; topics: string | null }[];
   db.close();
 
   const timelineDays = enumerateDays(safeWindow);
@@ -619,6 +705,11 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
   return {
     window_days: safeWindow,
     generated_at: new Date().toISOString(),
+    scope: {
+      mode: scope.mode,
+      active_group_count: scope.activeGroupIds.length,
+      excluded_groups: scope.excludedGroups,
+    },
     totals: {
       messages: rows.length,
       users: users.size,

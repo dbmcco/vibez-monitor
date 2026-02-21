@@ -1,5 +1,6 @@
 from vibez import beeper_sync
 from vibez.beeper_sync import get_whatsapp_groups, parse_beeper_message
+from vibez.db import get_connection, init_db
 
 
 def test_load_excluded_groups_uses_defaults_when_env_missing(monkeypatch):
@@ -124,3 +125,21 @@ def test_parse_cleans_matrix_sender_name():
     result = parse_beeper_message(msg, "Test")
     assert result is not None
     assert result["sender_name"] == "dbmcco"
+
+
+def test_save_active_groups_persists_ids_and_names(tmp_path):
+    db_path = tmp_path / "vibez.db"
+    init_db(db_path)
+    groups = [
+        {"id": "!a:beeper.local", "title": "The vibez"},
+        {"id": "!b:beeper.local", "title": "Off-topic"},
+    ]
+
+    beeper_sync.save_active_groups(db_path, groups)
+
+    conn = get_connection(db_path)
+    rows = dict(conn.execute("SELECT key, value FROM sync_state").fetchall())
+    conn.close()
+
+    assert rows["beeper_active_group_ids"] == '["!a:beeper.local", "!b:beeper.local"]'
+    assert rows["beeper_active_group_names"] == '["The vibez", "Off-topic"]'

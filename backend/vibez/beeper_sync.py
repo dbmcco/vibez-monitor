@@ -155,6 +155,23 @@ def save_cursor(db_path: Path, chat_id: str, cursor: str) -> None:
     conn.close()
 
 
+def save_active_groups(db_path: Path, groups: list[dict]) -> None:
+    """Persist currently monitored WhatsApp groups for downstream analytics scoping."""
+    group_ids = [str(g.get("id", "")).strip() for g in groups if str(g.get("id", "")).strip()]
+    group_names = [str(g.get("title", "")).strip() for g in groups if str(g.get("title", "")).strip()]
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        ("beeper_active_group_ids", json.dumps(group_ids)),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        ("beeper_active_group_names", json.dumps(group_names)),
+    )
+    conn.commit()
+    conn.close()
+
+
 def fetch_new_messages(
     base_url: str, token: str, chat_id: str, after_cursor: str | None,
 ) -> tuple[list[dict], str | None]:
@@ -263,6 +280,7 @@ async def sync_loop(
     logger.info("Monitoring %d WhatsApp groups", len(groups))
     for g in groups:
         logger.info("  - %s", g["title"])
+    save_active_groups(db_path, groups)
 
     # Initialize cursors for any groups we haven't seen before
     for group in groups:

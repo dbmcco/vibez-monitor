@@ -59,6 +59,11 @@ interface SeasonalityStats {
 interface StatsDashboard {
   window_days: number;
   generated_at: string;
+  scope: {
+    mode: "active_groups" | "excluded_groups" | "all";
+    active_group_count: number;
+    excluded_groups: string[];
+  };
   totals: {
     messages: number;
     users: number;
@@ -74,6 +79,17 @@ interface StatsDashboard {
   seasonality: SeasonalityStats;
 }
 
+const CHART_COLORS = [
+  "#22d3ee",
+  "#34d399",
+  "#f59e0b",
+  "#f87171",
+  "#a78bfa",
+  "#fb7185",
+  "#2dd4bf",
+  "#60a5fa",
+];
+
 function Sparkline({ daily }: { daily: DailyCount[] }) {
   const bars = daily.slice(-24);
   const max = Math.max(1, ...bars.map((b) => b.count));
@@ -87,6 +103,355 @@ function Sparkline({ daily }: { daily: DailyCount[] }) {
           style={{ height: `${Math.max(8, (bar.count / max) * 100)}%` }}
         />
       ))}
+    </div>
+  );
+}
+
+function toLinePath(points: { x: number; y: number }[]): string {
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
+    .join(" ");
+}
+
+function toAreaPath(points: { x: number; y: number }[], baseline: number): string {
+  if (points.length === 0) return "";
+  const first = points[0];
+  const last = points[points.length - 1];
+  return `${toLinePath(points)} L${last.x} ${baseline} L${first.x} ${baseline} Z`;
+}
+
+function InteractiveTimelineChart({
+  daily,
+  color,
+  yLabel,
+}: {
+  daily: DailyCount[];
+  color: string;
+  yLabel: string;
+}) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const width = 900;
+  const height = 220;
+  const padLeft = 34;
+  const padRight = 18;
+  const padTop = 16;
+  const padBottom = 30;
+  const innerWidth = width - padLeft - padRight;
+  const innerHeight = height - padTop - padBottom;
+  const maxY = Math.max(1, ...daily.map((point) => point.count));
+
+  const points = useMemo(
+    () =>
+      daily.map((point, i) => {
+        const x = padLeft + (i / Math.max(1, daily.length - 1)) * innerWidth;
+        const y = padTop + innerHeight - (point.count / maxY) * innerHeight;
+        return { x, y, ...point };
+      }),
+    [daily, innerWidth, innerHeight, maxY],
+  );
+
+  const hovered = hoverIndex === null ? null : points[hoverIndex];
+
+  if (daily.length === 0) {
+    return <p className="text-sm text-slate-400">No timeline data yet.</p>;
+  }
+
+  return (
+    <div className="relative">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-56 w-full rounded-lg border border-slate-700/50 bg-slate-950/40"
+        onMouseMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          const px = event.clientX - rect.left;
+          const normalized = Math.min(Math.max(px / rect.width, 0), 1);
+          const idx = Math.round(normalized * (daily.length - 1));
+          setHoverIndex(idx);
+        }}
+        onMouseLeave={() => setHoverIndex(null)}
+      >
+        <line
+          x1={padLeft}
+          y1={padTop + innerHeight}
+          x2={width - padRight}
+          y2={padTop + innerHeight}
+          stroke="#334155"
+          strokeWidth={1}
+        />
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + innerHeight} stroke="#334155" strokeWidth={1} />
+        <path d={toAreaPath(points, padTop + innerHeight)} fill={color} fillOpacity={0.12} />
+        <path d={toLinePath(points)} fill="none" stroke={color} strokeWidth={2.5} />
+        {hovered ? (
+          <>
+            <line
+              x1={hovered.x}
+              y1={padTop}
+              x2={hovered.x}
+              y2={padTop + innerHeight}
+              stroke={color}
+              strokeOpacity={0.35}
+              strokeDasharray="4 4"
+            />
+            <circle cx={hovered.x} cy={hovered.y} r={4} fill={color} />
+          </>
+        ) : null}
+        <text x={padLeft} y={height - 8} fill="#94a3b8" fontSize="10">
+          {daily[0]?.date}
+        </text>
+        <text x={width - padRight} y={height - 8} fill="#94a3b8" fontSize="10" textAnchor="end">
+          {daily[daily.length - 1]?.date}
+        </text>
+        <text x={padLeft + 2} y={padTop + 10} fill="#94a3b8" fontSize="10">
+          {maxY} {yLabel}
+        </text>
+      </svg>
+      {hovered ? (
+        <div className="mt-2 text-xs text-slate-300">
+          <span className="font-semibold text-slate-100">{hovered.date}</span>
+          {" · "}
+          {hovered.count} {yLabel}
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-slate-500">Hover to inspect daily values.</div>
+      )}
+    </div>
+  );
+}
+
+function TopicTrendExplorer({ topics }: { topics: TopicStat[] }) {
+  const topTopics = topics.slice(0, 10);
+  const [selectedTopics, setSelectedTopics] = useState<string[] | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const width = 900;
+  const height = 260;
+  const padLeft = 40;
+  const padRight = 18;
+  const padTop = 16;
+  const padBottom = 34;
+  const innerWidth = width - padLeft - padRight;
+  const innerHeight = height - padTop - padBottom;
+
+  const resolvedSelectedTopics = useMemo(() => {
+    const defaults = topTopics.slice(0, 3).map((topic) => topic.topic);
+    const base = selectedTopics ?? defaults;
+    const filtered = base.filter((name) => topTopics.some((topic) => topic.topic === name));
+    if (filtered.length > 0) return filtered;
+    return defaults;
+  }, [selectedTopics, topTopics]);
+
+  const days = topTopics[0]?.daily.map((d) => d.date) ?? [];
+  const countsByTopic = useMemo(() => {
+    const map = new Map<string, number[]>();
+    for (const topic of topTopics) {
+      map.set(
+        topic.topic,
+        topic.daily.map((d) => d.count),
+      );
+    }
+    return map;
+  }, [topTopics]);
+
+  const maxY = Math.max(
+    1,
+    ...resolvedSelectedTopics.flatMap((name) => countsByTopic.get(name) ?? []),
+  );
+
+  const hoveredDate = hoverIndex === null ? null : days[hoverIndex];
+
+  if (topTopics.length === 0) {
+    return <p className="text-sm text-slate-400">No topic trend data yet.</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {topTopics.map((topic, index) => {
+          const selected = resolvedSelectedTopics.includes(topic.topic);
+          const color = CHART_COLORS[index % CHART_COLORS.length];
+          return (
+            <button
+              key={topic.topic}
+              onClick={() =>
+                setSelectedTopics((prev) => {
+                  const defaults = topTopics.slice(0, 3).map((item) => item.topic);
+                  const base = (prev ?? defaults).filter((name) =>
+                    topTopics.some((item) => item.topic === name),
+                  );
+                  return base.includes(topic.topic)
+                    ? base.filter((name) => name !== topic.topic)
+                    : [...base, topic.topic];
+                })
+              }
+              className={`rounded-md border px-2.5 py-1 text-xs ${
+                selected
+                  ? "border-slate-200/40 text-slate-100"
+                  : "border-slate-700 text-slate-400"
+              }`}
+              style={selected ? { backgroundColor: `${color}30` } : undefined}
+            >
+              {topic.topic}
+            </button>
+          );
+        })}
+      </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-64 w-full rounded-lg border border-slate-700/50 bg-slate-950/40"
+        onMouseMove={(event) => {
+          if (days.length === 0) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const px = event.clientX - rect.left;
+          const normalized = Math.min(Math.max(px / rect.width, 0), 1);
+          const idx = Math.round(normalized * (days.length - 1));
+          setHoverIndex(idx);
+        }}
+        onMouseLeave={() => setHoverIndex(null)}
+      >
+        <line
+          x1={padLeft}
+          y1={padTop + innerHeight}
+          x2={width - padRight}
+          y2={padTop + innerHeight}
+          stroke="#334155"
+          strokeWidth={1}
+        />
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + innerHeight} stroke="#334155" strokeWidth={1} />
+        {resolvedSelectedTopics.map((topicName) => {
+          const topicIndex = topTopics.findIndex((topic) => topic.topic === topicName);
+          const color = CHART_COLORS[topicIndex % CHART_COLORS.length];
+          const topicCounts = countsByTopic.get(topicName) ?? [];
+          const points = topicCounts.map((count, i) => ({
+            x: padLeft + (i / Math.max(1, days.length - 1)) * innerWidth,
+            y: padTop + innerHeight - (count / maxY) * innerHeight,
+          }));
+          return (
+            <path
+              key={topicName}
+              d={toLinePath(points)}
+              fill="none"
+              stroke={color}
+              strokeWidth={2.2}
+              opacity={0.95}
+            />
+          );
+        })}
+        {hoverIndex !== null && days.length > 0 ? (
+          <line
+            x1={padLeft + (hoverIndex / Math.max(1, days.length - 1)) * innerWidth}
+            y1={padTop}
+            x2={padLeft + (hoverIndex / Math.max(1, days.length - 1)) * innerWidth}
+            y2={padTop + innerHeight}
+            stroke="#94a3b8"
+            strokeOpacity={0.45}
+            strokeDasharray="4 4"
+          />
+        ) : null}
+        <text x={padLeft} y={height - 10} fill="#94a3b8" fontSize="10">
+          {days[0]}
+        </text>
+        <text x={width - padRight} y={height - 10} fill="#94a3b8" fontSize="10" textAnchor="end">
+          {days[days.length - 1]}
+        </text>
+        <text x={padLeft + 2} y={padTop + 10} fill="#94a3b8" fontSize="10">
+          {maxY} msgs
+        </text>
+      </svg>
+      {hoveredDate ? (
+        <div className="space-y-1 text-xs text-slate-300">
+          <div className="font-semibold text-slate-100">{hoveredDate}</div>
+          {resolvedSelectedTopics.map((topicName) => {
+            const topicIndex = topTopics.findIndex((topic) => topic.topic === topicName);
+            const color = CHART_COLORS[topicIndex % CHART_COLORS.length];
+            const count = countsByTopic.get(topicName)?.[hoverIndex ?? 0] ?? 0;
+            return (
+              <div key={topicName} className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                <span>{topicName}</span>
+                <span className="text-slate-400">{count}</span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-xs text-slate-500">Toggle topics, then hover to compare daily trend lines.</div>
+      )}
+    </div>
+  );
+}
+
+function TopicRecurrenceMap({ topics }: { topics: TopicStat[] }) {
+  const [hoveredTopic, setHoveredTopic] = useState<TopicStat | null>(null);
+  const points = topics.slice(0, 30);
+  const width = 900;
+  const height = 250;
+  const padLeft = 40;
+  const padRight = 18;
+  const padTop = 16;
+  const padBottom = 34;
+  const innerWidth = width - padLeft - padRight;
+  const innerHeight = height - padTop - padBottom;
+  const maxMessages = Math.max(1, ...points.map((topic) => topic.message_count));
+
+  if (points.length === 0) {
+    return <p className="text-sm text-slate-400">No recurrence data yet.</p>;
+  }
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-64 w-full rounded-lg border border-slate-700/50 bg-slate-950/40">
+        <line
+          x1={padLeft}
+          y1={padTop + innerHeight}
+          x2={width - padRight}
+          y2={padTop + innerHeight}
+          stroke="#334155"
+          strokeWidth={1}
+        />
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + innerHeight} stroke="#334155" strokeWidth={1} />
+        {points.map((topic, idx) => {
+          const x = padLeft + topic.recurrence_ratio * innerWidth;
+          const y = padTop + innerHeight - (topic.message_count / maxMessages) * innerHeight;
+          const radius = 4 + Math.sqrt(topic.message_count) * 0.35;
+          const color = CHART_COLORS[idx % CHART_COLORS.length];
+          return (
+            <circle
+              key={topic.topic}
+              cx={x}
+              cy={y}
+              r={radius}
+              fill={color}
+              fillOpacity={hoveredTopic?.topic === topic.topic ? 0.95 : 0.5}
+              stroke={hoveredTopic?.topic === topic.topic ? "#e2e8f0" : "none"}
+              onMouseEnter={() => setHoveredTopic(topic)}
+              onMouseLeave={() => setHoveredTopic(null)}
+            />
+          );
+        })}
+        <text x={padLeft} y={height - 10} fill="#94a3b8" fontSize="10">
+          low recurrence
+        </text>
+        <text x={width - padRight} y={height - 10} fill="#94a3b8" fontSize="10" textAnchor="end">
+          high recurrence
+        </text>
+        <text x={padLeft + 2} y={padTop + 10} fill="#94a3b8" fontSize="10">
+          {maxMessages} msgs
+        </text>
+      </svg>
+      {hoveredTopic ? (
+        <div className="mt-2 text-xs text-slate-300">
+          <span className="font-semibold text-slate-100">{hoveredTopic.topic}</span>
+          {" · "}
+          {hoveredTopic.message_count} msgs
+          {" · "}
+          recurrence {Math.round(hoveredTopic.recurrence_ratio * 100)}%
+          {" · "}
+          {hoveredTopic.trend}
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-slate-500">
+          Hover bubbles to inspect topic recurrence and volume.
+        </div>
+      )}
     </div>
   );
 }
@@ -155,6 +520,13 @@ export default function StatsPage() {
     );
   }
 
+  const scopeLabel =
+    stats.scope.mode === "active_groups"
+      ? `Scoped to ${stats.scope.active_group_count} currently tracked channels`
+      : stats.scope.mode === "excluded_groups"
+        ? `Scoped by exclusions (${stats.scope.excluded_groups.length} filtered names)`
+        : "Using all channels in DB";
+
   return (
     <div className="space-y-6">
       <header className="fade-up space-y-2">
@@ -185,6 +557,10 @@ export default function StatsPage() {
         <span className="text-xs text-slate-400">Last computed: {generatedLabel}</span>
       </div>
 
+      <div className="rounded-lg border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-xs text-cyan-100">
+        {scopeLabel}
+      </div>
+
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div className="vibe-panel rounded-xl p-4">
           <div className="text-xs text-slate-400">Messages</div>
@@ -212,10 +588,21 @@ export default function StatsPage() {
 
       <section className="vibe-panel rounded-xl p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="vibe-title text-lg">Overall Volume Timeline</h2>
+          <h2 className="vibe-title text-lg">Interactive Volume Trend</h2>
           <span className="text-xs text-slate-400">{stats.window_days} day window</span>
         </div>
-        <Sparkline daily={stats.timeline} />
+        <InteractiveTimelineChart daily={stats.timeline} color="#22d3ee" yLabel="msgs" />
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <div className="vibe-panel rounded-xl p-5">
+          <h2 className="vibe-title mb-3 text-lg">Interactive Topic Trend Explorer</h2>
+          <TopicTrendExplorer topics={stats.topics} />
+        </div>
+        <div className="vibe-panel rounded-xl p-5">
+          <h2 className="vibe-title mb-3 text-lg">Topic Recurrence Map</h2>
+          <TopicRecurrenceMap topics={stats.topics} />
+        </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
