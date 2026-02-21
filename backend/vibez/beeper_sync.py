@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -22,6 +23,26 @@ logger = logging.getLogger("vibez.sync")
 DEFAULT_API_BASE = "http://localhost:23373"
 POLL_INTERVAL = 30  # seconds between polls
 TOKEN_WARN_DAYS = 3  # warn when token expires within this many days
+
+# Default groups to exclude from monitoring (not part of the AGI community)
+DEFAULT_EXCLUDED_GROUPS = {
+    "BBC News",
+    "Bloomberg News",
+    "MTB Rides",
+    "Plum",
+}
+
+
+def parse_excluded_groups(raw: str | None) -> set[str]:
+    """Parse excluded group names from a comma-separated env var."""
+    if raw is None:
+        return set(DEFAULT_EXCLUDED_GROUPS)
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
+def load_excluded_groups() -> set[str]:
+    """Load excluded group names from env, falling back to defaults."""
+    return parse_excluded_groups(os.environ.get("VIBEZ_EXCLUDED_GROUPS"))
 
 
 def check_token_health(base_url: str, token: str) -> None:
@@ -65,12 +86,18 @@ def api_get(base_url: str, path: str, token: str, params: dict | None = None) ->
     return json.loads(resp.read())
 
 
-def get_whatsapp_groups(base_url: str, token: str) -> list[dict]:
-    """List all WhatsApp group chats from Beeper."""
+def get_whatsapp_groups(
+    base_url: str, token: str, excluded_groups: set[str] | None = None,
+) -> list[dict]:
+    """List WhatsApp group chats from Beeper, excluding non-community groups."""
+    if excluded_groups is None:
+        excluded_groups = load_excluded_groups()
     data = api_get(base_url, "/v1/chats", token, {"limit": "200"})
     return [
         c for c in data.get("items", [])
-        if c.get("network") == "WhatsApp" and c.get("type") == "group"
+        if c.get("network") == "WhatsApp"
+        and c.get("type") == "group"
+        and c.get("title") not in excluded_groups
     ]
 
 

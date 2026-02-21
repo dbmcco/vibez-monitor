@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ContributionCard } from "@/components/ContributionCard";
+import { StatusPanel } from "@/components/StatusPanel";
 
 interface Message {
   id: string; room_name: string; sender_name: string; body: string;
@@ -15,10 +16,20 @@ interface ThemeCluster {
   latestTs: number;
 }
 
+function parseThemes(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as string[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function clusterByTheme(messages: Message[]): ThemeCluster[] {
   const themes: Record<string, Message[]> = {};
   for (const msg of messages) {
-    const parsed: string[] = msg.contribution_themes ? JSON.parse(msg.contribution_themes) : [];
+    const parsed = parseThemes(msg.contribution_themes);
     if (parsed.length === 0) parsed.push("uncategorized");
     for (const theme of parsed) {
       if (!themes[theme]) themes[theme] = [];
@@ -36,10 +47,10 @@ function clusterByTheme(messages: Message[]): ThemeCluster[] {
 
 function freshnessBadge(ts: number): { label: string; color: string } {
   const hoursAgo = (Date.now() - ts) / (1000 * 60 * 60);
-  if (hoursAgo < 24) return { label: "hot", color: "bg-red-900 text-red-300" };
-  if (hoursAgo < 72) return { label: "warm", color: "bg-amber-900 text-amber-300" };
-  if (hoursAgo < 168) return { label: "cool", color: "bg-blue-900 text-blue-300" };
-  return { label: "archive", color: "bg-zinc-700 text-zinc-400" };
+  if (hoursAgo < 24) return { label: "hot", color: "badge-hot" };
+  if (hoursAgo < 72) return { label: "warm", color: "badge-warm" };
+  if (hoursAgo < 168) return { label: "cool", color: "badge-cool" };
+  return { label: "archive", color: "badge-archive" };
 }
 
 export default function ContributePage() {
@@ -56,30 +67,59 @@ export default function ContributePage() {
   const clusters = clusterByTheme(contributions);
 
   return (
-    <div>
-      <h1 className="mb-6 text-xl font-semibold">Contribution Opportunities</h1>
-      {loading ? (<div className="text-zinc-500">Loading...</div>
-      ) : clusters.length === 0 ? (<div className="text-zinc-500">No contribution opportunities yet.</div>
+    <div className="space-y-6">
+      <header className="fade-up space-y-2">
+        <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
+          Contribution Opportunities
+        </h1>
+        <p className="vibe-subtitle">
+          Clustered themes with freshest windows for a fast response.
+        </p>
+      </header>
+      {loading ? (
+        <StatusPanel
+          loading
+          title="Loading contribution map"
+          detail="Clustering recent messages into actionable themes."
+        />
+      ) : clusters.length === 0 ? (
+        <StatusPanel
+          title="No contribution opportunities yet"
+          detail="When high-value themes emerge, they will show up here."
+        />
       ) : (
         <div className="space-y-4">
           {clusters.map((cluster) => {
             const freshness = freshnessBadge(cluster.latestTs);
             const isExpanded = expandedTheme === cluster.theme;
             return (
-              <div key={cluster.theme} className="rounded-lg border border-emerald-900 bg-zinc-900">
+              <div
+                key={cluster.theme}
+                className="vibe-panel fade-up rounded-xl border border-slate-700/70"
+              >
                 <button
                   onClick={() => setExpandedTheme(isExpanded ? null : cluster.theme)}
-                  className="flex w-full items-center justify-between p-4 text-left"
+                  className="flex w-full items-center justify-between gap-4 p-4 text-left sm:p-5"
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-sm font-semibold text-emerald-400">{cluster.theme}</span>
-                    <span className={`rounded px-1.5 py-0.5 text-xs ${freshness.color}`}>{freshness.label}</span>
-                    <span className="text-xs text-zinc-500">{cluster.messages.length} messages</span>
+                  <div className="flex min-w-0 flex-wrap items-center gap-3">
+                    <span className="font-mono text-sm font-semibold text-emerald-300">
+                      {cluster.theme}
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-medium ${freshness.color}`}
+                    >
+                      {freshness.label}
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {cluster.messages.length} messages
+                    </span>
                   </div>
-                  <span className="text-zinc-500">{isExpanded ? "−" : "+"}</span>
+                  <span className="text-lg leading-none text-slate-500">
+                    {isExpanded ? "−" : "+"}
+                  </span>
                 </button>
                 {isExpanded && (
-                  <div className="border-t border-zinc-800 p-4 grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3 border-t border-slate-700/70 p-4 md:grid-cols-2 sm:p-5">
                     {cluster.messages.slice(0, 10).map((msg) => (
                       <ContributionCard key={msg.id} message={msg} />
                     ))}

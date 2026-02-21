@@ -1,9 +1,17 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 
-const inter = Inter({ subsets: ["latin"] });
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+});
 
 export const metadata: Metadata = {
   title: "vibez-monitor",
@@ -16,10 +24,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${inter.className} bg-zinc-950 text-zinc-100`}>
+    <html
+      lang="en"
+      className={`${spaceGrotesk.variable} ${jetBrainsMono.variable}`}
+    >
+      <body className="text-slate-100 antialiased">
         <Nav />
-        <main className="mx-auto max-w-6xl px-6 py-6">{children}</main>
+        <main className="vibe-shell mx-auto max-w-6xl px-4 py-8 sm:px-6">
+          {children}
+        </main>
       </body>
     </html>
   );

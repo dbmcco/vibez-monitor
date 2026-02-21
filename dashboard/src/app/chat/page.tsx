@@ -60,15 +60,24 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] flex-col">
-      <h1 className="mb-4 text-xl font-semibold">Chat Agent</h1>
+    <div className="flex h-[calc(100vh-9rem)] flex-col gap-4">
+      <header className="fade-up space-y-2">
+        <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
+          Chat Agent
+        </h1>
+        <p className="vibe-subtitle">
+          Query the collected conversation stream and get focused synthesis.
+        </p>
+      </header>
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+      <div className="vibe-panel flex-1 overflow-y-auto rounded-xl p-4 sm:p-5">
         {messages.length === 0 && (
           <div className="flex h-full items-center justify-center">
-            <div className="text-center text-zinc-500">
-              <p className="text-lg">Ask anything about the group chats</p>
-              <div className="mt-4 flex flex-col gap-2 text-sm text-zinc-600">
+            <div className="text-center text-slate-400">
+              <p className="vibe-title text-xl text-slate-200">
+                Ask anything about the group chats
+              </p>
+              <div className="mt-4 flex flex-col gap-2 text-sm text-slate-500">
                 <p>&quot;What was the main discussion in AGI House today?&quot;</p>
                 <p>&quot;Who mentioned multi-agent systems this week?&quot;</p>
                 <p>&quot;What links were shared about context windows?&quot;</p>
@@ -84,15 +93,15 @@ export default function ChatPage() {
             className={`mb-4 ${msg.role === "user" ? "text-right" : "text-left"}`}
           >
             <div
-              className={`inline-block max-w-[80%] rounded-lg px-4 py-2 text-sm ${
+              className={`inline-block max-w-[86%] rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
                 msg.role === "user"
-                  ? "bg-blue-900 text-blue-100"
-                  : "bg-zinc-800 text-zinc-200"
+                  ? "border border-cyan-400/40 bg-cyan-900/30 text-cyan-100"
+                  : "border border-slate-700/80 bg-slate-900/70 text-slate-200"
               }`}
             >
               <p className="whitespace-pre-wrap">{msg.content}</p>
               {msg.messageCount !== undefined && (
-                <p className="mt-1 text-xs text-zinc-500">
+                <p className="mt-2 text-xs text-slate-400">
                   Based on {msg.messageCount} messages
                 </p>
               )}
@@ -102,7 +111,7 @@ export default function ChatPage() {
 
         {loading && (
           <div className="mb-4 text-left">
-            <div className="inline-block rounded-lg bg-zinc-800 px-4 py-2 text-sm text-zinc-400">
+            <div className="inline-block rounded-lg border border-slate-700 bg-slate-900/70 px-4 py-2 text-sm text-slate-300">
               Searching chats...
             </div>
           </div>
@@ -111,21 +120,23 @@ export default function ChatPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="mt-4 flex gap-2">
+      <form onSubmit={handleSubmit} className="flex gap-2">
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about the group chats..."
-          className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-600 focus:outline-none"
+          className="vibe-input flex-1 rounded-lg px-4 py-2.5 text-sm"
           disabled={loading}
+          suppressHydrationWarning
+          aria-label="Ask the chat agent a question"
         />
         <button
           type="submit"
           disabled={loading || !input.trim()}
-          className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="vibe-button rounded-lg px-4 py-2.5 text-sm tracking-wide disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Ask
+          {loading ? "Asking..." : "Ask ->"}
         </button>
       </form>
     </div>

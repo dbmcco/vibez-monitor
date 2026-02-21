@@ -1,6 +1,11 @@
 import json
 from vibez.db import init_db, get_connection
-from vibez.synthesis import build_synthesis_prompt, parse_synthesis_report, get_day_messages
+from vibez.synthesis import (
+    build_synthesis_prompt,
+    get_day_messages,
+    make_pithy_report,
+    parse_synthesis_report,
+)
 
 
 def _seed_messages(db_path, count=5):
@@ -59,3 +64,59 @@ def test_parse_synthesis_report_invalid():
     report = parse_synthesis_report("not json")
     assert report["briefing"] == []
     assert report["contributions"] == []
+
+
+def test_make_pithy_report_trims_and_limits_items():
+    long_text = " ".join(["word"] * 200)
+    report = {
+        "briefing": [
+            {
+                "title": long_text,
+                "participants": ["Alice"] * 10,
+                "insights": long_text,
+                "links": [f"https://example.com/{i}" for i in range(8)],
+            }
+            for _ in range(7)
+        ],
+        "contributions": [
+            {
+                "theme": long_text,
+                "type": "reply",
+                "freshness": "hot",
+                "channel": long_text,
+                "reply_to": long_text,
+                "threads": [long_text for _ in range(8)],
+                "why": long_text,
+                "action": long_text,
+                "draft_message": long_text,
+                "message_count": 42,
+            }
+            for _ in range(7)
+        ],
+        "trends": {
+            "emerging": [long_text for _ in range(8)],
+            "fading": [long_text for _ in range(8)],
+            "shifts": long_text,
+        },
+        "links": [
+            {
+                "url": "https://example.com",
+                "title": long_text,
+                "category": long_text,
+                "relevance": long_text,
+            }
+            for _ in range(12)
+        ],
+    }
+
+    pithy = make_pithy_report(report)
+
+    assert len(pithy["briefing"]) == 5
+    assert len(pithy["contributions"]) == 5
+    assert len(pithy["links"]) == 10
+    assert len(pithy["briefing"][0]["participants"]) == 6
+    assert len(pithy["briefing"][0]["links"]) == 5
+    assert len(pithy["briefing"][0]["insights"]) <= 163
+    assert len(pithy["contributions"][0]["why"]) <= 143
+    assert len(pithy["contributions"][0]["action"]) <= 113
+    assert len(pithy["contributions"][0]["draft_message"]) <= 323

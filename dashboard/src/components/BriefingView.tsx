@@ -18,6 +18,12 @@ interface Contribution {
   message_count: number;
 }
 
+interface TrendData {
+  emerging?: string[];
+  fading?: string[];
+  shifts?: string;
+}
+
 interface Props {
   briefing_json: string | null;
   contributions_json?: string | null;
@@ -25,112 +31,217 @@ interface Props {
   report_date: string;
 }
 
-function freshnessBadge(freshness: string): { color: string } {
-  switch (freshness) {
-    case "hot": return { color: "bg-red-900 text-red-300" };
-    case "warm": return { color: "bg-amber-900 text-amber-300" };
-    case "cool": return { color: "bg-blue-900 text-blue-300" };
-    default: return { color: "bg-zinc-700 text-zinc-400" };
+function parseJson<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
   }
 }
 
-export function BriefingView({ briefing_json, contributions_json, trends, report_date }: Props) {
-  const threads: Thread[] = briefing_json ? JSON.parse(briefing_json) : [];
-  const contributions: Contribution[] = contributions_json ? JSON.parse(contributions_json) : [];
-  const trendData = trends ? JSON.parse(trends) : {};
+function freshnessBadge(freshness: string): { color: string; label: string } {
+  switch (freshness.toLowerCase()) {
+    case "hot":
+      return { color: "badge-hot", label: "hot" };
+    case "warm":
+      return { color: "badge-warm", label: "warm" };
+    case "cool":
+      return { color: "badge-cool", label: "cool" };
+    default:
+      return { color: "badge-archive", label: freshness || "archive" };
+  }
+}
+
+export function BriefingView({
+  briefing_json,
+  contributions_json,
+  trends,
+  report_date,
+}: Props) {
+  const threads = parseJson<Thread[]>(briefing_json, []);
+  const contributions = parseJson<Contribution[]>(contributions_json, []);
+  const trendData = parseJson<TrendData>(trends, {});
 
   return (
-    <div>
-      <h2 className="mb-4 text-lg font-semibold">Briefing — {report_date}</h2>
+    <div className="space-y-8">
+      <header className="fade-up space-y-2">
+        <p className="text-xs font-medium tracking-[0.16em] text-cyan-300/90 uppercase">
+          Daily Intelligence
+        </p>
+        <h2 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
+          Briefing <span className="text-cyan-200/90">— {report_date}</span>
+        </h2>
+        <p className="vibe-subtitle max-w-3xl">
+          High-signal threads, contribution vectors, and trend direction from
+          the Vibez ecosystem.
+        </p>
+      </header>
 
-      {threads.length === 0 ? (
-        <p className="text-zinc-500">No briefing available for this date.</p>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {threads.map((thread, i) => (
-            <div key={i} className="rounded-lg bg-zinc-900 p-4">
-              <h3 className="font-medium text-zinc-200">{thread.title}</h3>
-              <p className="mt-1 text-xs text-zinc-500">{thread.participants.join(", ")}</p>
-              <p className="mt-2 text-sm text-zinc-300">{thread.insights}</p>
-              {thread.links.length > 0 && (
-                <div className="mt-2 flex flex-col gap-1">
-                  {thread.links.map((link, j) => (
-                    <a key={j} href={link} target="_blank" rel="noopener noreferrer"
-                       className="text-xs text-blue-400 hover:underline">{link}</a>
+      <section className="space-y-4">
+        <h3 className="vibe-title text-lg text-slate-100">Key Threads</h3>
+        {threads.length === 0 ? (
+          <div className="vibe-panel rounded-xl p-5 text-sm text-slate-400">
+            No briefing available for this date.
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {threads.map((thread, i) => (
+              <article
+                key={`${thread.title}-${i}`}
+                className="vibe-panel fade-up rounded-xl p-5"
+              >
+                <h4 className="vibe-title text-base text-slate-100">
+                  {thread.title}
+                </h4>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {thread.participants.map((participant) => (
+                    <span
+                      key={`${thread.title}-${participant}`}
+                      className="vibe-chip rounded px-2 py-0.5 text-xs"
+                    >
+                      {participant}
+                    </span>
                   ))}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+                <p className="mt-3 text-sm leading-relaxed text-slate-300">
+                  {thread.insights}
+                </p>
+                {thread.links.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {thread.links.map((link, j) => (
+                      <a
+                        key={`${thread.title}-${j}`}
+                        href={link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block text-xs break-all text-cyan-300 hover:text-cyan-100"
+                      >
+                        {link}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       {contributions.length > 0 && (
-        <div className="mt-8">
-          <h2 className="mb-4 text-lg font-semibold">Contribution Opportunities</h2>
-          <div className="flex flex-col gap-4">
-            {contributions.map((c, i) => {
-              const badge = freshnessBadge(c.freshness);
+        <section className="space-y-4">
+          <h3 className="vibe-title text-lg text-slate-100">
+            Contribution Opportunities
+          </h3>
+          <div className="grid gap-4">
+            {contributions.map((contribution, i) => {
+              const badge = freshnessBadge(contribution.freshness);
               return (
-                <div key={i} className="rounded-lg border border-emerald-900 bg-zinc-900 p-4">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-semibold text-emerald-400">{c.theme}</span>
-                    <span className={`rounded px-1.5 py-0.5 text-xs ${badge.color}`}>{c.freshness}</span>
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{c.type}</span>
-                    {c.message_count > 0 && (
-                      <span className="text-xs text-zinc-500">{c.message_count} msgs</span>
+                <article
+                  key={`${contribution.theme}-${i}`}
+                  className="vibe-panel fade-up rounded-xl p-5"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-sm font-semibold text-emerald-300">
+                      {contribution.theme}
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-medium ${badge.color}`}
+                    >
+                      {badge.label}
+                    </span>
+                    <span className="vibe-chip rounded px-2 py-0.5 text-xs">
+                      {contribution.type}
+                    </span>
+                    {contribution.message_count > 0 && (
+                      <span className="text-xs text-slate-400">
+                        {contribution.message_count} msgs
+                      </span>
                     )}
                   </div>
-                  {(c.channel || c.reply_to) && (
-                    <div className="mt-2 flex flex-col gap-1 rounded bg-zinc-800 px-3 py-2">
-                      {c.channel && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-zinc-500">Channel:</span>
-                          <span className="text-sm text-zinc-200">{c.channel}</span>
-                        </div>
+
+                  {(contribution.channel || contribution.reply_to) && (
+                    <div className="mt-3 rounded-lg border border-slate-700/70 bg-slate-900/65 p-3">
+                      {contribution.channel && (
+                        <p className="text-sm text-slate-200">
+                          <span className="mr-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                            Channel
+                          </span>
+                          {contribution.channel}
+                        </p>
                       )}
-                      {c.reply_to && (
-                        <div className="flex items-start gap-2">
-                          <span className="shrink-0 text-xs font-medium text-zinc-500">Reply to:</span>
-                          <span className="text-sm text-zinc-300">{c.reply_to}</span>
-                        </div>
+                      {contribution.reply_to && (
+                        <p className="mt-1 text-sm text-slate-300">
+                          <span className="mr-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                            Reply To
+                          </span>
+                          {contribution.reply_to}
+                        </p>
                       )}
                     </div>
                   )}
-                  <p className="mt-2 text-sm text-zinc-300">{c.why}</p>
-                  <p className="mt-1 text-sm text-zinc-400">{c.action}</p>
-                  {c.draft_message && (
-                    <div className="mt-3 rounded-lg border border-emerald-800 bg-emerald-950/30 p-3">
-                      <div className="mb-1 text-xs font-medium text-emerald-500">Draft message</div>
-                      <p className="text-sm text-emerald-200 italic">{c.draft_message}</p>
+
+                  <p className="mt-3 text-sm leading-relaxed text-slate-300">
+                    {contribution.why}
+                  </p>
+                  <p className="mt-2 text-sm font-medium text-emerald-200/95">
+                    {contribution.action}
+                  </p>
+
+                  {contribution.draft_message && (
+                    <div className="mt-4 rounded-lg border border-emerald-900/70 bg-emerald-950/25 p-3">
+                      <p className="text-xs font-semibold tracking-wide text-emerald-300 uppercase">
+                        Draft Message
+                      </p>
+                      <p className="mt-2 text-sm italic leading-relaxed text-emerald-100/90">
+                        {contribution.draft_message}
+                      </p>
                       <button
-                        onClick={() => navigator.clipboard.writeText(c.draft_message || "")}
-                        className="mt-2 rounded bg-emerald-900 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-800 transition-colors"
+                        onClick={() =>
+                          navigator.clipboard.writeText(
+                            contribution.draft_message || "",
+                          )
+                        }
+                        className="vibe-button mt-3 rounded px-2.5 py-1.5 text-xs"
                       >
                         Copy to clipboard
                       </button>
                     </div>
                   )}
-                </div>
+                </article>
               );
             })}
           </div>
-        </div>
+        </section>
       )}
 
-      {(trendData.emerging?.length > 0 || trendData.fading?.length > 0) && (
-        <div className="mt-8">
-          <h2 className="mb-4 text-lg font-semibold">Trends</h2>
-          <div className="rounded-lg bg-zinc-900 p-4">
-            {trendData.emerging?.length > 0 && (
-              <p className="text-sm text-emerald-400">Emerging: {trendData.emerging.join(", ")}</p>
+      {(trendData.emerging?.length || trendData.fading?.length || trendData.shifts) && (
+        <section className="space-y-4">
+          <h3 className="vibe-title text-lg text-slate-100">Trends</h3>
+          <div className="vibe-panel rounded-xl p-5">
+            {trendData.emerging && trendData.emerging.length > 0 && (
+              <p className="text-sm text-emerald-300">
+                <span className="mr-2 text-xs font-semibold tracking-wide uppercase text-emerald-400/90">
+                  Emerging
+                </span>
+                {trendData.emerging.join(", ")}
+              </p>
             )}
-            {trendData.fading?.length > 0 && (
-              <p className="mt-1 text-sm text-zinc-500">Fading: {trendData.fading.join(", ")}</p>
+            {trendData.fading && trendData.fading.length > 0 && (
+              <p className="mt-2 text-sm text-slate-400">
+                <span className="mr-2 text-xs font-semibold tracking-wide uppercase text-slate-500">
+                  Fading
+                </span>
+                {trendData.fading.join(", ")}
+              </p>
             )}
-            {trendData.shifts && <p className="mt-2 text-sm text-zinc-300">{trendData.shifts}</p>}
+            {trendData.shifts && (
+              <p className="mt-3 text-sm leading-relaxed text-slate-300">
+                {trendData.shifts}
+              </p>
+            )}
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

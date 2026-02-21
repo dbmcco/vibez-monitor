@@ -95,7 +95,16 @@ DRAFT MESSAGE RULES:
 - Lead with a question or observation, not "I think you should..."
 - Use his connective tissue: "so", "right", "kind of", "I think", "you know"
 - Keep it 2-4 sentences. Natural, not performative.
-- Consider what Braydon has already said in the group (see his recent messages below) to avoid repeating himself."""
+- Consider what Braydon has already said in the group (see his recent messages below) to avoid repeating himself.
+
+PITHY STYLE RULES (important):
+- Keep wording tight and high-signal.
+- "insights": max 1-2 short sentences, ~160 chars max.
+- "why": one short sentence, ~140 chars max.
+- "action": one short sentence, ~110 chars max.
+- "shifts": one short sentence, ~120 chars max.
+- "relevance": one short phrase, ~90 chars max.
+- "draft_message": keep to 2-3 short sentences (~320 chars max)."""
 
 
 def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
@@ -194,6 +203,87 @@ def build_synthesis_prompt(
         contribution_themes_block=contribution_themes_block,
         braydon_messages_block=braydon_messages_block,
     )
+
+
+def _compact_text(value: Any, max_chars: int) -> str:
+    """Collapse whitespace and trim text to max chars."""
+    if value is None:
+        return ""
+    text = " ".join(str(value).split())
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    if not clipped:
+        clipped = text[:max_chars].rstrip(" ,;:-")
+    return clipped + "..."
+
+
+def make_pithy_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Normalize synthesis output to concise, scannable fields."""
+    pithy: dict[str, Any] = {
+        "briefing": [],
+        "contributions": [],
+        "trends": {"emerging": [], "fading": [], "shifts": ""},
+        "links": [],
+    }
+
+    for thread in report.get("briefing", [])[:5]:
+        if not isinstance(thread, dict):
+            continue
+        pithy["briefing"].append({
+            "title": _compact_text(thread.get("title", "Untitled"), 68),
+            "participants": [
+                _compact_text(p, 30)
+                for p in (thread.get("participants") or [])[:6]
+            ],
+            "insights": _compact_text(thread.get("insights", ""), 160),
+            "links": [str(link) for link in (thread.get("links") or [])[:5]],
+        })
+
+    for contrib in report.get("contributions", [])[:5]:
+        if not isinstance(contrib, dict):
+            continue
+        ctype = contrib.get("type", "reply")
+        if ctype not in {"reply", "create"}:
+            ctype = "reply"
+        freshness = contrib.get("freshness", "warm")
+        if freshness not in {"hot", "warm", "cool", "archive"}:
+            freshness = "warm"
+
+        pithy["contributions"].append({
+            "theme": _compact_text(contrib.get("theme", ""), 48),
+            "type": ctype,
+            "freshness": freshness,
+            "channel": _compact_text(contrib.get("channel", ""), 72),
+            "reply_to": _compact_text(contrib.get("reply_to", ""), 220),
+            "threads": [
+                _compact_text(t, 64)
+                for t in (contrib.get("threads") or [])[:4]
+            ],
+            "why": _compact_text(contrib.get("why", ""), 140),
+            "action": _compact_text(contrib.get("action", ""), 110),
+            "draft_message": _compact_text(contrib.get("draft_message", ""), 320),
+            "message_count": int(contrib.get("message_count", 0) or 0),
+        })
+
+    trends = report.get("trends", {}) if isinstance(report.get("trends"), dict) else {}
+    pithy["trends"] = {
+        "emerging": [_compact_text(t, 56) for t in (trends.get("emerging") or [])[:5]],
+        "fading": [_compact_text(t, 56) for t in (trends.get("fading") or [])[:5]],
+        "shifts": _compact_text(trends.get("shifts", ""), 120),
+    }
+
+    for link in report.get("links", [])[:10]:
+        if not isinstance(link, dict):
+            continue
+        pithy["links"].append({
+            "url": str(link.get("url", "")),
+            "title": _compact_text(link.get("title", ""), 96),
+            "category": _compact_text(link.get("category", ""), 24),
+            "relevance": _compact_text(link.get("relevance", ""), 90),
+        })
+
+    return pithy
 
 
 def parse_synthesis_report(raw: str) -> dict[str, Any]:
@@ -365,7 +455,7 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
         messages=[{"role": "user", "content": prompt}],
     )
     raw_text = response.content[0].text
-    report = parse_synthesis_report(raw_text)
+    report = make_pithy_report(parse_synthesis_report(raw_text))
 
     briefing_md = render_briefing_markdown(report, report_date)
     save_daily_report(config.db_path, report_date, report, briefing_md)

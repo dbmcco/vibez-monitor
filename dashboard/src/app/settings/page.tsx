@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { StatusPanel } from "@/components/StatusPanel";
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -32,34 +33,78 @@ export default function SettingsPage() {
     setSaving(false);
   };
 
-  if (loading) return <div className="text-zinc-500">Loading...</div>;
+  if (loading) {
+    return (
+      <StatusPanel
+        loading
+        title="Loading settings"
+        detail="Fetching current signal preferences."
+      />
+    );
+  }
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="mb-6 text-xl font-semibold">Settings</h1>
-      <div className="flex flex-col gap-6">
+    <div className="max-w-3xl space-y-6">
+      <header className="fade-up space-y-2">
+        <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
+          Settings
+        </h1>
+        <p className="vibe-subtitle">
+          Tune what counts as signal and when alerts become urgent.
+        </p>
+      </header>
+
+      <div className="vibe-panel space-y-6 rounded-xl p-5 sm:p-6">
         <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-300">Interest Topics</label>
-          <textarea className="w-full rounded bg-zinc-800 p-3 text-sm text-zinc-200" rows={3}
-            value={topicsInput} onChange={(e) => setTopicsInput(e.target.value)}
-            placeholder="agentic-architecture, practical-tools, business-ai" />
-          <p className="mt-1 text-xs text-zinc-500">Comma-separated topic tags</p>
+          <label className="mb-2 block text-sm font-semibold text-slate-200">
+            Interest Topics
+          </label>
+          <textarea
+            className="vibe-input w-full rounded-lg p-3 text-sm"
+            rows={3}
+            value={topicsInput}
+            onChange={(e) => setTopicsInput(e.target.value)}
+            placeholder="agentic-architecture, practical-tools, business-ai"
+          />
+          <p className="mt-1 text-xs text-slate-400">Comma-separated topic tags</p>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-300">Your Projects</label>
-          <textarea className="w-full rounded bg-zinc-800 p-3 text-sm text-zinc-200" rows={2}
-            value={projectsInput} onChange={(e) => setProjectsInput(e.target.value)}
-            placeholder="MoneyCommand, Amplifier, driftdriver" />
-          <p className="mt-1 text-xs text-zinc-500">Comma-separated project names the classifier matches against</p>
+          <label className="mb-2 block text-sm font-semibold text-slate-200">
+            Your Projects
+          </label>
+          <textarea
+            className="vibe-input w-full rounded-lg p-3 text-sm"
+            rows={2}
+            value={projectsInput}
+            onChange={(e) => setProjectsInput(e.target.value)}
+            placeholder="MoneyCommand, Amplifier, driftdriver"
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            Comma-separated project names the classifier matches against
+          </p>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-300">Hot Alert Threshold</label>
-          <input type="range" min={1} max={10} value={threshold}
-            onChange={(e) => setThreshold(parseInt(e.target.value))} className="w-full" />
-          <p className="mt-1 text-xs text-zinc-500">Relevance score {threshold}+ triggers hot alerts</p>
+          <label className="mb-2 block text-sm font-semibold text-slate-200">
+            Hot Alert Threshold
+          </label>
+          <input
+            type="range"
+            min={1}
+            max={10}
+            value={threshold}
+            onChange={(e) => setThreshold(parseInt(e.target.value, 10))}
+            className="h-2 w-full cursor-pointer accent-cyan-400"
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            Relevance score <span className="font-semibold text-slate-200">{threshold}+</span>{" "}
+            triggers hot alerts
+          </p>
         </div>
-        <button onClick={handleSave} disabled={saving}
-          className="rounded bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 disabled:opacity-50">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="vibe-button rounded-lg px-4 py-2.5 text-sm disabled:opacity-50"
+        >
           {saving ? "Saving..." : "Save Settings"}
         </button>
       </div>

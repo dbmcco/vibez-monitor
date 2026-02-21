@@ -1,4 +1,48 @@
-from vibez.beeper_sync import parse_beeper_message
+from vibez import beeper_sync
+from vibez.beeper_sync import get_whatsapp_groups, parse_beeper_message
+
+
+def test_load_excluded_groups_uses_defaults_when_env_missing(monkeypatch):
+    monkeypatch.delenv("VIBEZ_EXCLUDED_GROUPS", raising=False)
+    excluded = beeper_sync.load_excluded_groups()
+    assert "BBC News" in excluded
+    assert "Bloomberg News" in excluded
+
+
+def test_load_excluded_groups_reads_env_override(monkeypatch):
+    monkeypatch.setenv("VIBEZ_EXCLUDED_GROUPS", "BBC News,Custom Chatter,  Plum  ,")
+    excluded = beeper_sync.load_excluded_groups()
+    assert excluded == {"BBC News", "Custom Chatter", "Plum"}
+
+
+def test_get_whatsapp_groups_filters_to_whatsapp_groups(monkeypatch):
+    payload = {
+        "items": [
+            {"id": "g1", "network": "WhatsApp", "type": "group", "title": "The vibez"},
+            {"id": "d1", "network": "WhatsApp", "type": "dm", "title": "Direct thread"},
+            {"id": "s1", "network": "Signal", "type": "group", "title": "Signal group"},
+        ]
+    }
+    monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
+
+    groups = get_whatsapp_groups("http://localhost:23373", "token")
+
+    assert [g["id"] for g in groups] == ["g1"]
+
+
+def test_get_whatsapp_groups_excludes_known_non_community_groups(monkeypatch):
+    payload = {
+        "items": [
+            {"id": "g1", "network": "WhatsApp", "type": "group", "title": "The vibez"},
+            {"id": "g2", "network": "WhatsApp", "type": "group", "title": "BBC News"},
+            {"id": "g3", "network": "WhatsApp", "type": "group", "title": "Bloomberg News"},
+        ]
+    }
+    monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
+
+    groups = get_whatsapp_groups("http://localhost:23373", "token")
+
+    assert [g["title"] for g in groups] == ["The vibez"]
 
 
 def test_parse_text_message():
