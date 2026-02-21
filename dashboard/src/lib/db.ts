@@ -384,6 +384,11 @@ export interface StatsDashboard {
     avg_relevance: number | null;
   };
   timeline: DailyCount[];
+  coverage: {
+    classified: DailyCount[];
+    with_topics: DailyCount[];
+    avg_topic_coverage: number;
+  };
   users: RankedStat[];
   channels: RankedStat[];
   topics: TopicStat[];
@@ -581,6 +586,8 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
       : enumerateDays(resolvedWindow);
   const windowDaysValue = timelineDays.length;
   const timelineMap = new Map<string, number>(timelineDays.map((d) => [d, 0]));
+  const classifiedMap = new Map<string, number>(timelineDays.map((d) => [d, 0]));
+  const withTopicsMap = new Map<string, number>(timelineDays.map((d) => [d, 0]));
   const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const weekdayCounts = Array.from({ length: 7 }, () => 0);
   const hourCounts = Array.from({ length: 24 }, () => 0);
@@ -608,6 +615,13 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     const ts = row.timestamp;
     const dateKey = dateKeyFromTs(ts);
     timelineMap.set(dateKey, (timelineMap.get(dateKey) || 0) + 1);
+    const parsedTopics = parseTopics(row.topics);
+    if (row.topics !== null) {
+      classifiedMap.set(dateKey, (classifiedMap.get(dateKey) || 0) + 1);
+    }
+    if (parsedTopics.length > 0) {
+      withTopicsMap.set(dateKey, (withTopicsMap.get(dateKey) || 0) + 1);
+    }
     const d = new Date(ts);
     weekdayCounts[d.getDay()] += 1;
     hourCounts[d.getHours()] += 1;
@@ -655,7 +669,7 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     }
     channels.set(channel, channelAcc);
 
-    for (const topic of parseTopics(row.topics)) {
+    for (const topic of parsedTopics) {
       const topicAcc = topics.get(topic) || {
         messages: 0,
         activeDays: new Set<string>(),
@@ -681,7 +695,7 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
       topics.set(topic, topicAcc);
     }
 
-    const messageTopics = Array.from(new Set(parseTopics(row.topics))).sort((a, b) =>
+    const messageTopics = Array.from(new Set(parsedTopics)).sort((a, b) =>
       a.localeCompare(b),
     );
     if (messageTopics.length > 1) {
@@ -710,6 +724,18 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     date,
     count: timelineMap.get(date) || 0,
   }));
+  const classified: DailyCount[] = timelineDays.map((date) => ({
+    date,
+    count: classifiedMap.get(date) || 0,
+  }));
+  const with_topics: DailyCount[] = timelineDays.map((date) => ({
+    date,
+    count: withTopicsMap.get(date) || 0,
+  }));
+  const avgTopicCoverage =
+    rows.length > 0
+      ? Number((with_topics.reduce((sum, day) => sum + day.count, 0) / rows.length).toFixed(3))
+      : 0;
 
   const userStats = Array.from(users.entries())
     .map(([name, acc]) => finalizeRanked(name, acc))
@@ -853,6 +879,11 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
           : null,
     },
     timeline,
+    coverage: {
+      classified,
+      with_topics,
+      avg_topic_coverage: avgTopicCoverage,
+    },
     users: userStats,
     channels: channelStats,
     topics: topicStats,

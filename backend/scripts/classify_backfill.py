@@ -1,6 +1,7 @@
 """Classify backfilled messages using local Ollama for speed and cost."""
 
 import asyncio
+import argparse
 import json
 import sys
 import time
@@ -21,8 +22,8 @@ from vibez.classifier import (
 )
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "qwen2.5:3b"  # faster than qwen3:8b (no thinking overhead)
-CONCURRENCY = 2  # light parallelism — Ollama can queue a small batch
+DEFAULT_MODEL = "qwen2.5:3b"  # faster than qwen3:8b (no thinking overhead)
+DEFAULT_CONCURRENCY = 2  # light parallelism — Ollama can queue a small batch
 
 
 async def classify_one(
@@ -31,6 +32,7 @@ async def classify_one(
     value_cfg: dict,
     db_path: Path,
     semaphore: asyncio.Semaphore,
+    model: str,
 ) -> bool:
     """Classify a single message via Ollama. Returns True on success."""
     async with semaphore:
@@ -39,7 +41,7 @@ async def classify_one(
             resp = await client.post(
                 OLLAMA_URL,
                 json={
-                    "model": MODEL,
+                    "model": model,
                     "messages": [
                         {"role": "system", "content": CLASSIFY_SYSTEM},
                         {"role": "user", "content": prompt},
@@ -65,19 +67,41 @@ async def classify_one(
             return False
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Backfill message classifications via Ollama.")
+    parser.add_argument("--db-path", default="./vibez.db", help="Path to SQLite DB")
+    parser.add_argument("--start-date", help="Inclusive YYYY-MM-DD lower bound on message date")
+    parser.add_argument("--end-date", help="Inclusive YYYY-MM-DD upper bound on message date")
+    parser.add_argument("--limit", type=int, help="Max messages to process")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model name")
+    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="Parallel requests")
+    return parser.parse_args()
+
+
 async def main():
-    db_path = Path("./vibez.db")
+    args = parse_args()
+    db_path = Path(args.db_path)
     init_db(db_path)
 
     conn = get_connection(db_path)
-    cursor = conn.execute(
-        """SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name,
-                  m.body, m.timestamp, m.raw_event
-           FROM messages m
-           LEFT JOIN classifications c ON m.id = c.message_id
-           WHERE c.message_id IS NULL
-           ORDER BY m.timestamp ASC"""
-    )
+    query = """SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name,
+                      m.body, m.timestamp, m.raw_event
+               FROM messages m
+               LEFT JOIN classifications c ON m.id = c.message_id
+               WHERE c.message_id IS NULL"""
+    params: list[object] = []
+    if args.start_date:
+        query += " AND date(m.timestamp/1000,'unixepoch') >= ?"
+        params.append(args.start_date)
+    if args.end_date:
+        query += " AND date(m.timestamp/1000,'unixepoch') <= ?"
+        params.append(args.end_date)
+    query += " ORDER BY m.timestamp ASC"
+    if args.limit and args.limit > 0:
+        query += " LIMIT ?"
+        params.append(args.limit)
+
+    cursor = conn.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
 
@@ -96,9 +120,15 @@ async def main():
         return
 
     value_cfg = load_value_config(db_path)
-    semaphore = asyncio.Semaphore(CONCURRENCY)
+    semaphore = asyncio.Semaphore(max(1, args.concurrency))
     start = time.time()
     done = 0
+
+    print(
+        f"Model={args.model} Concurrency={max(1, args.concurrency)} "
+        f"Date range={args.start_date or 'min'}..{args.end_date or 'max'}",
+        flush=True,
+    )
 
     async with httpx.AsyncClient() as client:
         # Process in chunks to report progress
@@ -106,7 +136,7 @@ async def main():
         for i in range(0, total, chunk_size):
             chunk = messages[i : i + chunk_size]
             tasks = [
-                classify_one(client, msg, value_cfg, db_path, semaphore)
+                classify_one(client, msg, value_cfg, db_path, semaphore, args.model)
                 for msg in chunk
             ]
             results = await asyncio.gather(*tasks)

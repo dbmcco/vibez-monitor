@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { StatusPanel } from "@/components/StatusPanel";
 
 interface DailyCount {
@@ -72,6 +72,11 @@ interface StatsDashboard {
     avg_relevance: number | null;
   };
   timeline: DailyCount[];
+  coverage: {
+    classified: DailyCount[];
+    with_topics: DailyCount[];
+    avg_topic_coverage: number;
+  };
   users: RankedStat[];
   channels: RankedStat[];
   topics: TopicStat[];
@@ -516,6 +521,10 @@ function maxCount(values: Array<{ count: number }>): number {
   return Math.max(1, ...values.map((v) => v.count));
 }
 
+function sumCounts(values: DailyCount[]): number {
+  return values.reduce((sum, value) => sum + value.count, 0);
+}
+
 type DayRange = 30 | 90 | 180 | 365 | "all";
 
 export default function StatsPage() {
@@ -525,6 +534,7 @@ export default function StatsPage() {
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [topicDrilldown, setTopicDrilldown] = useState<TopicDrilldown | null>(null);
   const [topicInsights, setTopicInsights] = useState<TopicInsights | null>(null);
+  const drilldownRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -584,6 +594,13 @@ export default function StatsPage() {
       : null;
   const activeInsights = activeDrilldown ? topicInsights : null;
 
+  function openTopicDrilldown(topic: string) {
+    setSelectedTopic(topic);
+    requestAnimationFrame(() => {
+      drilldownRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   if (loading) {
     return (
       <StatusPanel
@@ -609,6 +626,17 @@ export default function StatsPage() {
       : stats.scope.mode === "excluded_groups"
         ? `Scoped by exclusions (${stats.scope.excluded_groups.length} filtered names)`
         : "Using all channels in DB";
+  const coveragePercent = Math.round(stats.coverage.avg_topic_coverage * 100);
+  const recentWindow = Math.min(21, stats.timeline.length);
+  const recentMessages = sumCounts(stats.timeline.slice(-recentWindow));
+  const recentWithTopics = sumCounts(stats.coverage.with_topics.slice(-recentWindow));
+  const recentCoveragePercent =
+    recentMessages > 0 ? Math.round((recentWithTopics / recentMessages) * 100) : 0;
+  const coverageDaily: DailyCount[] = stats.timeline.map((point, index) => {
+    const withTopics = stats.coverage.with_topics[index]?.count || 0;
+    const percent = point.count > 0 ? Math.round((withTopics / point.count) * 100) : 0;
+    return { date: point.date, count: percent };
+  });
 
   return (
     <div className="space-y-6">
@@ -644,7 +672,7 @@ export default function StatsPage() {
         {scopeLabel}
       </div>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <div className="vibe-panel rounded-xl p-4">
           <div className="text-xs text-slate-400">Messages</div>
           <div className="vibe-title mt-1 text-2xl">{stats.totals.messages}</div>
@@ -667,6 +695,10 @@ export default function StatsPage() {
             {stats.totals.avg_relevance?.toFixed(2) ?? "n/a"}
           </div>
         </div>
+        <div className="vibe-panel rounded-xl p-4">
+          <div className="text-xs text-slate-400">Topic coverage</div>
+          <div className="vibe-title mt-1 text-2xl">{coveragePercent}%</div>
+        </div>
       </section>
 
       <section className="vibe-panel rounded-xl p-5">
@@ -675,6 +707,22 @@ export default function StatsPage() {
           <span className="text-xs text-slate-400">{stats.window_days} day window</span>
         </div>
         <InteractiveTimelineChart daily={stats.timeline} color="#22d3ee" yLabel="msgs" />
+      </section>
+
+      {recentCoveragePercent < 60 ? (
+        <div className="rounded-lg border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+          Topic coverage is low in the recent window ({recentCoveragePercent}% in last {recentWindow} days), which can create apparent topic-trend gaps even when message volume is present.
+        </div>
+      ) : null}
+
+      <section className="vibe-panel rounded-xl p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="vibe-title text-lg">Topic Classification Coverage</h2>
+          <span className="text-xs text-slate-400">
+            Last {recentWindow}d: {recentCoveragePercent}% · Overall: {coveragePercent}%
+          </span>
+        </div>
+        <InteractiveTimelineChart daily={coverageDaily} color="#f59e0b" yLabel="% covered" />
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
@@ -771,7 +819,7 @@ export default function StatsPage() {
                 <tr key={topic.topic} className="border-t border-slate-700/60">
                   <td className="py-2 pr-3 text-slate-200">
                     <button
-                      onClick={() => setSelectedTopic(topic.topic)}
+                      onClick={() => openTopicDrilldown(topic.topic)}
                       className={`rounded px-2 py-0.5 text-left text-sm ${
                         effectiveSelectedTopic === topic.topic
                           ? "bg-cyan-400/20 text-cyan-100"
@@ -811,7 +859,7 @@ export default function StatsPage() {
         </div>
       </section>
 
-      <section className="vibe-panel rounded-xl p-5">
+      <section ref={drilldownRef} className="vibe-panel rounded-xl p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="vibe-title text-lg">Topic Drilldown</h2>
           <span className="text-xs text-slate-400">
@@ -939,7 +987,7 @@ export default function StatsPage() {
                 {activeDrilldown.related_topics.map((edge) => (
                   <button
                     key={`${edge.topic_a}-${edge.topic_b}`}
-                    onClick={() => setSelectedTopic(edge.topic_b)}
+                    onClick={() => openTopicDrilldown(edge.topic_b)}
                     className="rounded-md border border-slate-700 bg-slate-900/50 px-2.5 py-1 text-xs text-slate-200 hover:border-cyan-300/60"
                   >
                     {edge.topic_b} · {edge.co_messages}
