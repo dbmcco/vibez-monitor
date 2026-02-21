@@ -11,11 +11,18 @@ const DEFAULT_EXCLUDED_GROUPS = [
   "Plum",
 ];
 
+const DEFAULT_USER_ALIASES: Record<string, string> = {
+  dbmcco: "Braydon",
+};
+
 interface RoomScope {
   mode: "active_groups" | "excluded_groups" | "all";
   activeGroupIds: string[];
+  activeGroupNames: string[];
   excludedGroups: string[];
 }
+
+type UserAliasMap = Record<string, string>;
 
 function parseJsonStringArray(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -44,25 +51,39 @@ function loadRoomScope(db: Database.Database): RoomScope {
     .prepare("SELECT value FROM sync_state WHERE key = ?")
     .get("beeper_active_group_ids") as { value: string } | undefined;
   const activeGroupIds = parseJsonStringArray(activeGroupsRow?.value);
+  const activeGroupNamesRow = db
+    .prepare("SELECT value FROM sync_state WHERE key = ?")
+    .get("beeper_active_group_names") as { value: string } | undefined;
+  const activeGroupNames = parseJsonStringArray(activeGroupNamesRow?.value);
   const excludedGroups = loadExcludedGroups();
 
-  if (activeGroupIds.length > 0) {
-    return { mode: "active_groups", activeGroupIds, excludedGroups };
+  if (activeGroupIds.length > 0 || activeGroupNames.length > 0) {
+    return { mode: "active_groups", activeGroupIds, activeGroupNames, excludedGroups };
   }
   if (excludedGroups.length > 0) {
-    return { mode: "excluded_groups", activeGroupIds: [], excludedGroups };
+    return { mode: "excluded_groups", activeGroupIds: [], activeGroupNames: [], excludedGroups };
   }
-  return { mode: "all", activeGroupIds: [], excludedGroups: [] };
+  return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
 }
 
 function buildRoomScopeWhere(alias: string, scope: RoomScope): {
   clause: string;
   params: string[];
 } {
-  if (scope.activeGroupIds.length > 0) {
+  if (scope.activeGroupIds.length > 0 || scope.activeGroupNames.length > 0) {
+    const parts: string[] = [];
+    const params: string[] = [];
+    if (scope.activeGroupIds.length > 0) {
+      parts.push(`${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`);
+      params.push(...scope.activeGroupIds);
+    }
+    if (scope.activeGroupNames.length > 0) {
+      parts.push(`${alias}.room_name IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
+      params.push(...scope.activeGroupNames);
+    }
     return {
-      clause: `${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`,
-      params: scope.activeGroupIds,
+      clause: `(${parts.join(" OR ")})`,
+      params,
     };
   }
   if (scope.excludedGroups.length > 0) {
@@ -72,6 +93,30 @@ function buildRoomScopeWhere(alias: string, scope: RoomScope): {
     };
   }
   return { clause: "", params: [] };
+}
+
+function loadUserAliases(): UserAliasMap {
+  const aliases: UserAliasMap = {};
+  for (const [raw, canonical] of Object.entries(DEFAULT_USER_ALIASES)) {
+    aliases[raw.toLowerCase()] = canonical;
+  }
+
+  const envRaw = process.env.VIBEZ_USER_ALIASES;
+  if (!envRaw) return aliases;
+
+  for (const pair of envRaw.split(",")) {
+    const [rawName, canonicalName] = pair.split("=").map((part) => part.trim());
+    if (!rawName || !canonicalName) continue;
+    aliases[rawName.toLowerCase()] = canonicalName;
+  }
+
+  return aliases;
+}
+
+function normalizeSenderName(raw: string, aliases: UserAliasMap): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "Unknown";
+  return aliases[trimmed.toLowerCase()] || trimmed;
 }
 
 export function getDb() {
@@ -326,9 +371,9 @@ export interface SeasonalityStats {
 export interface StatsDashboard {
   window_days: number;
   generated_at: string;
-  scope: {
-    mode: "active_groups" | "excluded_groups" | "all";
-    active_group_count: number;
+    scope: {
+      mode: "active_groups" | "excluded_groups" | "all";
+      active_group_count: number;
     excluded_groups: string[];
   };
   totals: {
@@ -344,6 +389,43 @@ export interface StatsDashboard {
   topics: TopicStat[];
   cooccurrence: TopicCooccurrence[];
   seasonality: SeasonalityStats;
+}
+
+export interface TopicDrilldownMessage {
+  id: string;
+  timestamp: number;
+  date: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  relevance_score: number | null;
+}
+
+export interface TopicDrilldown {
+  topic: string;
+  window_days: number;
+  generated_at: string;
+  scope: {
+    mode: "active_groups" | "excluded_groups" | "all";
+    active_group_count: number;
+    excluded_groups: string[];
+  };
+  summary: {
+    first_seen: string;
+    last_seen: string;
+    message_count: number;
+    active_days: number;
+    recurrence_ratio: number;
+    recurrence_label: "high" | "medium" | "low";
+    trend: "up" | "flat" | "down";
+    last_7d: number;
+    prev_7d: number;
+  };
+  timeline: DailyCount[];
+  top_users: { name: string; messages: number }[];
+  top_channels: { name: string; messages: number }[];
+  related_topics: TopicCooccurrence[];
+  recent_messages: TopicDrilldownMessage[];
 }
 
 function dateKeyFromTs(ts: number): string {
@@ -381,6 +463,29 @@ function enumerateDays(windowDays: number): string[] {
   return days;
 }
 
+function enumerateDaysFromTs(startTs: number, endTs: number): string[] {
+  const start = new Date(startTs);
+  const end = new Date(endTs);
+  const days: string[] = [];
+  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const final = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  while (cursor.getTime() <= final.getTime()) {
+    const year = cursor.getFullYear();
+    const month = String(cursor.getMonth() + 1).padStart(2, "0");
+    const day = String(cursor.getDate()).padStart(2, "0");
+    days.push(`${year}-${month}-${day}`);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+}
+
+function resolveWindowDays(windowDays: number | null | undefined): number | null {
+  if (windowDays === null || windowDays === undefined) return null;
+  if (!Number.isFinite(windowDays)) return 90;
+  if (windowDays <= 0) return null;
+  return Math.max(7, Math.min(Math.floor(windowDays), 3650));
+}
+
 function finalizeRanked(name: string, acc: StatBaseAccumulator): RankedStat {
   return {
     name,
@@ -413,41 +518,68 @@ function peakIndex(values: number[]): number {
   return idx;
 }
 
-export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
-  const safeWindow = Math.max(7, Math.min(windowDays, 365));
-  const cutoffTs = Date.now() - safeWindow * 24 * 60 * 60 * 1000;
+export function getStatsDashboard(windowDays: number | null = 90): StatsDashboard {
+  const resolvedWindow = resolveWindowDays(windowDays);
+  const cutoffTs =
+    resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
   const db = getDb();
   const scope = loadRoomScope(db);
+  const userAliases = loadUserAliases();
   const roomScope = buildRoomScopeWhere("m", scope);
+
+  const scopedWhereParts: string[] = [];
+  const scopedParams: unknown[] = [];
+  if (roomScope.clause) {
+    scopedWhereParts.push(roomScope.clause);
+    scopedParams.push(...roomScope.params);
+  }
+  const scopedWhere = scopedWhereParts.length > 0 ? `WHERE ${scopedWhereParts.join(" AND ")}` : "";
+
+  const windowWhereParts: string[] = [];
+  const windowParams: unknown[] = [];
+  if (cutoffTs !== null) {
+    windowWhereParts.push("m.timestamp >= ?");
+    windowParams.push(cutoffTs);
+  }
+  if (roomScope.clause) {
+    windowWhereParts.push(roomScope.clause);
+    windowParams.push(...roomScope.params);
+  }
+  const windowWhere = windowWhereParts.length > 0 ? `WHERE ${windowWhereParts.join(" AND ")}` : "";
 
   const rows = db
     .prepare(
       `SELECT m.timestamp, m.sender_name, m.room_name, c.topics, c.relevance_score
        FROM messages m
        LEFT JOIN classifications c ON m.id = c.message_id
-       WHERE m.timestamp >= ?
-       ${roomScope.clause ? `AND ${roomScope.clause}` : ""}
+       ${windowWhere}
        ORDER BY m.timestamp ASC`
     )
-    .all(cutoffTs, ...roomScope.params) as {
+    .all(...windowParams) as {
     timestamp: number;
     sender_name: string;
     room_name: string;
     topics: string | null;
     relevance_score: number | null;
   }[];
+
   const allTopicRows = db
     .prepare(
       `SELECT m.timestamp, c.topics
        FROM messages m
        LEFT JOIN classifications c ON m.id = c.message_id
-       WHERE c.topics IS NOT NULL
-       ${roomScope.clause ? `AND ${roomScope.clause}` : ""}`
+       ${scopedWhere ? `${scopedWhere} AND c.topics IS NOT NULL` : "WHERE c.topics IS NOT NULL"}`
     )
-    .all(...roomScope.params) as { timestamp: number; topics: string | null }[];
+    .all(...scopedParams) as { timestamp: number; topics: string | null }[];
   db.close();
 
-  const timelineDays = enumerateDays(safeWindow);
+  const timelineDays =
+    resolvedWindow === null
+      ? rows.length > 0
+        ? enumerateDaysFromTs(rows[0].timestamp, Date.now())
+        : enumerateDays(30)
+      : enumerateDays(resolvedWindow);
+  const windowDaysValue = timelineDays.length;
   const timelineMap = new Map<string, number>(timelineDays.map((d) => [d, 0]));
   const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const weekdayCounts = Array.from({ length: 7 }, () => 0);
@@ -485,7 +617,7 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
       relevanceCount += 1;
     }
 
-    const sender = row.sender_name || "Unknown";
+    const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
     const userAcc = users.get(sender) || {
       messages: 0,
       activeDays: new Set<string>(),
@@ -703,11 +835,11 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
   };
 
   return {
-    window_days: safeWindow,
+    window_days: windowDaysValue,
     generated_at: new Date().toISOString(),
     scope: {
       mode: scope.mode,
-      active_group_count: scope.activeGroupIds.length,
+      active_group_count: Math.max(scope.activeGroupIds.length, scope.activeGroupNames.length),
       excluded_groups: scope.excludedGroups,
     },
     totals: {
@@ -726,5 +858,246 @@ export function getStatsDashboard(windowDays: number = 90): StatsDashboard {
     topics: topicStats,
     cooccurrence: cooccurrenceStats,
     seasonality,
+  };
+}
+
+export function getTopicDrilldown(
+  topicName: string,
+  windowDays: number | null = 90,
+): TopicDrilldown | null {
+  const needle = topicName.trim().toLowerCase();
+  if (!needle) return null;
+
+  const resolvedWindow = resolveWindowDays(windowDays);
+  const cutoffTs =
+    resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  const userAliases = loadUserAliases();
+  const roomScope = buildRoomScopeWhere("m", scope);
+
+  const windowWhereParts: string[] = ["c.topics IS NOT NULL"];
+  const windowParams: unknown[] = [];
+  if (cutoffTs !== null) {
+    windowWhereParts.push("m.timestamp >= ?");
+    windowParams.push(cutoffTs);
+  }
+  if (roomScope.clause) {
+    windowWhereParts.push(roomScope.clause);
+    windowParams.push(...roomScope.params);
+  }
+
+  const scopedWhereParts: string[] = ["c.topics IS NOT NULL"];
+  const scopedParams: unknown[] = [];
+  if (roomScope.clause) {
+    scopedWhereParts.push(roomScope.clause);
+    scopedParams.push(...roomScope.params);
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.timestamp, m.room_name, m.sender_name, m.body, c.relevance_score, c.topics
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       WHERE ${windowWhereParts.join(" AND ")}
+       ORDER BY m.timestamp ASC`
+    )
+    .all(...windowParams) as {
+    id: string;
+    timestamp: number;
+    room_name: string;
+    sender_name: string;
+    body: string;
+    relevance_score: number | null;
+    topics: string | null;
+  }[];
+
+  const allScopedRows = db
+    .prepare(
+      `SELECT m.timestamp, c.topics
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       WHERE ${scopedWhereParts.join(" AND ")}`
+    )
+    .all(...scopedParams) as { timestamp: number; topics: string | null }[];
+  db.close();
+
+  let canonicalTopic = topicName.trim();
+  const topicRows = rows.filter((row) => {
+    const messageTopics = parseTopics(row.topics);
+    for (const topic of messageTopics) {
+      if (topic.toLowerCase() === needle) {
+        canonicalTopic = topic;
+        return true;
+      }
+    }
+    return false;
+  });
+
+  if (topicRows.length === 0) {
+    return null;
+  }
+
+  const timelineDays =
+    resolvedWindow === null
+      ? enumerateDaysFromTs(topicRows[0].timestamp, Date.now())
+      : enumerateDays(resolvedWindow);
+  const windowDaysValue = timelineDays.length;
+  const timelineMap = new Map<string, number>(timelineDays.map((d) => [d, 0]));
+  const topicActiveDays = new Set<string>();
+  const userCounts = new Map<string, number>();
+  const channelCounts = new Map<string, number>();
+
+  for (const row of topicRows) {
+    const date = dateKeyFromTs(row.timestamp);
+    timelineMap.set(date, (timelineMap.get(date) || 0) + 1);
+    topicActiveDays.add(date);
+    const user = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+    userCounts.set(user, (userCounts.get(user) || 0) + 1);
+    const channel = row.room_name || "Unknown";
+    channelCounts.set(channel, (channelCounts.get(channel) || 0) + 1);
+  }
+
+  const firstSeenWindowTs = topicRows[0].timestamp;
+  const lastSeenWindowTs = topicRows[topicRows.length - 1].timestamp;
+  let firstSeenEverTs = firstSeenWindowTs;
+  for (const row of allScopedRows) {
+    for (const topic of parseTopics(row.topics)) {
+      if (topic.toLowerCase() === needle) {
+        if (row.timestamp < firstSeenEverTs) firstSeenEverTs = row.timestamp;
+        break;
+      }
+    }
+  }
+
+  const spanDays = Math.max(
+    1,
+    Math.floor((lastSeenWindowTs - firstSeenWindowTs) / (24 * 60 * 60 * 1000)) + 1,
+  );
+  const recurrenceRatio = topicActiveDays.size / spanDays;
+
+  const now = new Date();
+  const sevenDaysAgo = new Date(now);
+  sevenDaysAgo.setDate(now.getDate() - 6);
+  const fourteenDaysAgo = new Date(now);
+  fourteenDaysAgo.setDate(now.getDate() - 13);
+  const last7Start = dateKeyFromTs(sevenDaysAgo.getTime());
+  const prev7Start = dateKeyFromTs(fourteenDaysAgo.getTime());
+  let last7 = 0;
+  let prev7 = 0;
+  const timeline: DailyCount[] = timelineDays.map((date) => {
+    const count = timelineMap.get(date) || 0;
+    if (date >= last7Start) last7 += count;
+    else if (date >= prev7Start && date < last7Start) prev7 += count;
+    return { date, count };
+  });
+  let trend: "up" | "flat" | "down" = "flat";
+  if (last7 >= prev7 + 3) trend = "up";
+  else if (prev7 >= last7 + 3) trend = "down";
+
+  const topicCounts = new Map<string, number>();
+  for (const row of rows) {
+    for (const topic of new Set(parseTopics(row.topics))) {
+      topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
+    }
+  }
+  const selectedTopicCount = topicCounts.get(canonicalTopic) || topicRows.length;
+
+  const relatedAcc = new Map<string, PairAccumulator>();
+  for (const row of topicRows) {
+    const date = dateKeyFromTs(row.timestamp);
+    for (const topic of new Set(parseTopics(row.topics))) {
+      if (topic.toLowerCase() === needle) continue;
+      const key = topic;
+      const prev = relatedAcc.get(key) || {
+        topic_a: canonicalTopic,
+        topic_b: topic,
+        co_messages: 0,
+        lastTs: row.timestamp,
+        daily: new Map<string, number>(),
+      };
+      prev.co_messages += 1;
+      prev.lastTs = Math.max(prev.lastTs, row.timestamp);
+      prev.daily.set(date, (prev.daily.get(date) || 0) + 1);
+      relatedAcc.set(key, prev);
+    }
+  }
+
+  const related_topics = Array.from(relatedAcc.values())
+    .map((pair) => {
+      const otherCount = topicCounts.get(pair.topic_b) || pair.co_messages;
+      const overlapBase = Math.max(1, Math.min(selectedTopicCount, otherCount));
+      const union = Math.max(1, selectedTopicCount + otherCount - pair.co_messages);
+      let pairLast7 = 0;
+      let pairPrev7 = 0;
+      for (const [date, count] of pair.daily.entries()) {
+        if (date >= last7Start) pairLast7 += count;
+        else if (date >= prev7Start && date < last7Start) pairPrev7 += count;
+      }
+      let pairTrend: "up" | "flat" | "down" = "flat";
+      if (pairLast7 >= pairPrev7 + 2) pairTrend = "up";
+      else if (pairPrev7 >= pairLast7 + 2) pairTrend = "down";
+
+      return {
+        topic_a: canonicalTopic,
+        topic_b: pair.topic_b,
+        co_messages: pair.co_messages,
+        overlap_ratio: Number((pair.co_messages / overlapBase).toFixed(3)),
+        jaccard: Number((pair.co_messages / union).toFixed(3)),
+        last_seen: dateKeyFromTs(pair.lastTs),
+        trend: pairTrend,
+      };
+    })
+    .sort((a, b) => b.co_messages - a.co_messages)
+    .slice(0, 20);
+
+  const top_users = Array.from(userCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15)
+    .map(([name, messages]) => ({ name, messages }));
+
+  const top_channels = Array.from(channelCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 15)
+    .map(([name, messages]) => ({ name, messages }));
+
+  const recent_messages = topicRows
+    .slice(-40)
+    .reverse()
+    .map((row) => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      date: new Date(row.timestamp).toLocaleString(),
+      room_name: row.room_name,
+      sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+      body: row.body,
+      relevance_score: row.relevance_score,
+    }));
+
+  return {
+    topic: canonicalTopic,
+    window_days: windowDaysValue,
+    generated_at: new Date().toISOString(),
+    scope: {
+      mode: scope.mode,
+      active_group_count: Math.max(scope.activeGroupIds.length, scope.activeGroupNames.length),
+      excluded_groups: scope.excludedGroups,
+    },
+    summary: {
+      first_seen: dateKeyFromTs(firstSeenEverTs),
+      last_seen: dateKeyFromTs(lastSeenWindowTs),
+      message_count: topicRows.length,
+      active_days: topicActiveDays.size,
+      recurrence_ratio: Number(recurrenceRatio.toFixed(3)),
+      recurrence_label: recurrenceLabel(recurrenceRatio, topicActiveDays.size),
+      trend,
+      last_7d: last7,
+      prev_7d: prev7,
+    },
+    timeline,
+    top_users,
+    top_channels,
+    related_topics,
+    recent_messages,
   };
 }

@@ -79,6 +79,50 @@ interface StatsDashboard {
   seasonality: SeasonalityStats;
 }
 
+interface TopicDrilldownMessage {
+  id: string;
+  timestamp: number;
+  date: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  relevance_score: number | null;
+}
+
+interface TopicDrilldown {
+  topic: string;
+  window_days: number;
+  generated_at: string;
+  scope: {
+    mode: "active_groups" | "excluded_groups" | "all";
+    active_group_count: number;
+    excluded_groups: string[];
+  };
+  summary: {
+    first_seen: string;
+    last_seen: string;
+    message_count: number;
+    active_days: number;
+    recurrence_ratio: number;
+    recurrence_label: "high" | "medium" | "low";
+    trend: "up" | "flat" | "down";
+    last_7d: number;
+    prev_7d: number;
+  };
+  timeline: DailyCount[];
+  top_users: { name: string; messages: number }[];
+  top_channels: { name: string; messages: number }[];
+  related_topics: TopicCooccurrence[];
+  recent_messages: TopicDrilldownMessage[];
+}
+
+interface TopicInsights {
+  summary: string;
+  guidance: string[];
+  watchouts: string[];
+  next_questions: string[];
+}
+
 const CHART_COLORS = [
   "#22d3ee",
   "#34d399",
@@ -472,10 +516,15 @@ function maxCount(values: Array<{ count: number }>): number {
   return Math.max(1, ...values.map((v) => v.count));
 }
 
+type DayRange = 30 | 90 | 180 | 365 | "all";
+
 export default function StatsPage() {
-  const [days, setDays] = useState(90);
+  const [days, setDays] = useState<DayRange>(90);
   const [stats, setStats] = useState<StatsDashboard | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
+  const [topicDrilldown, setTopicDrilldown] = useState<TopicDrilldown | null>(null);
+  const [topicInsights, setTopicInsights] = useState<TopicInsights | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -496,10 +545,44 @@ export default function StatsPage() {
     };
   }, [days]);
 
+  const effectiveSelectedTopic = useMemo(() => {
+    if (!stats || stats.topics.length === 0) return null;
+    if (selectedTopic && stats.topics.some((topic) => topic.topic === selectedTopic)) {
+      return selectedTopic;
+    }
+    return stats.topics[0].topic;
+  }, [stats, selectedTopic]);
+
+  useEffect(() => {
+    if (!effectiveSelectedTopic) return;
+    let active = true;
+    fetch(`/api/stats/topic?topic=${encodeURIComponent(effectiveSelectedTopic)}&days=${days}`)
+      .then((r) => r.json())
+      .then((data: { drilldown: TopicDrilldown | null; insights: TopicInsights | null }) => {
+        if (!active) return;
+        setTopicDrilldown(data.drilldown);
+        setTopicInsights(data.insights);
+      })
+      .catch(() => {
+        if (!active) return;
+        setTopicDrilldown(null);
+        setTopicInsights(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [effectiveSelectedTopic, days]);
+
   const generatedLabel = useMemo(() => {
     if (!stats) return "";
     return new Date(stats.generated_at).toLocaleString();
   }, [stats]);
+
+  const activeDrilldown =
+    topicDrilldown && topicDrilldown.topic === effectiveSelectedTopic
+      ? topicDrilldown
+      : null;
+  const activeInsights = activeDrilldown ? topicInsights : null;
 
   if (loading) {
     return (
@@ -539,7 +622,7 @@ export default function StatsPage() {
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
-        {[30, 90, 180].map((range) => (
+        {([30, 90, 180, 365, "all"] as DayRange[]).map((range) => (
           <button
             key={range}
             onClick={() => {
@@ -551,7 +634,7 @@ export default function StatsPage() {
               days === range ? "vibe-button" : "vibe-chip"
             }`}
           >
-            {range}d
+            {range === "all" ? "All" : `${range}d`}
           </button>
         ))}
         <span className="text-xs text-slate-400">Last computed: {generatedLabel}</span>
@@ -686,7 +769,18 @@ export default function StatsPage() {
             <tbody>
               {stats.topics.map((topic) => (
                 <tr key={topic.topic} className="border-t border-slate-700/60">
-                  <td className="py-2 pr-3 text-slate-200">{topic.topic}</td>
+                  <td className="py-2 pr-3 text-slate-200">
+                    <button
+                      onClick={() => setSelectedTopic(topic.topic)}
+                      className={`rounded px-2 py-0.5 text-left text-sm ${
+                        effectiveSelectedTopic === topic.topic
+                          ? "bg-cyan-400/20 text-cyan-100"
+                          : "hover:bg-slate-800/70"
+                      }`}
+                    >
+                      {topic.topic}
+                    </button>
+                  </td>
                   <td className="py-2 pr-3">{topic.started_on}</td>
                   <td className="py-2 pr-3">{topic.started_in_window}</td>
                   <td className="py-2 pr-3">{topic.last_seen}</td>
@@ -715,6 +809,163 @@ export default function StatsPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="vibe-panel rounded-xl p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="vibe-title text-lg">Topic Drilldown</h2>
+          <span className="text-xs text-slate-400">
+            {effectiveSelectedTopic ? `Selected: ${effectiveSelectedTopic}` : "Select a topic above"}
+          </span>
+        </div>
+
+        {effectiveSelectedTopic && !activeDrilldown ? (
+          <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 px-3 py-2 text-sm text-slate-300">
+            Loading topic insights...
+          </div>
+        ) : !activeDrilldown ? (
+          <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 px-3 py-2 text-sm text-slate-400">
+            Choose a topic from the lifecycle table to open deep analysis.
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Messages</div>
+                <div className="mt-1 text-xl font-semibold text-slate-100">
+                  {activeDrilldown.summary.message_count}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Active Days</div>
+                <div className="mt-1 text-xl font-semibold text-slate-100">
+                  {activeDrilldown.summary.active_days}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">First Seen</div>
+                <div className="mt-1 text-sm font-semibold text-slate-100">
+                  {activeDrilldown.summary.first_seen}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Last Seen</div>
+                <div className="mt-1 text-sm font-semibold text-slate-100">
+                  {activeDrilldown.summary.last_seen}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Recurrence</div>
+                <div className="mt-1 text-sm font-semibold text-slate-100">
+                  {Math.round(activeDrilldown.summary.recurrence_ratio * 100)}%
+                  {" · "}
+                  {activeDrilldown.summary.trend}
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-slate-200">Topic Volume Over Time</h3>
+              <InteractiveTimelineChart daily={activeDrilldown.timeline} color="#34d399" yLabel="topic msgs" />
+            </section>
+
+            <section className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-4">
+                <h3 className="mb-2 text-sm font-semibold text-slate-200">Top Users In Topic</h3>
+                <div className="space-y-1 text-sm">
+                  {activeDrilldown.top_users.map((user) => (
+                    <div key={user.name} className="flex justify-between gap-3">
+                      <span className="text-slate-200">{user.name}</span>
+                      <span className="text-slate-400">{user.messages}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-4">
+                <h3 className="mb-2 text-sm font-semibold text-slate-200">Top Channels In Topic</h3>
+                <div className="space-y-1 text-sm">
+                  {activeDrilldown.top_channels.map((channel) => (
+                    <div key={channel.name} className="flex justify-between gap-3">
+                      <span className="text-slate-200">{channel.name}</span>
+                      <span className="text-slate-400">{channel.messages}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {activeInsights ? (
+              <section className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-lg border border-cyan-400/30 bg-cyan-400/5 p-4">
+                  <h3 className="mb-2 text-sm font-semibold text-cyan-100">Summary</h3>
+                  <p className="text-sm leading-relaxed text-slate-100">{activeInsights.summary}</p>
+                </div>
+                <div className="rounded-lg border border-emerald-400/30 bg-emerald-400/5 p-4">
+                  <h3 className="mb-2 text-sm font-semibold text-emerald-100">Guidance</h3>
+                  <ul className="space-y-1 text-sm text-slate-100">
+                    {activeInsights.guidance.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="list-disc pl-1">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-4">
+                  <h3 className="mb-2 text-sm font-semibold text-amber-100">Watch-outs</h3>
+                  <ul className="space-y-1 text-sm text-slate-100">
+                    {activeInsights.watchouts.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="list-disc pl-1">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded-lg border border-fuchsia-400/30 bg-fuchsia-400/5 p-4">
+                  <h3 className="mb-2 text-sm font-semibold text-fuchsia-100">Next Questions</h3>
+                  <ul className="space-y-1 text-sm text-slate-100">
+                    {activeInsights.next_questions.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="list-disc pl-1">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </section>
+            ) : null}
+
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-slate-200">Related Topics</h3>
+              <div className="flex flex-wrap gap-2">
+                {activeDrilldown.related_topics.map((edge) => (
+                  <button
+                    key={`${edge.topic_a}-${edge.topic_b}`}
+                    onClick={() => setSelectedTopic(edge.topic_b)}
+                    className="rounded-md border border-slate-700 bg-slate-900/50 px-2.5 py-1 text-xs text-slate-200 hover:border-cyan-300/60"
+                  >
+                    {edge.topic_b} · {edge.co_messages}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-slate-200">Recent Messages</h3>
+              <div className="space-y-2">
+                {activeDrilldown.recent_messages.slice(0, 18).map((message) => (
+                  <div
+                    key={message.id}
+                    className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3"
+                  >
+                    <div className="mb-1 text-xs text-slate-400">
+                      {message.date} · {message.room_name} · {message.sender_name}
+                    </div>
+                    <p className="text-sm text-slate-200">{message.body}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
       </section>
 
       <section className="vibe-panel rounded-xl p-5">
