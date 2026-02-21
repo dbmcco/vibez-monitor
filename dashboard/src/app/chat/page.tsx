@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -99,7 +101,15 @@ export default function ChatPage() {
                   : "border border-slate-700/80 bg-slate-900/70 text-slate-200"
               }`}
             >
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+              {msg.role === "user" ? (
+                <p className="whitespace-pre-wrap">{msg.content}</p>
+              ) : (
+                <div className="space-y-2 break-words [&_a]:text-cyan-300 [&_a]:underline [&_code]:rounded [&_code]:bg-slate-800/80 [&_code]:px-1.5 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_li]:ml-4 [&_li]:list-disc [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-slate-950/80 [&_pre]:p-2">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {msg.content}
+                  </ReactMarkdown>
+                </div>
+              )}
               {msg.messageCount !== undefined && (
                 <p className="mt-2 text-xs text-slate-400">
                   Based on {msg.messageCount} messages
