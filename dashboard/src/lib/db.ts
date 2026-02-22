@@ -153,6 +153,114 @@ export interface DailyReport {
   generated_at: string | null;
 }
 
+export type ContributionNeedType =
+  | "decision"
+  | "information"
+  | "coordination"
+  | "creation"
+  | "support"
+  | "none";
+
+export type ContributionAxisKey =
+  | "urgency"
+  | "need_strength"
+  | "aging_risk"
+  | "leverage"
+  | "strategic_fit"
+  | "comparative_advantage"
+  | "effort_to_value"
+  | "dependency_blocker"
+  | "relationship_stakes"
+  | "risk_if_ignored"
+  | "recurrence_signal"
+  | "confidence";
+
+export interface ContributionAxes {
+  urgency: number;
+  need_strength: number;
+  aging_risk: number;
+  leverage: number;
+  strategic_fit: number;
+  comparative_advantage: number;
+  effort_to_value: number;
+  dependency_blocker: number;
+  relationship_stakes: number;
+  risk_if_ignored: number;
+  recurrence_signal: number;
+  confidence: number;
+}
+
+export interface ContributionOpportunity {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+  alert_level: string | null;
+  topics: string[];
+  contribution_themes: string[];
+  entities: string[];
+  contribution_hint: string | null;
+  need_type: ContributionNeedType;
+  hours_old: number;
+  priority_score: number;
+  axes: ContributionAxes;
+  reasons: string[];
+}
+
+export interface ContributionSection {
+  key:
+    | "act_now"
+    | "high_leverage"
+    | "aging_risk"
+    | "blocked"
+    | "relationship"
+    | "quick_wins";
+  label: string;
+  description: string;
+  items: ContributionOpportunity[];
+}
+
+export interface ContributionAxisSummary {
+  axis: ContributionAxisKey;
+  label: string;
+  average: number;
+  high_count: number;
+}
+
+export interface ContributionNeedSummary {
+  need_type: ContributionNeedType;
+  count: number;
+}
+
+export interface RecurringContributionTheme {
+  theme: string;
+  messages: number;
+  avg_priority: number;
+  latest_seen: string;
+  channels: string[];
+  dominant_need_type: ContributionNeedType;
+}
+
+export interface ContributionDashboard {
+  generated_at: string;
+  lookback_days: number;
+  totals: {
+    messages: number;
+    opportunities: number;
+    act_now: number;
+    high_leverage: number;
+    aging_risk: number;
+    blocked: number;
+  };
+  axis_summary: ContributionAxisSummary[];
+  need_summary: ContributionNeedSummary[];
+  recurring_themes: RecurringContributionTheme[];
+  opportunities: ContributionOpportunity[];
+  sections: ContributionSection[];
+}
+
 export function getMessages(opts: {
   limit?: number;
   offset?: number;
@@ -188,6 +296,580 @@ export function getMessages(opts: {
   const rows = db.prepare(query).all(...params) as Message[];
   db.close();
   return rows;
+}
+
+const CONTRIBUTION_AXIS_LABELS: Record<ContributionAxisKey, string> = {
+  urgency: "Urgency",
+  need_strength: "Need Strength",
+  aging_risk: "Aging Risk",
+  leverage: "Leverage",
+  strategic_fit: "Strategic Fit",
+  comparative_advantage: "Comparative Advantage",
+  effort_to_value: "Effort to Value",
+  dependency_blocker: "Dependency / Blocker",
+  relationship_stakes: "Relationship Stakes",
+  risk_if_ignored: "Risk if Ignored",
+  recurrence_signal: "Recurrence Signal",
+  confidence: "Confidence",
+};
+
+const URGENCY_RE =
+  /\b(urgent|asap|today|tonight|tomorrow|deadline|immediately|time[-\s]?sensitive|quick turn|before [a-z0-9]|eod)\b/i;
+const NEED_RE =
+  /\b(can you|could you|would you|please|need\b|looking for|anyone know|who can|help\b|thoughts\?|what do you think|can we|should we|should i)\b/i;
+const DECISION_RE = /\b(decide|decision|choose|which option|trade[-\s]?off|should we|should i|go\/no-go)\b/i;
+const INFORMATION_RE =
+  /\b(anyone know|what is|how do|docs?|reference|clarify|details?|evidence|source)\b/i;
+const COORDINATION_RE =
+  /\b(schedule|meet|call|sync|coordinate|available|join|timeline|when can|calendar)\b/i;
+const CREATION_RE =
+  /\b(build|ship|write|draft|prototype|implement|code|create|design|publish)\b/i;
+const SUPPORT_RE =
+  /\b(stuck|frustrated|overwhelmed|unsure|confused|need support|could use help)\b/i;
+const DEPENDENCY_RE =
+  /\b(blocked|waiting on|pending approval|stuck on|cannot proceed|can't proceed|unblock|hold up)\b/i;
+const RISK_RE =
+  /\b(risk|security|broken|bug|issue|problem|incident|failure|outage|misinformation|wrong)\b/i;
+const HIGH_EFFORT_RE =
+  /\b(comprehensive|deep dive|full plan|big refactor|architecture|research packet|end-to-end)\b/i;
+const QUICK_WIN_RE = /\b(quick|small|short|simple|one-liner|fast)\b/i;
+const GROUP_IMPACT_RE = /\b(we|team|everyone|anyone|community|group|channel)\b/i;
+const BRAYDON_RE = /\b(braydon|dbmcco)\b/i;
+
+interface ContributionRawRow {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+  topics: string | null;
+  entities: string | null;
+  contribution_flag: number | null;
+  contribution_themes: string | null;
+  contribution_hint: string | null;
+  alert_level: string | null;
+}
+
+interface ContributionPrep {
+  row: ContributionRawRow;
+  sender_name: string;
+  body: string;
+  text: string;
+  topics: string[];
+  entities: string[];
+  themes: string[];
+  need_type: ContributionNeedType;
+  has_explicit_need: boolean;
+  has_question: boolean;
+  has_dependency: boolean;
+  has_braydon_mention: boolean;
+}
+
+function clampScore(value: number, min = 0, max = 10): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function inferNeedType(text: string): ContributionNeedType {
+  if (DECISION_RE.test(text)) return "decision";
+  if (COORDINATION_RE.test(text)) return "coordination";
+  if (CREATION_RE.test(text)) return "creation";
+  if (SUPPORT_RE.test(text)) return "support";
+  if (INFORMATION_RE.test(text)) return "information";
+  return "none";
+}
+
+function dominantNeedType(counts: Map<ContributionNeedType, number>): ContributionNeedType {
+  let top: ContributionNeedType = "none";
+  let topCount = -1;
+  for (const [needType, count] of counts.entries()) {
+    if (count > topCount) {
+      top = needType;
+      topCount = count;
+    }
+  }
+  return top;
+}
+
+interface ContributionDashboardOpts {
+  lookbackDays?: number;
+  limit?: number;
+}
+
+export function getContributionDashboard(
+  opts: ContributionDashboardOpts = {},
+): ContributionDashboard {
+  const resolvedWindow = resolveWindowDays(opts.lookbackDays ?? 45) ?? 45;
+  const limit = Math.max(50, Math.min(opts.limit ?? 600, 2000));
+  const cutoffTs = Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
+
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  const userAliases = loadUserAliases();
+  const roomScope = buildRoomScopeWhere("m", scope);
+
+  const whereParts = ["m.timestamp >= ?"];
+  const whereParams: unknown[] = [cutoffTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    whereParams.push(...roomScope.params);
+  }
+  const whereClause = `WHERE ${whereParts.join(" AND ")}`;
+
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+              c.relevance_score, c.topics, c.entities, c.contribution_flag,
+              c.contribution_themes, c.contribution_hint, c.alert_level
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       ${whereClause}
+       AND (c.contribution_flag = 1 OR c.alert_level = 'hot' OR (c.contribution_hint IS NOT NULL AND trim(c.contribution_hint) != ''))
+       ORDER BY m.timestamp DESC
+       LIMIT ?`
+    )
+    .all(...whereParams, limit) as ContributionRawRow[];
+
+  const totalRow = db
+    .prepare(`SELECT count(*) as count FROM messages m ${whereClause}`)
+    .get(...whereParams) as { count: number } | undefined;
+
+  const valueRows = db
+    .prepare("SELECT key, value FROM value_config WHERE key IN ('topics', 'projects')")
+    .all() as { key: string; value: string }[];
+  db.close();
+
+  const valueLexicon = new Set<string>();
+  for (const row of valueRows) {
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      if (!Array.isArray(parsed)) continue;
+      for (const item of parsed) {
+        const term = String(item).trim().toLowerCase();
+        if (term.length > 2) valueLexicon.add(term);
+      }
+    } catch {
+      continue;
+    }
+  }
+  const lexiconTerms = Array.from(valueLexicon);
+
+  const prepped: ContributionPrep[] = rows.map((row) => {
+    const body = row.body || "";
+    const hint = row.contribution_hint || "";
+    const text = `${body}\n${hint}`.toLowerCase();
+    const themes = parseTopics(row.contribution_themes);
+    const topics = parseTopics(row.topics);
+    const entities = parseTopics(row.entities);
+    const needType = inferNeedType(text);
+    return {
+      row,
+      sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+      body,
+      text,
+      topics,
+      entities,
+      themes: themes.length > 0 ? themes : topics.slice(0, 2),
+      need_type: needType,
+      has_explicit_need: NEED_RE.test(text),
+      has_question: text.includes("?"),
+      has_dependency: DEPENDENCY_RE.test(text),
+      has_braydon_mention: BRAYDON_RE.test(text),
+    };
+  });
+
+  const senderCounts = new Map<string, number>();
+  const channelCounts = new Map<string, number>();
+  const themeCounts = new Map<string, number>();
+  const topicCounts = new Map<string, number>();
+
+  for (const item of prepped) {
+    senderCounts.set(item.sender_name, (senderCounts.get(item.sender_name) || 0) + 1);
+    channelCounts.set(item.row.room_name, (channelCounts.get(item.row.room_name) || 0) + 1);
+    for (const theme of new Set(item.themes)) {
+      themeCounts.set(theme, (themeCounts.get(theme) || 0) + 1);
+    }
+    for (const topic of new Set(item.topics)) {
+      topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
+    }
+  }
+
+  const senderMax = Math.max(1, ...Array.from(senderCounts.values()));
+  const channelMax = Math.max(1, ...Array.from(channelCounts.values()));
+
+  const opportunities: ContributionOpportunity[] = prepped.map((item) => {
+    const now = Date.now();
+    const hoursOld = Math.max(0, (now - item.row.timestamp) / (1000 * 60 * 60));
+    const themeSignal = Math.max(
+      1,
+      ...item.themes.map((theme) => themeCounts.get(theme) || 1),
+    );
+    const topicSignal = Math.max(
+      1,
+      ...item.topics.map((topic) => topicCounts.get(topic) || 1),
+    );
+    const senderSignal = senderCounts.get(item.sender_name) || 1;
+    const channelSignal = channelCounts.get(item.row.room_name) || 1;
+
+    const hasValueMatch = lexiconTerms.some(
+      (term) =>
+        item.text.includes(term) ||
+        item.topics.some((topic) => topic.toLowerCase().includes(term)),
+    );
+
+    const freshnessScore =
+      hoursOld <= 6
+        ? 10
+        : hoursOld <= 24
+          ? 8
+          : hoursOld <= 72
+            ? 6
+            : hoursOld <= 168
+              ? 4
+              : hoursOld <= 336
+                ? 3
+                : 2;
+
+    const urgency = clampScore(
+      (item.row.alert_level === "hot" ? 4 : item.row.alert_level === "digest" ? 1 : 0) +
+        (URGENCY_RE.test(item.text) ? 3 : 0) +
+        (item.has_explicit_need ? 1 : 0) +
+        (item.has_dependency ? 1 : 0) +
+        (freshnessScore >= 8 ? 2 : freshnessScore >= 6 ? 1 : 0),
+    );
+
+    const needStrength = clampScore(
+      (item.has_explicit_need ? 4 : 0) +
+        (item.has_question ? 2 : 0) +
+        (item.row.contribution_hint ? 2 : 0) +
+        (item.need_type !== "none" ? 1.5 : 0) +
+        (item.has_braydon_mention ? 1 : 0),
+    );
+
+    const agingBase =
+      hoursOld < 12
+        ? 1
+        : hoursOld < 24
+          ? 3
+          : hoursOld < 72
+            ? 6
+            : hoursOld < 168
+              ? 8
+              : hoursOld < 336
+                ? 9
+                : 7;
+    const agingRisk = clampScore(
+      agingBase + (needStrength >= 7 ? 1 : 0) + (item.has_dependency ? 1 : 0),
+    );
+
+    const leverage = clampScore(
+      1 +
+        Math.min(4, Math.log2(themeSignal + 1) * 1.8) +
+        Math.min(2, Math.log2(topicSignal + 1) * 1.2) +
+        (GROUP_IMPACT_RE.test(item.text) ? 1 : 0) +
+        (item.themes.length > 1 ? 1 : 0) +
+        (channelSignal >= Math.max(6, channelMax * 0.2) ? 1 : 0),
+    );
+
+    const strategicFit = clampScore(
+      (item.row.relevance_score ?? 0) * 0.65 +
+        ((item.row.contribution_flag || 0) > 0 ? 2 : 0) +
+        (item.row.contribution_hint ? 1 : 0) +
+        (hasValueMatch ? 2 : 0),
+    );
+
+    const comparativeAdvantage = clampScore(
+      (item.has_braydon_mention ? 3 : 0) +
+        (item.row.contribution_hint ? 2 : 0) +
+        (hasValueMatch ? 2 : 0) +
+        ((item.row.relevance_score ?? 0) >= 8 ? 1.5 : 0) +
+        (item.themes.length > 0 ? 1 : 0) +
+        (item.entities.length > 0 ? 0.5 : 0),
+    );
+
+    const effortPenalty =
+      (HIGH_EFFORT_RE.test(item.text) ? 3 : 0) +
+      (item.body.length > 500 ? 1 : 0) +
+      (item.body.length > 1000 ? 1 : 0) +
+      (item.body.includes("\n") ? 0.5 : 0);
+    const valuePotential = urgency * 0.35 + needStrength * 0.3 + strategicFit * 0.35;
+    const effortToValue = clampScore(
+      valuePotential * 0.85 - effortPenalty + (QUICK_WIN_RE.test(item.text) ? 2 : 0),
+    );
+
+    const dependencyBlocker = clampScore(
+      (item.has_dependency ? 5 : 0) +
+        (item.need_type === "coordination" ? 2 : 0) +
+        (item.has_explicit_need ? 1.5 : 0) +
+        (urgency >= 7 ? 1.5 : 0),
+    );
+
+    const relationshipStakes = clampScore(
+      2 +
+        Math.min(3, Math.log2(senderSignal + 1) * 1.1) +
+        (item.has_braydon_mention ? 2 : 0) +
+        (senderSignal >= Math.max(4, senderMax * 0.15) ? 2 : 0) +
+        (item.row.room_name.toLowerCase().includes("vibez") ? 0.5 : 0),
+    );
+
+    const riskIfIgnored = clampScore(
+      urgency * 0.35 +
+        needStrength * 0.2 +
+        dependencyBlocker * 0.25 +
+        (RISK_RE.test(item.text) ? 2 : 0) +
+        (item.row.alert_level === "hot" ? 1.5 : 0),
+    );
+
+    const recurrenceSignal = clampScore(
+      Math.min(4, Math.log2(themeSignal + 1) * 1.7) +
+        Math.min(3, Math.log2(topicSignal + 1) * 1.4) +
+        (item.themes.length > 1 ? 1 : 0) +
+        (themeSignal >= 3 ? 1 : 0),
+    );
+
+    const confidence = clampScore(
+      3 +
+        (item.row.contribution_hint ? 2 : 0) +
+        (item.row.relevance_score !== null ? 1 : 0) +
+        (item.themes.length > 0 ? 1 : 0) +
+        (item.topics.length > 0 ? 1 : 0) +
+        (item.need_type !== "none" ? 1 : 0) -
+        (item.body.length < 20 ? 1 : 0),
+    );
+
+    const axes: ContributionAxes = {
+      urgency: Number(urgency.toFixed(2)),
+      need_strength: Number(needStrength.toFixed(2)),
+      aging_risk: Number(agingRisk.toFixed(2)),
+      leverage: Number(leverage.toFixed(2)),
+      strategic_fit: Number(strategicFit.toFixed(2)),
+      comparative_advantage: Number(comparativeAdvantage.toFixed(2)),
+      effort_to_value: Number(effortToValue.toFixed(2)),
+      dependency_blocker: Number(dependencyBlocker.toFixed(2)),
+      relationship_stakes: Number(relationshipStakes.toFixed(2)),
+      risk_if_ignored: Number(riskIfIgnored.toFixed(2)),
+      recurrence_signal: Number(recurrenceSignal.toFixed(2)),
+      confidence: Number(confidence.toFixed(2)),
+    };
+
+    const priorityRaw =
+      axes.urgency * 0.16 +
+      axes.need_strength * 0.14 +
+      axes.aging_risk * 0.08 +
+      axes.leverage * 0.11 +
+      axes.strategic_fit * 0.11 +
+      axes.comparative_advantage * 0.09 +
+      axes.effort_to_value * 0.08 +
+      axes.dependency_blocker * 0.08 +
+      axes.relationship_stakes * 0.05 +
+      axes.risk_if_ignored * 0.06 +
+      axes.recurrence_signal * 0.08 +
+      axes.confidence * 0.06;
+    const priorityScore = Number((priorityRaw * 10).toFixed(1));
+
+    const reasons: string[] = [];
+    if (axes.urgency >= 7) reasons.push("Time-sensitive signal");
+    if (axes.need_strength >= 7) reasons.push("Explicit ask or strong need");
+    if (axes.dependency_blocker >= 7) reasons.push("Potential blocker if unanswered");
+    if (axes.leverage >= 7 || axes.recurrence_signal >= 7) {
+      reasons.push("Recurring pattern with broader leverage");
+    }
+    if (axes.strategic_fit >= 7 || axes.comparative_advantage >= 7) {
+      reasons.push("Strong fit with your current focus and edge");
+    }
+    if (axes.aging_risk >= 7) reasons.push("Aging thread may lose value soon");
+    if (axes.risk_if_ignored >= 7) reasons.push("Higher downside if ignored");
+
+    return {
+      id: item.row.id,
+      room_name: item.row.room_name,
+      sender_name: item.sender_name,
+      body: item.body,
+      timestamp: item.row.timestamp,
+      relevance_score: item.row.relevance_score,
+      alert_level: item.row.alert_level,
+      topics: item.topics,
+      contribution_themes: item.themes,
+      entities: item.entities,
+      contribution_hint: item.row.contribution_hint,
+      need_type: item.need_type,
+      hours_old: Number(hoursOld.toFixed(1)),
+      priority_score: priorityScore,
+      axes,
+      reasons: reasons.slice(0, 4),
+    };
+  });
+
+  opportunities.sort((a, b) => {
+    if (b.priority_score !== a.priority_score) {
+      return b.priority_score - a.priority_score;
+    }
+    return b.timestamp - a.timestamp;
+  });
+
+  const needSummary = new Map<ContributionNeedType, number>();
+  for (const opp of opportunities) {
+    needSummary.set(opp.need_type, (needSummary.get(opp.need_type) || 0) + 1);
+  }
+  const need_summary: ContributionNeedSummary[] = Array.from(needSummary.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([need_type, count]) => ({ need_type, count }));
+
+  const recurringThemeMap = new Map<
+    string,
+    {
+      messages: number;
+      priorityTotal: number;
+      latestTs: number;
+      channels: Set<string>;
+      needTypeCounts: Map<ContributionNeedType, number>;
+    }
+  >();
+
+  for (const opp of opportunities) {
+    const themes = opp.contribution_themes.length > 0 ? opp.contribution_themes : ["uncategorized"];
+    for (const theme of themes) {
+      const prev = recurringThemeMap.get(theme) || {
+        messages: 0,
+        priorityTotal: 0,
+        latestTs: 0,
+        channels: new Set<string>(),
+        needTypeCounts: new Map<ContributionNeedType, number>(),
+      };
+      prev.messages += 1;
+      prev.priorityTotal += opp.priority_score;
+      prev.latestTs = Math.max(prev.latestTs, opp.timestamp);
+      prev.channels.add(opp.room_name);
+      prev.needTypeCounts.set(
+        opp.need_type,
+        (prev.needTypeCounts.get(opp.need_type) || 0) + 1,
+      );
+      recurringThemeMap.set(theme, prev);
+    }
+  }
+
+  const recurring_themes: RecurringContributionTheme[] = Array.from(recurringThemeMap.entries())
+    .map(([theme, value]) => ({
+      theme,
+      messages: value.messages,
+      avg_priority: Number((value.priorityTotal / Math.max(1, value.messages)).toFixed(1)),
+      latest_seen: dateKeyFromTs(value.latestTs),
+      channels: Array.from(value.channels).slice(0, 5),
+      dominant_need_type: dominantNeedType(value.needTypeCounts),
+    }))
+    .filter((item) => item.messages >= 2)
+    .sort((a, b) => {
+      if (b.messages !== a.messages) return b.messages - a.messages;
+      return b.avg_priority - a.avg_priority;
+    })
+    .slice(0, 15);
+
+  const actNowItems = opportunities
+    .filter(
+      (item) =>
+        item.priority_score >= 68 &&
+        (item.axes.urgency >= 6 ||
+          item.axes.dependency_blocker >= 6 ||
+          item.axes.risk_if_ignored >= 6 ||
+          item.axes.need_strength >= 7),
+    )
+    .slice(0, 20);
+  const highLeverageItems = opportunities
+    .filter((item) => item.axes.leverage >= 7 || item.axes.recurrence_signal >= 7)
+    .slice(0, 20);
+  const agingItems = opportunities
+    .filter((item) => item.axes.aging_risk >= 7 && item.axes.need_strength >= 5)
+    .sort((a, b) => b.axes.aging_risk - a.axes.aging_risk || b.priority_score - a.priority_score)
+    .slice(0, 20);
+  const blockedItems = opportunities
+    .filter((item) => item.axes.dependency_blocker >= 7)
+    .sort(
+      (a, b) =>
+        b.axes.dependency_blocker - a.axes.dependency_blocker ||
+        b.priority_score - a.priority_score,
+    )
+    .slice(0, 20);
+  const relationshipItems = opportunities
+    .filter((item) => item.axes.relationship_stakes >= 7 && item.axes.need_strength >= 5)
+    .slice(0, 20);
+  const quickWinItems = opportunities
+    .filter((item) => item.axes.effort_to_value >= 7 && item.axes.need_strength >= 5)
+    .slice(0, 20);
+
+  const sections: ContributionSection[] = [
+    {
+      key: "act_now",
+      label: "Act Now",
+      description: "Time-sensitive threads with high downside if delayed.",
+      items: actNowItems,
+    },
+    {
+      key: "high_leverage",
+      label: "High Leverage",
+      description: "Responses likely to help multiple people or recurring conversations.",
+      items: highLeverageItems,
+    },
+    {
+      key: "aging_risk",
+      label: "Aging Risk",
+      description: "Opportunities where value decays as threads age.",
+      items: agingItems,
+    },
+    {
+      key: "blocked",
+      label: "Blocked / Waiting",
+      description: "Threads signaling dependencies, waiting, or execution blockers.",
+      items: blockedItems,
+    },
+    {
+      key: "relationship",
+      label: "Relationship Stakes",
+      description: "Conversations where responsiveness affects key collaborators.",
+      items: relationshipItems,
+    },
+    {
+      key: "quick_wins",
+      label: "Quick Wins",
+      description: "Good effort-to-value opportunities to keep momentum high.",
+      items: quickWinItems,
+    },
+  ];
+
+  const axis_summary: ContributionAxisSummary[] = (
+    Object.keys(CONTRIBUTION_AXIS_LABELS) as ContributionAxisKey[]
+  ).map((axis) => {
+    const values = opportunities.map((item) => item.axes[axis]);
+    const average =
+      values.length > 0
+        ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2))
+        : 0;
+    const high_count = values.filter((value) => value >= 7).length;
+    return {
+      axis,
+      label: CONTRIBUTION_AXIS_LABELS[axis],
+      average,
+      high_count,
+    };
+  });
+
+  return {
+    generated_at: new Date().toISOString(),
+    lookback_days: resolvedWindow,
+    totals: {
+      messages: totalRow?.count || 0,
+      opportunities: opportunities.length,
+      act_now: actNowItems.length,
+      high_leverage: highLeverageItems.length,
+      aging_risk: agingItems.length,
+      blocked: blockedItems.length,
+    },
+    axis_summary,
+    need_summary,
+    recurring_themes,
+    opportunities,
+    sections,
+  };
 }
 
 export function getLatestReport(): DailyReport | null {
