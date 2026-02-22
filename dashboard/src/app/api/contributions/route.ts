@@ -240,6 +240,15 @@ Return JSON exactly:
   return payload;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]);
+}
+
 function mergeSmartIntel(
   dashboard: ContributionDashboard,
   payload: SmartContributionPayload | null,
@@ -332,16 +341,25 @@ export async function GET(request: NextRequest) {
     const smart = parseBoolean(request.nextUrl.searchParams.get("smart"), true);
     const dashboard = getContributionDashboard({ lookbackDays: days, limit });
     const modelName = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
-    const smartPayload =
-      smart
-        ? await generateSmartIntel(modelName, days, limit, dashboard.opportunities)
-        : null;
+    let smartPayload: SmartContributionPayload | null = null;
+    if (smart) {
+      try {
+        smartPayload = await withTimeout(
+          generateSmartIntel(modelName, days, limit, dashboard.opportunities),
+          12000,
+        );
+      } catch (error) {
+        console.warn("Smart contribution intel unavailable, serving baseline ranking:", error);
+        smartPayload = null;
+      }
+    }
     const merged = smart ? mergeSmartIntel(dashboard, smartPayload) : dashboard;
     return NextResponse.json({
       ...merged,
       contributions: merged.opportunities,
     });
-  } catch {
+  } catch (error) {
+    console.error("GET /api/contributions failed:", error);
     return NextResponse.json({
       generated_at: new Date().toISOString(),
       lookback_days: 45,
