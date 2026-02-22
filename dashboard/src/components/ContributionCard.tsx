@@ -11,8 +11,16 @@ interface Props {
     contribution_hint: string | null;
     need_type?: string;
     priority_score?: number;
+    priority_score_model?: number;
     contribution_themes?: string[];
     reasons?: string[];
+    model_intel?: {
+      business_learning_value: number;
+      relationship_upside: number;
+      promotion_risk: number;
+      recommended_action: string;
+      rationale: string;
+    };
     axes?: {
       urgency: number;
       need_strength: number;
@@ -53,6 +61,11 @@ export function ContributionCard({ message }: Props) {
           {typeof message.priority_score === "number" && (
             <span className="rounded border border-cyan-400/35 bg-cyan-400/10 px-1.5 py-0.5 text-xs text-cyan-200">
               score {Math.round(message.priority_score)}
+            </span>
+          )}
+          {typeof message.priority_score_model === "number" && (
+            <span className="rounded border border-emerald-400/35 bg-emerald-400/10 px-1.5 py-0.5 text-xs text-emerald-200">
+              smart {Math.round(message.priority_score_model)}
             </span>
           )}
         </div>
@@ -101,6 +114,23 @@ export function ContributionCard({ message }: Props) {
           ))}
         </ul>
       )}
+      {message.model_intel ? (
+        <div className="mt-3 rounded border border-sky-900/70 bg-sky-950/20 px-3 py-2 text-xs text-sky-100">
+          <div>
+            model: learning {message.model_intel.business_learning_value.toFixed(1)} · relationship{" "}
+            {message.model_intel.relationship_upside.toFixed(1)} · promo-risk{" "}
+            {message.model_intel.promotion_risk.toFixed(1)}
+          </div>
+          {message.model_intel.recommended_action ? (
+            <div className="mt-1 text-sky-200/95">
+              action: {message.model_intel.recommended_action}
+            </div>
+          ) : null}
+          {message.model_intel.rationale ? (
+            <div className="mt-1 text-sky-100/90">{message.model_intel.rationale}</div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

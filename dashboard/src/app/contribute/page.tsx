@@ -25,7 +25,7 @@ type ContributionAxisKey =
   | "risk_if_ignored"
   | "recurrence_signal"
   | "confidence";
-type SortKey = "priority_score" | ContributionAxisKey;
+type SortKey = "priority_score_model" | "priority_score" | ContributionAxisKey;
 
 interface ContributionAxes {
   urgency: number;
@@ -57,8 +57,21 @@ interface ContributionOpportunity {
   need_type: ContributionNeedType;
   hours_old: number;
   priority_score: number;
+  priority_score_model?: number;
   axes: ContributionAxes;
   reasons: string[];
+  model_intel?: {
+    id: string;
+    business_learning_value: number;
+    relationship_upside: number;
+    promotion_risk: number;
+    novelty_signal: number;
+    execution_clarity: number;
+    community_fit: number;
+    smart_priority_delta: number;
+    recommended_action: string;
+    rationale: string;
+  };
 }
 
 interface ContributionSection {
@@ -111,6 +124,12 @@ interface ContributionDashboard {
   recurring_themes: RecurringContributionTheme[];
   opportunities: ContributionOpportunity[];
   sections: ContributionSection[];
+  smart_model?: {
+    enabled: boolean;
+    summary: string;
+    coverage: number;
+    model: string;
+  };
 }
 
 const AXIS_LABELS: Record<ContributionAxisKey, string> = {
@@ -131,6 +150,7 @@ const AXIS_LABELS: Record<ContributionAxisKey, string> = {
 const AXIS_KEYS = Object.keys(AXIS_LABELS) as ContributionAxisKey[];
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "priority_score_model", label: "Smart Priority" },
   { key: "priority_score", label: "Overall Priority" },
   { key: "urgency", label: "Urgency" },
   { key: "need_strength", label: "Need Strength" },
@@ -161,6 +181,9 @@ function needLabel(needType: ContributionNeedType): string {
 }
 
 function scoreForSort(item: ContributionOpportunity, sortKey: SortKey): number {
+  if (sortKey === "priority_score_model") {
+    return item.priority_score_model ?? item.priority_score;
+  }
   if (sortKey === "priority_score") return item.priority_score;
   return item.axes[sortKey];
 }
@@ -219,7 +242,8 @@ function OpportunityMatrix({
       opportunities.slice(0, 120).map((item) => {
         const x = padLeft + (item.axes.aging_risk / 10) * innerWidth;
         const y = padTop + innerHeight - (item.axes.urgency / 10) * innerHeight;
-        const radius = Math.max(3, Math.min(10, item.priority_score / 14));
+        const priority = item.priority_score_model ?? item.priority_score;
+        const radius = Math.max(3, Math.min(10, priority / 14));
         return { item, x, y, radius };
       }),
     [opportunities, innerWidth, innerHeight],
@@ -298,7 +322,7 @@ export default function ContributePage() {
   const [dashboard, setDashboard] = useState<ContributionDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(45);
-  const [sortKey, setSortKey] = useState<SortKey>("priority_score");
+  const [sortKey, setSortKey] = useState<SortKey>("priority_score_model");
   const [needFilter, setNeedFilter] = useState<ContributionNeedFilter>("all");
   const [minPriority, setMinPriority] = useState(35);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -327,7 +351,8 @@ export default function ContributePage() {
     if (!dashboard) return [];
     return dashboard.opportunities.filter((item) => {
       if (needFilter !== "all" && item.need_type !== needFilter) return false;
-      return item.priority_score >= minPriority;
+      const score = item.priority_score_model ?? item.priority_score;
+      return score >= minPriority;
     });
   }, [dashboard, needFilter, minPriority]);
 
@@ -431,6 +456,22 @@ export default function ContributePage() {
               <div className="vibe-title mt-1 text-2xl">{sectionCount("blocked")}</div>
             </div>
           </section>
+
+          {dashboard.smart_model?.enabled ? (
+            <section className="vibe-panel rounded-xl p-5">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+                <span className="rounded border border-cyan-400/35 bg-cyan-400/10 px-2 py-1 text-cyan-200">
+                  Smart model: {dashboard.smart_model.model}
+                </span>
+                <span className="rounded border border-slate-600/60 bg-slate-900/50 px-2 py-1">
+                  Coverage: {dashboard.smart_model.coverage}%
+                </span>
+              </div>
+              {dashboard.smart_model.summary && (
+                <p className="mt-3 text-sm text-slate-300">{dashboard.smart_model.summary}</p>
+              )}
+            </section>
+          ) : null}
 
           <section className="vibe-panel rounded-xl p-5">
             <div className="grid gap-4 lg:grid-cols-3">
