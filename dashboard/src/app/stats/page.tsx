@@ -267,7 +267,13 @@ function InteractiveTimelineChart({
   );
 }
 
-function TopicTrendExplorer({ topics }: { topics: TopicStat[] }) {
+function TopicTrendExplorer({
+  topics,
+  onTopicDrilldown,
+}: {
+  topics: TopicStat[];
+  onTopicDrilldown?: (topic: string) => void;
+}) {
   const topTopics = topics.slice(0, 10);
   const [selectedTopics, setSelectedTopics] = useState<string[] | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -331,11 +337,13 @@ function TopicTrendExplorer({ topics }: { topics: TopicStat[] }) {
                     : [...base, topic.topic];
                 })
               }
+              onDoubleClick={() => onTopicDrilldown?.(topic.topic)}
               className={`rounded-md border px-2.5 py-1 text-xs ${
                 selected
                   ? "border-slate-200/40 text-slate-100"
                   : "border-slate-700 text-slate-400"
               }`}
+              title="Click to compare, double-click to open drilldown"
               style={selected ? { backgroundColor: `${color}30` } : undefined}
             >
               {topic.topic}
@@ -424,11 +432,30 @@ function TopicTrendExplorer({ topics }: { topics: TopicStat[] }) {
       ) : (
         <div className="text-xs text-slate-500">Toggle topics, then hover to compare daily trend lines.</div>
       )}
+      {onTopicDrilldown ? (
+        <div className="flex flex-wrap gap-2">
+          {topTopics.slice(0, 8).map((topic) => (
+            <button
+              key={`${topic.topic}-drill`}
+              onClick={() => onTopicDrilldown(topic.topic)}
+              className="rounded border border-slate-700/70 bg-slate-900/40 px-2 py-1 text-xs text-slate-200 hover:border-cyan-300/60"
+            >
+              Drill down: {topic.topic}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function TopicRecurrenceMap({ topics }: { topics: TopicStat[] }) {
+function TopicRecurrenceMap({
+  topics,
+  onTopicDrilldown,
+}: {
+  topics: TopicStat[];
+  onTopicDrilldown?: (topic: string) => void;
+}) {
   const [hoveredTopic, setHoveredTopic] = useState<TopicStat | null>(null);
   const points = topics.slice(0, 30);
   const width = 900;
@@ -473,6 +500,8 @@ function TopicRecurrenceMap({ topics }: { topics: TopicStat[] }) {
               stroke={hoveredTopic?.topic === topic.topic ? "#e2e8f0" : "none"}
               onMouseEnter={() => setHoveredTopic(topic)}
               onMouseLeave={() => setHoveredTopic(null)}
+              onClick={() => onTopicDrilldown?.(topic.topic)}
+              style={onTopicDrilldown ? { cursor: "pointer" } : undefined}
             />
           );
         })}
@@ -487,18 +516,28 @@ function TopicRecurrenceMap({ topics }: { topics: TopicStat[] }) {
         </text>
       </svg>
       {hoveredTopic ? (
-        <div className="mt-2 text-xs text-slate-300">
-          <span className="font-semibold text-slate-100">{hoveredTopic.topic}</span>
-          {" · "}
-          {hoveredTopic.message_count} msgs
-          {" · "}
-          recurrence {Math.round(hoveredTopic.recurrence_ratio * 100)}%
-          {" · "}
-          {hoveredTopic.trend}
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+          <span>
+            <span className="font-semibold text-slate-100">{hoveredTopic.topic}</span>
+            {" · "}
+            {hoveredTopic.message_count} msgs
+            {" · "}
+            recurrence {Math.round(hoveredTopic.recurrence_ratio * 100)}%
+            {" · "}
+            {hoveredTopic.trend}
+          </span>
+          {onTopicDrilldown ? (
+            <button
+              onClick={() => onTopicDrilldown(hoveredTopic.topic)}
+              className="rounded border border-slate-700/70 bg-slate-900/40 px-2 py-0.5 text-xs text-slate-200 hover:border-cyan-300/60"
+            >
+              Open drilldown
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="mt-2 text-xs text-slate-500">
-          Hover bubbles to inspect topic recurrence and volume.
+          Hover bubbles to inspect recurrence and click a bubble to open drilldown.
         </div>
       )}
     </div>
@@ -728,11 +767,11 @@ export default function StatsPage() {
       <section className="grid gap-4 xl:grid-cols-2">
         <div className="vibe-panel rounded-xl p-5">
           <h2 className="vibe-title mb-3 text-lg">Interactive Topic Trend Explorer</h2>
-          <TopicTrendExplorer topics={stats.topics} />
+          <TopicTrendExplorer topics={stats.topics} onTopicDrilldown={openTopicDrilldown} />
         </div>
         <div className="vibe-panel rounded-xl p-5">
           <h2 className="vibe-title mb-3 text-lg">Topic Recurrence Map</h2>
-          <TopicRecurrenceMap topics={stats.topics} />
+          <TopicRecurrenceMap topics={stats.topics} onTopicDrilldown={openTopicDrilldown} />
         </div>
       </section>
 

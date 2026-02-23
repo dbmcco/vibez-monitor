@@ -26,6 +26,7 @@ type ContributionAxisKey =
   | "recurrence_signal"
   | "confidence";
 type SortKey = "priority_score_model" | "priority_score" | ContributionAxisKey;
+type FocusPreset = "focus" | "balanced" | "explore";
 
 interface ContributionAxes {
   urgency: number;
@@ -173,6 +174,27 @@ const NEED_COLORS: Record<ContributionNeedType, string> = {
   creation: "#a78bfa",
   support: "#f87171",
   none: "#94a3b8",
+};
+
+const FOCUS_PRESET_META: Record<
+  FocusPreset,
+  {
+    label: string;
+    description: string;
+  }
+> = {
+  focus: {
+    label: "Focus",
+    description: "Tight list for daily execution: high-signal, recent, and need-backed.",
+  },
+  balanced: {
+    label: "Balanced",
+    description: "Moderate list with broader context while keeping prioritization.",
+  },
+  explore: {
+    label: "Explore",
+    description: "Full exploration mode with minimal narrowing.",
+  },
 };
 
 function needLabel(needType: ContributionNeedType): string {
@@ -324,11 +346,15 @@ export default function ContributePage() {
   const [days, setDays] = useState(45);
   const [sortKey, setSortKey] = useState<SortKey>("priority_score_model");
   const [needFilter, setNeedFilter] = useState<ContributionNeedFilter>("all");
-  const [minPriority, setMinPriority] = useState(35);
+  const [minPriority, setMinPriority] = useState(62);
+  const [focusPreset, setFocusPreset] = useState<FocusPreset>("focus");
+  const [maxItems, setMaxItems] = useState(12);
+  const [requireNeedSignal, setRequireNeedSignal] = useState(true);
+  const [maxHoursOld, setMaxHoursOld] = useState(96);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     act_now: true,
     high_leverage: true,
-    aging_risk: true,
+    aging_risk: false,
     blocked: false,
     relationship: false,
     quick_wins: false,
@@ -347,18 +373,67 @@ export default function ContributePage() {
       });
   }, [days]);
 
+  function applyFocusPreset(preset: FocusPreset) {
+    setFocusPreset(preset);
+    if (preset === "focus") {
+      setMinPriority(62);
+      setSortKey("priority_score_model");
+      setNeedFilter("all");
+      setMaxItems(12);
+      setRequireNeedSignal(true);
+      setMaxHoursOld(96);
+      return;
+    }
+    if (preset === "balanced") {
+      setMinPriority(52);
+      setSortKey("priority_score_model");
+      setNeedFilter("all");
+      setMaxItems(20);
+      setRequireNeedSignal(false);
+      setMaxHoursOld(168);
+      return;
+    }
+    setMinPriority(35);
+    setMaxItems(120);
+    setRequireNeedSignal(false);
+    setMaxHoursOld(720);
+  }
+
   const filteredOpportunities = useMemo(() => {
     if (!dashboard) return [];
     return dashboard.opportunities.filter((item) => {
       if (needFilter !== "all" && item.need_type !== needFilter) return false;
       const score = item.priority_score_model ?? item.priority_score;
-      return score >= minPriority;
+      if (score < minPriority) return false;
+      if (focusPreset !== "explore") {
+        const hasNeedSignal =
+          item.need_type !== "none" ||
+          item.axes.need_strength >= 7 ||
+          item.reasons.some((reason) => {
+            const lowered = reason.toLowerCase();
+            return lowered.includes("strong need") || lowered.includes("time-sensitive");
+          });
+        if (requireNeedSignal && !hasNeedSignal) return false;
+        if (item.hours_old > maxHoursOld && item.axes.aging_risk < 7) return false;
+      }
+      return true;
     });
-  }, [dashboard, needFilter, minPriority]);
+  }, [
+    dashboard,
+    needFilter,
+    minPriority,
+    focusPreset,
+    requireNeedSignal,
+    maxHoursOld,
+  ]);
 
   const sortedOpportunities = useMemo(
-    () => rankSectionItems(filteredOpportunities, sortKey),
-    [filteredOpportunities, sortKey],
+    () => {
+      const ranked = rankSectionItems(filteredOpportunities, sortKey);
+      if (focusPreset === "explore") return ranked;
+      return ranked.slice(0, Math.max(4, maxItems));
+    },
+    [filteredOpportunities, sortKey, focusPreset, maxItems],
   );
 
   const filteredIds = useMemo(
@@ -368,14 +443,19 @@ export default function ContributePage() {
 
   const sections = useMemo(() => {
     if (!dashboard) return [];
-    return dashboard.sections.map((section) => ({
+    let mapped = dashboard.sections.map((section) => ({
       ...section,
       items: rankSectionItems(
         section.items.filter((item) => filteredIds.has(item.id)),
         sortKey,
       ),
     }));
-  }, [dashboard, filteredIds, sortKey]);
+    if (focusPreset === "focus") {
+      const keep = new Set(["act_now", "high_leverage", "relationship", "quick_wins"]);
+      mapped = mapped.filter((section) => keep.has(section.key));
+    }
+    return mapped;
+  }, [dashboard, filteredIds, sortKey, focusPreset]);
 
   const axisSummary = useMemo(
     () => summarizeAxes(sortedOpportunities),
@@ -388,6 +468,8 @@ export default function ContributePage() {
 
   const sectionCount = (key: ContributionSection["key"]): number =>
     sections.find((section) => section.key === key)?.items.length || 0;
+  const hiddenByCap = Math.max(0, filteredOpportunities.length - sortedOpportunities.length);
+  const sectionItemLimit = focusPreset === "focus" ? 6 : 12;
 
   return (
     <div className="space-y-6">
@@ -415,6 +497,65 @@ export default function ContributePage() {
         ))}
       </div>
 
+      <section className="vibe-panel rounded-xl p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          {(Object.keys(FOCUS_PRESET_META) as FocusPreset[]).map((preset) => (
+            <button
+              key={preset}
+              onClick={() => applyFocusPreset(preset)}
+              className={`rounded px-3 py-1 text-sm ${
+                focusPreset === preset ? "vibe-button" : "vibe-chip"
+              }`}
+            >
+              {FOCUS_PRESET_META[preset].label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm text-slate-300">{FOCUS_PRESET_META[focusPreset].description}</p>
+        <div className="mt-4 grid gap-4 lg:grid-cols-3">
+          <label className="space-y-1 text-sm">
+            <span className="text-slate-300">Max opportunities</span>
+            <select
+              className="vibe-input w-full rounded-md px-3 py-2 text-sm"
+              value={maxItems}
+              onChange={(event) => setMaxItems(Number(event.target.value))}
+              disabled={focusPreset === "explore"}
+            >
+              {[8, 12, 20, 40, 80, 120].map((count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-slate-300">Recency guard (hours)</span>
+            <select
+              className="vibe-input w-full rounded-md px-3 py-2 text-sm"
+              value={maxHoursOld}
+              onChange={(event) => setMaxHoursOld(Number(event.target.value))}
+              disabled={focusPreset === "explore"}
+            >
+              {[48, 72, 96, 168, 336, 720].map((hours) => (
+                <option key={hours} value={hours}>
+                  {hours}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 rounded-md border border-slate-700/70 bg-slate-900/45 px-3 py-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={requireNeedSignal}
+              onChange={(event) => setRequireNeedSignal(event.target.checked)}
+              disabled={focusPreset === "explore"}
+              className="accent-cyan-300"
+            />
+            Require explicit need signal
+          </label>
+        </div>
+      </section>
+
       {loading ? (
         <StatusPanel
           loading
@@ -437,7 +578,10 @@ export default function ContributePage() {
             <div className="vibe-panel rounded-xl p-4">
               <div className="text-xs uppercase tracking-wide text-slate-400">Filtered</div>
               <div className="vibe-title mt-1 text-2xl">{sortedOpportunities.length}</div>
-              <div className="mt-1 text-xs text-slate-500">of {dashboard.totals.opportunities} opportunities</div>
+              <div className="mt-1 text-xs text-slate-500">
+                of {dashboard.totals.opportunities} opportunities
+                {hiddenByCap > 0 ? ` · ${hiddenByCap} hidden by cap` : ""}
+              </div>
             </div>
             <div className="vibe-panel rounded-xl p-4">
               <div className="text-xs uppercase tracking-wide text-slate-400">Act Now</div>
@@ -621,7 +765,7 @@ export default function ContributePage() {
                         <p className="text-sm text-slate-500">No opportunities in this section for current filters.</p>
                       ) : (
                         <div className="grid gap-3 md:grid-cols-2">
-                          {section.items.slice(0, 12).map((message) => (
+                          {section.items.slice(0, sectionItemLimit).map((message) => (
                             <ContributionCard key={message.id} message={message} />
                           ))}
                         </div>

@@ -11,6 +11,15 @@ interface Report {
   trends: string | null;
 }
 
+interface EvidenceMessage {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+}
+
 function localIsoDate(): string {
   const now = new Date();
   const year = now.getFullYear();
@@ -21,12 +30,39 @@ function localIsoDate(): string {
 
 export default function HomePage() {
   const [report, setReport] = useState<Report | null>(null);
+  const [evidenceMessages, setEvidenceMessages] = useState<EvidenceMessage[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/briefing")
-      .then((r) => r.json())
-      .then((data) => { setReport(data.report); setLoading(false); });
+    let active = true;
+    Promise.allSettled([
+      fetch("/api/briefing").then((r) => r.json()),
+      fetch("/api/messages?limit=240&minRelevance=6").then((r) => r.json()),
+    ])
+      .then(([briefingResult, messageResult]) => {
+        if (!active) return;
+        if (briefingResult.status === "fulfilled") {
+          setReport((briefingResult.value as { report: Report | null }).report || null);
+        } else {
+          setReport(null);
+        }
+        if (messageResult.status === "fulfilled") {
+          const payload = messageResult.value as { messages?: EvidenceMessage[] };
+          setEvidenceMessages(Array.isArray(payload.messages) ? payload.messages : []);
+        } else {
+          setEvidenceMessages([]);
+        }
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setReport(null);
+        setEvidenceMessages([]);
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (loading) {
@@ -62,6 +98,7 @@ export default function HomePage() {
         contributions_json={report.contributions}
         trends={report.trends}
         report_date={report.report_date}
+        evidence_messages={evidenceMessages}
       />
     </div>
   );

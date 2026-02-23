@@ -269,6 +269,9 @@ export function getMessages(opts: {
   contributionOnly?: boolean;
 }): Message[] {
   const db = getDb();
+  const scope = loadRoomScope(db);
+  const roomScope = buildRoomScopeWhere("m", scope);
+  const userAliases = loadUserAliases();
   let query = `
     SELECT m.*, c.relevance_score, c.topics, c.entities,
            c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
@@ -278,6 +281,10 @@ export function getMessages(opts: {
   `;
   const params: unknown[] = [];
 
+  if (roomScope.clause) {
+    query += ` AND ${roomScope.clause}`;
+    params.push(...roomScope.params);
+  }
   if (opts.room) {
     query += " AND m.room_name = ?";
     params.push(opts.room);
@@ -295,7 +302,10 @@ export function getMessages(opts: {
 
   const rows = db.prepare(query).all(...params) as Message[];
   db.close();
-  return rows;
+  return rows.map((row) => ({
+    ...row,
+    sender_name: normalizeSenderName(row.sender_name, userAliases),
+  }));
 }
 
 const CONTRIBUTION_AXIS_LABELS: Record<ContributionAxisKey, string> = {
@@ -926,6 +936,9 @@ export function searchMessages(opts: {
   limit?: number;
 }): Message[] {
   const db = getDb();
+  const scope = loadRoomScope(db);
+  const roomScope = buildRoomScopeWhere("m", scope);
+  const userAliases = loadUserAliases();
   const cutoffTs = Date.now() - (opts.lookbackDays || 7) * 24 * 60 * 60 * 1000;
   const keywords = opts.query
     .toLowerCase()
@@ -935,34 +948,49 @@ export function searchMessages(opts: {
 
   let rows: Message[];
   if (keywords.length === 0) {
+    const whereParts = ["m.timestamp >= ?"];
+    const params: unknown[] = [cutoffTs];
+    if (roomScope.clause) {
+      whereParts.push(roomScope.clause);
+      params.push(...roomScope.params);
+    }
     rows = db
       .prepare(
         `SELECT m.*, c.relevance_score, c.topics, c.entities,
                 c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
          FROM messages m
          LEFT JOIN classifications c ON m.id = c.message_id
-         WHERE m.timestamp >= ?
+         WHERE ${whereParts.join(" AND ")}
          ORDER BY c.relevance_score DESC
          LIMIT ?`
       )
-      .all(cutoffTs, limit) as Message[];
+      .all(...params, limit) as Message[];
   } else {
-    const whereParts = keywords.slice(0, 5).map(() => "LOWER(m.body) LIKE ?");
-    const params = keywords.slice(0, 5).map((kw) => `%${kw}%`);
+    const whereParts = ["m.timestamp >= ?"];
+    const params: unknown[] = [cutoffTs];
+    if (roomScope.clause) {
+      whereParts.push(roomScope.clause);
+      params.push(...roomScope.params);
+    }
+    const keywordParts = keywords.slice(0, 5).map(() => "LOWER(m.body) LIKE ?");
+    const keywordParams = keywords.slice(0, 5).map((kw) => `%${kw}%`);
     rows = db
       .prepare(
         `SELECT m.*, c.relevance_score, c.topics, c.entities,
                 c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
          FROM messages m
          LEFT JOIN classifications c ON m.id = c.message_id
-         WHERE m.timestamp >= ? AND (${whereParts.join(" OR ")})
+         WHERE ${whereParts.join(" AND ")} AND (${keywordParts.join(" OR ")})
          ORDER BY m.timestamp DESC
          LIMIT ?`
       )
-      .all(cutoffTs, ...params, limit) as Message[];
+      .all(...params, ...keywordParams, limit) as Message[];
   }
   db.close();
-  return rows;
+  return rows.map((row) => ({
+    ...row,
+    sender_name: normalizeSenderName(row.sender_name, userAliases),
+  }));
 }
 
 export function getLatestBriefingMd(): string | null {
