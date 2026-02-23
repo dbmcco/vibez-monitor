@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from vibez.db import get_connection, init_db
+from vibez.paia_events_adapter import publish_event
 
 logger = logging.getLogger("vibez.sync")
 
@@ -254,6 +255,12 @@ def poll_once(
             if saved > 0:
                 logger.info("%s: %d new messages", title, saved)
                 all_new.extend(parsed[:saved])
+                publish_event(
+                    "vibez.messages.synced",
+                    f"sync-{chat_id}-{int(time.time())}",
+                    f"vibez:sync:{chat_id}:{int(time.time())}",
+                    {"count": saved, "room": title},
+                )
 
         if new_cursor and new_cursor != cursor:
             save_cursor(db_path, chat_id, new_cursor)

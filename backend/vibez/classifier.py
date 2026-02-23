@@ -12,6 +12,7 @@ import anthropic
 
 from vibez.config import Config
 from vibez.db import get_connection
+from vibez.paia_events_adapter import publish_event
 
 logger = logging.getLogger("vibez.classifier")
 
@@ -201,9 +202,29 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
             classification = parse_classification(raw_text)
 
             save_classification(config.db_path, msg["id"], classification)
+            publish_event(
+                "vibez.message.classified",
+                f"class-{msg['id']}",
+                f"vibez:classified:{msg['id']}",
+                {
+                    "message_id": msg["id"],
+                    "relevance": classification["relevance_score"],
+                    "alert_level": classification["alert_level"],
+                },
+            )
 
             if classification["alert_level"] == "hot":
                 write_hot_alert(config.db_path, msg, classification)
+                publish_event(
+                    "vibez.alert.hot",
+                    f"alert-{msg['id']}",
+                    f"vibez:alert:{msg['id']}",
+                    {
+                        "message_id": msg["id"],
+                        "room": msg.get("room_name", ""),
+                        "sender": msg.get("sender_name", ""),
+                    },
+                )
                 logger.info(
                     "HOT ALERT: %s in %s (score=%d): %s",
                     msg.get("sender_name"),

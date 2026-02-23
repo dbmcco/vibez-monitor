@@ -13,6 +13,7 @@ import anthropic
 from vibez.config import Config
 from vibez.db import get_connection, init_db
 from vibez.dossier import load_dossier, format_dossier_for_synthesis, get_voice_profile
+from vibez.paia_events_adapter import publish_event
 
 logger = logging.getLogger("vibez.synthesis")
 
@@ -459,6 +460,12 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
 
     briefing_md = render_briefing_markdown(report, report_date)
     save_daily_report(config.db_path, report_date, report, briefing_md)
+    publish_event(
+        "vibez.briefing.generated",
+        f"briefing-{report_date}",
+        f"vibez:briefing:{report_date}",
+        {"date": report_date},
+    )
 
     logger.info("Daily synthesis complete: %d threads, %d contributions",
                 len(report.get("briefing", [])), len(report.get("contributions", [])))
