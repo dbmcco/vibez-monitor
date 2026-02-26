@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "crypto";
 import { getContributionDashboard } from "@/lib/db";
+import { getSubjectName, getSubjectPossessive } from "@/lib/profile";
 
 function parsePositiveInt(value: string | null, fallback: number): number {
   if (!value) return fallback;
@@ -42,7 +43,8 @@ type EnhancedOpportunity = BaseOpportunity & {
   model_intel?: SmartContributionEval;
 };
 
-const SMART_SYSTEM_PROMPT = `You are Braydon's strategic contribution intelligence model for a highly technical AI/OSS/business-learning community.
+function buildSmartSystemPrompt(subjectName: string, subjectPossessive: string): string {
+  return `You are ${subjectPossessive} strategic contribution intelligence model for a highly technical AI/OSS/business-learning community.
 
 Primary objective:
 - Rank opportunities by true contribution value and learning leverage, not by simplistic policy checks.
@@ -64,6 +66,7 @@ For each opportunity, infer:
 - rationale: one concise sentence with the key reason.
 
 Return strict JSON only.`;
+}
 
 const SMART_CACHE_TTL_MS = 5 * 60 * 1000;
 const SMART_CACHE = new Map<string, { expiresAt: number; payload: SmartContributionPayload }>();
@@ -158,6 +161,8 @@ async function generateSmartIntel(
   if (opportunities.length === 0) return null;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
+  const subjectName = getSubjectName();
+  const subjectPossessive = getSubjectPossessive(subjectName);
 
   const key = smartCacheKey(
     model,
@@ -229,7 +234,7 @@ Return JSON exactly:
   const response = await client.messages.create({
     model,
     max_tokens: 3200,
-    system: SMART_SYSTEM_PROMPT,
+    system: buildSmartSystemPrompt(subjectName, subjectPossessive),
     messages: [{ role: "user", content: prompt }],
   });
   const text = response.content[0]?.type === "text" ? response.content[0].text : "";

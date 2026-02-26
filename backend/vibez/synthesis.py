@@ -12,19 +12,24 @@ import anthropic
 
 from vibez.config import Config
 from vibez.db import get_connection, init_db
-from vibez.dossier import load_dossier, format_dossier_for_synthesis, get_voice_profile
+from vibez.dossier import load_dossier, format_dossier_for_synthesis
 from vibez.paia_events_adapter import publish_event
+from vibez.profile import (
+    DEFAULT_SUBJECT_NAME,
+    get_subject_name,
+    get_subject_possessive,
+)
 
 logger = logging.getLogger("vibez.synthesis")
 
-SYNTHESIS_SYSTEM = """You are Braydon's daily intelligence analyst for the Vibez WhatsApp ecosystem.
-You produce structured daily briefings that help him stay engaged with minimal reading.
+SYNTHESIS_SYSTEM_TEMPLATE = """You are {subject_possessive} daily intelligence analyst for the Vibez WhatsApp ecosystem.
+You produce structured daily briefings that help {subject_name} stay engaged with minimal reading.
 Always respond with valid JSON only. No prose outside the JSON structure."""
 
 SYNTHESIS_TEMPLATE = """Generate today's briefing from {msg_count} messages across {group_count} groups.
 
-Braydon's interest topics: {topics}
-Braydon's active projects: {projects}
+{subject_name}'s interest topics: {topics}
+{subject_name}'s active projects: {projects}
 
 {dossier_context}
 
@@ -36,10 +41,21 @@ Messages (chronological, with classifications):
 CONTRIBUTION THEMES from classifier (cluster these):
 {contribution_themes_block}
 
-{braydon_messages_block}
+{subject_messages_block}
 
 Respond with JSON:
 {{
+  "daily_memo": "<3-5 sentence overarching analysis of how conversations are evolving across groups and why it matters now>",
+  "conversation_arcs": [
+    {{
+      "title": "<conversation arc title>",
+      "participants": ["<key people in the exchange>"],
+      "core_exchange": "<what people are actually debating/building in this exchange>",
+      "why_it_matters": "<why this arc matters for the broader community direction>",
+      "likely_next": "<what is likely to happen next in this arc>",
+      "how_to_add_value": "<specific way {subject_name} could add value if they enter>"
+    }}
+  ],
   "briefing": [
     {{
       "title": "<thread/topic title>",
@@ -56,9 +72,9 @@ Respond with JSON:
       "channel": "<exact WhatsApp group name where this reply should go>",
       "reply_to": "<who to reply to and what they said — e.g. 'Dan's message about Maestro enforcing tool discipline via role separation'. Include enough detail to find the message.>",
       "threads": ["<related thread titles from briefing>"],
-      "why": "<why Braydon's SPECIFIC knowledge/projects are relevant — reference his expertise and active work>",
+      "why": "<why {subject_possessive} SPECIFIC knowledge/projects are relevant — reference their expertise and active work>",
       "action": "<specific suggested action>",
-      "draft_message": "<a ready-to-send WhatsApp message written in Braydon's voice. Warm, question-driven, uses concrete examples from his projects. 2-4 sentences. Should sound natural, not robotic.>",
+      "draft_message": "<a ready-to-send WhatsApp message written in {subject_name}'s voice. Warm, question-driven, uses concrete examples from their projects. 2-4 sentences. Should sound natural, not robotic.>",
       "message_count": <how many messages touched this theme>
     }}
   ],
@@ -72,7 +88,7 @@ Respond with JSON:
       "url": "<link>",
       "title": "<what it is>",
       "category": "<tool|repo|article|discussion>",
-      "relevance": "<why it matters to Braydon>"
+      "relevance": "<why it matters to {subject_name}>"
     }}
   ]
 }}
@@ -80,27 +96,37 @@ Respond with JSON:
 CONTRIBUTION RULES:
 - Cluster contribution opportunities by THEME, not individual messages.
 - A theme with many recent messages is higher priority than one with a single old message.
-- "reply" type: fresh threads (<3 days) where Braydon can jump in with a direct response.
+- "reply" type: fresh threads (<3 days) where {subject_name} can jump in with a direct response.
 - "create" type: recurring themes that warrant a dedicated share (tool, deck, post) even if individual messages are older.
 - Rank contributions by: theme_relevance * freshness_weight * message_density.
 - Focus on the top 3-5 most important threads and top 3-5 contribution themes.
 
+CONVERSATION ARC RULES:
+- Conversation arcs should represent actual back-and-forth exchanges, not one-off statements.
+- Include only 2-4 arcs with the most strategic signal for {subject_name}.
+- Prioritize arcs that reveal how people are thinking, not just what links were shared.
+
 REPLY CONTEXT RULES:
 - "channel" MUST be the exact WhatsApp group name from the messages (e.g. "AGI House", "GoodSense Grocers").
-- "reply_to" should identify the specific message to reply to: person's name + what they said + approximate time. Include enough context so Braydon can scroll to it and long-press to reply.
+- "reply_to" should identify the specific message to reply to: person's name + what they said + approximate time. Include enough context so {subject_name} can scroll to it and long-press to reply.
 - For "create" type contributions, channel is where to post and reply_to can be empty.
 
 DRAFT MESSAGE RULES:
-- Write as Braydon would actually type in WhatsApp — casual, warm, question-driven.
-- Reference his real projects and experience where relevant.
+- Write as {subject_name} would actually type in WhatsApp — casual, warm, question-driven.
+- Reference their real projects and experience where relevant.
 - Lead with a question or observation, not "I think you should..."
-- Use his connective tissue: "so", "right", "kind of", "I think", "you know"
+- Use conversational connective tissue when natural: "so", "right", "kind of", "I think", "you know"
 - Keep it 2-4 sentences. Natural, not performative.
-- Consider what Braydon has already said in the group (see his recent messages below) to avoid repeating himself.
+- Consider what {subject_name} has already said in the group (see recent messages below) to avoid repeating.
 
 PITHY STYLE RULES (important):
 - Keep wording tight and high-signal.
 - "insights": max 1-2 short sentences, ~160 chars max.
+- "daily_memo": 3-5 short sentences, ~520 chars max.
+- "core_exchange": 1-2 short sentences, ~180 chars max.
+- "why_it_matters": one short sentence, ~160 chars max.
+- "likely_next": one short sentence, ~140 chars max.
+- "how_to_add_value": one short sentence, ~140 chars max.
 - "why": one short sentence, ~140 chars max.
 - "action": one short sentence, ~110 chars max.
 - "shifts": one short sentence, ~120 chars max.
@@ -138,14 +164,24 @@ def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str
     ]
 
 
-def get_braydon_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
-    """Get Braydon's own messages in the time range for context."""
+def get_subject_messages(
+    db_path: Path,
+    start_ts: int,
+    end_ts: int,
+    self_aliases: tuple[str, ...] | list[str],
+) -> list[dict[str, Any]]:
+    """Get subject-authored messages in the time range for context."""
+    aliases = [alias.strip().lower() for alias in self_aliases if alias.strip()]
+    if not aliases:
+        return []
     conn = get_connection(db_path)
+    placeholders = ", ".join("?" for _ in aliases)
     cursor = conn.execute(
-        """SELECT room_name, body, timestamp FROM messages
-           WHERE sender_name = 'Braydon' AND timestamp >= ? AND timestamp < ?
+        f"""SELECT room_name, body, timestamp FROM messages
+           WHERE lower(sender_name) IN ({placeholders})
+             AND timestamp >= ? AND timestamp < ?
            ORDER BY timestamp DESC LIMIT 20""",
-        (start_ts, end_ts),
+        (*aliases, start_ts, end_ts),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -157,9 +193,12 @@ def build_synthesis_prompt(
     value_config: dict[str, Any],
     previous_briefing: str | None = None,
     dossier_context: str = "",
-    braydon_messages: list[dict[str, Any]] | None = None,
+    subject_name: str = DEFAULT_SUBJECT_NAME,
+    subject_messages: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the synthesis prompt from classified messages."""
+    resolved_subject = get_subject_name(subject_name)
+    subject_possessive = get_subject_possessive(resolved_subject)
     groups = set(m["room_name"] for m in messages)
 
     messages_block = ""
@@ -188,21 +227,25 @@ def build_synthesis_prompt(
     if previous_briefing:
         previous_context = f"Yesterday's key threads (for continuity):\n{previous_briefing[:1000]}\n"
 
-    # Format Braydon's own messages
-    braydon_messages_block = ""
-    if braydon_messages:
-        braydon_messages_block = "BRAYDON'S RECENT MESSAGES (avoid repeating these):\n"
-        for bm in braydon_messages[:10]:
-            braydon_messages_block += f"  [{bm['room_name']}]: {bm['body'][:200]}\n"
+    # Format subject-authored messages
+    subject_messages_block = ""
+    if subject_messages:
+        subject_messages_block = (
+            f"RECENT MESSAGES BY {resolved_subject.upper()} (avoid repeating these):\n"
+        )
+        for sm in subject_messages[:10]:
+            subject_messages_block += f"  [{sm['room_name']}]: {sm['body'][:200]}\n"
 
     return SYNTHESIS_TEMPLATE.format(
+        subject_name=resolved_subject,
+        subject_possessive=subject_possessive,
         msg_count=len(messages), group_count=len(groups),
         topics=", ".join(value_config.get("topics", [])),
         projects=", ".join(value_config.get("projects", [])),
         dossier_context=dossier_context,
         previous_context=previous_context, messages_block=messages_block,
         contribution_themes_block=contribution_themes_block,
-        braydon_messages_block=braydon_messages_block,
+        subject_messages_block=subject_messages_block,
     )
 
 
@@ -222,11 +265,30 @@ def _compact_text(value: Any, max_chars: int) -> str:
 def make_pithy_report(report: dict[str, Any]) -> dict[str, Any]:
     """Normalize synthesis output to concise, scannable fields."""
     pithy: dict[str, Any] = {
+        "daily_memo": "",
+        "conversation_arcs": [],
         "briefing": [],
         "contributions": [],
         "trends": {"emerging": [], "fading": [], "shifts": ""},
         "links": [],
     }
+
+    pithy["daily_memo"] = _compact_text(report.get("daily_memo", ""), 520)
+
+    for arc in report.get("conversation_arcs", [])[:4]:
+        if not isinstance(arc, dict):
+            continue
+        pithy["conversation_arcs"].append({
+            "title": _compact_text(arc.get("title", "Untitled conversation"), 72),
+            "participants": [
+                _compact_text(participant, 30)
+                for participant in (arc.get("participants") or [])[:6]
+            ],
+            "core_exchange": _compact_text(arc.get("core_exchange", ""), 180),
+            "why_it_matters": _compact_text(arc.get("why_it_matters", ""), 160),
+            "likely_next": _compact_text(arc.get("likely_next", ""), 140),
+            "how_to_add_value": _compact_text(arc.get("how_to_add_value", ""), 140),
+        })
 
     for thread in report.get("briefing", [])[:5]:
         if not isinstance(thread, dict):
@@ -290,6 +352,8 @@ def make_pithy_report(report: dict[str, Any]) -> dict[str, Any]:
 def parse_synthesis_report(raw: str) -> dict[str, Any]:
     """Parse synthesis output JSON with safe defaults."""
     defaults: dict[str, Any] = {
+        "daily_memo": "",
+        "conversation_arcs": [],
         "briefing": [], "contributions": [],
         "trends": {"emerging": [], "fading": [], "shifts": ""}, "links": [],
     }
@@ -355,20 +419,48 @@ def save_daily_report(db_path: Path, report_date: str, report: dict[str, Any], b
     conn = get_connection(db_path)
     conn.execute(
         """INSERT OR REPLACE INTO daily_reports
-           (report_date, briefing_md, briefing_json, contributions, trends, stats)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           (report_date, briefing_md, briefing_json, contributions, trends, daily_memo, conversation_arcs, stats)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (report_date, briefing_md, json.dumps(report.get("briefing", [])),
          json.dumps(report.get("contributions", [])),
          json.dumps(report.get("trends", {})),
+         report.get("daily_memo", ""),
+         json.dumps(report.get("conversation_arcs", [])),
          json.dumps(report.get("links", []))),
     )
     conn.commit()
     conn.close()
 
 
-def render_briefing_markdown(report: dict[str, Any], report_date: str) -> str:
+def render_briefing_markdown(
+    report: dict[str, Any],
+    report_date: str,
+    subject_name: str = DEFAULT_SUBJECT_NAME,
+) -> str:
     """Render the synthesis report as readable markdown."""
+    resolved_subject = get_subject_name(subject_name)
     lines = [f"# Vibez Daily Briefing — {report_date}\n"]
+    if report.get("daily_memo"):
+        lines.append("## Daily Memo\n")
+        lines.append(f"{report.get('daily_memo', '').strip()}\n")
+    if report.get("conversation_arcs"):
+        lines.append("## Conversation Arcs\n")
+        for i, arc in enumerate(report["conversation_arcs"], 1):
+            lines.append(f"### {i}. {arc.get('title', 'Untitled conversation')}")
+            participants = ", ".join(arc.get("participants", []))
+            if participants:
+                lines.append(f"**Participants:** {participants}")
+            if arc.get("core_exchange"):
+                lines.append(f"\n**Core exchange:** {arc.get('core_exchange', '')}")
+            if arc.get("why_it_matters"):
+                lines.append(f"\n**Why it matters:** {arc.get('why_it_matters', '')}")
+            if arc.get("likely_next"):
+                lines.append(f"\n**Likely next:** {arc.get('likely_next', '')}")
+            if arc.get("how_to_add_value"):
+                lines.append(
+                    f"\n**How {resolved_subject} can add value:** {arc.get('how_to_add_value', '')}"
+                )
+            lines.append("")
     if report.get("briefing"):
         lines.append("## Key Threads\n")
         for i, thread in enumerate(report["briefing"], 1):
@@ -431,34 +523,60 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
     messages = get_day_messages(config.db_path, start_ts, end_ts)
     if not messages:
         logger.info("No messages in the last 24 hours. Skipping synthesis.")
-        return {"briefing": [], "contributions": [], "trends": {}, "links": []}
+        return {
+            "daily_memo": "",
+            "conversation_arcs": [],
+            "briefing": [],
+            "contributions": [],
+            "trends": {},
+            "links": [],
+        }
 
     value_cfg = load_value_config(config.db_path)
     previous = get_previous_briefing(config.db_path)
+    subject_name = get_subject_name(config.subject_name)
+    subject_possessive = get_subject_possessive(subject_name)
 
     # Load dossier context
-    dossier = load_dossier()
-    dossier_context = format_dossier_for_synthesis(dossier) if dossier else ""
+    dossier = load_dossier(config.dossier_path)
+    dossier_context = (
+        format_dossier_for_synthesis(dossier, subject_name=subject_name)
+        if dossier
+        else ""
+    )
 
-    # Load Braydon's own messages for context
-    braydon_msgs = get_braydon_messages(config.db_path, start_ts, end_ts)
+    # Load subject-authored messages for context
+    subject_msgs = get_subject_messages(
+        config.db_path,
+        start_ts,
+        end_ts,
+        config.self_aliases,
+    )
 
     prompt = build_synthesis_prompt(
         messages, value_cfg, previous,
         dossier_context=dossier_context,
-        braydon_messages=braydon_msgs,
+        subject_name=subject_name,
+        subject_messages=subject_msgs,
     )
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     response = client.messages.create(
         model=config.synthesis_model, max_tokens=8192,
-        system=SYNTHESIS_SYSTEM,
+        system=SYNTHESIS_SYSTEM_TEMPLATE.format(
+            subject_name=subject_name,
+            subject_possessive=subject_possessive,
+        ),
         messages=[{"role": "user", "content": prompt}],
     )
     raw_text = response.content[0].text
     report = make_pithy_report(parse_synthesis_report(raw_text))
 
-    briefing_md = render_briefing_markdown(report, report_date)
+    briefing_md = render_briefing_markdown(
+        report,
+        report_date,
+        subject_name=subject_name,
+    )
     save_daily_report(config.db_path, report_date, report, briefing_md)
     publish_event(
         "vibez.briefing.generated",

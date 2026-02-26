@@ -22,6 +22,27 @@ def test_build_classify_prompt():
     assert "Harper" in prompt
 
 
+def test_build_classify_prompt_with_custom_subject():
+    message = {
+        "sender_name": "Nia",
+        "room_name": "Builders",
+        "body": "Can someone sanity check this architecture?",
+    }
+    value_config = {
+        "topics": ["systems"],
+        "projects": ["Beacon"],
+    }
+    prompt = build_classify_prompt(
+        message,
+        value_config,
+        context_messages=None,
+        subject_name="Alex",
+    )
+    assert "Alex's interest topics" in prompt
+    assert "Alex could add value" in prompt
+    assert "Braydon" not in prompt
+
+
 def test_parse_classification_valid():
     raw = json.dumps({
         "relevance_score": 9,

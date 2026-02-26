@@ -9,3 +9,9 @@ node_modules/
 .next/
 dist/
 *.egg-info/
+.workgraph/
+hot_alerts.json
+~/
+*.log
+*.pid
+.DS_Store

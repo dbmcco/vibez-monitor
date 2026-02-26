@@ -561,6 +561,11 @@ export default function ContributePage() {
           loading
           title="Loading contribution map"
           detail="Scoring urgency, need, aging, leverage, blockers, and recurrence."
+          steps={[
+            "Gathering candidate opportunities",
+            "Applying smart priority scoring",
+            "Grouping into actionable sections",
+          ]}
         />
       ) : !dashboard ? (
         <StatusPanel

@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS daily_reports (
     briefing_json TEXT,
     contributions TEXT,
     trends TEXT,
+    daily_memo TEXT,
+    conversation_arcs TEXT,
     stats TEXT,
     generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -91,11 +93,23 @@ def get_connection(db_path: str | Path) -> sqlite3.Connection:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Run schema migrations on existing databases."""
+    changed = False
     cols = {row[1] for row in conn.execute("PRAGMA table_info(classifications)")}
     if "contribution_themes" not in cols:
         conn.execute(
             "ALTER TABLE classifications ADD COLUMN contribution_themes TEXT NOT NULL DEFAULT '[]'"
         )
+        changed = True
+
+    report_cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_reports)")}
+    if "daily_memo" not in report_cols:
+        conn.execute("ALTER TABLE daily_reports ADD COLUMN daily_memo TEXT")
+        changed = True
+    if "conversation_arcs" not in report_cols:
+        conn.execute("ALTER TABLE daily_reports ADD COLUMN conversation_arcs TEXT")
+        changed = True
+
+    if changed:
         conn.commit()
 
 

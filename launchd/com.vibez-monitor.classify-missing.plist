@@ -6,10 +6,10 @@
     <string>com.vibez-monitor.classify-missing</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/braydon/projects/personal/vibez-monitor/backend/.venv/bin/python</string>
-        <string>/Users/braydon/projects/personal/vibez-monitor/backend/scripts/classify_backfill.py</string>
+        <string>__VIBEZ_ROOT__/backend/.venv/bin/python</string>
+        <string>__VIBEZ_ROOT__/backend/scripts/classify_backfill.py</string>
         <string>--db-path</string>
-        <string>/Users/braydon/projects/personal/vibez-monitor/vibez.db</string>
+        <string>__VIBEZ_ROOT__/vibez.db</string>
         <string>--model</string>
         <string>qwen2.5:3b</string>
         <string>--concurrency</string>
@@ -22,14 +22,14 @@
         <string>/tmp/vibez-classify-backfill.lock</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/braydon/projects/personal/vibez-monitor</string>
+    <string>__VIBEZ_ROOT__</string>
     <key>RunAtLoad</key>
     <true/>
     <key>StartInterval</key>
     <integer>1800</integer>
     <key>StandardOutPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/classify-missing-stdout.log</string>
+    <string>__LOG_DIR__/classify-missing-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/classify-missing-stderr.log</string>
+    <string>__LOG_DIR__/classify-missing-stderr.log</string>
 </dict>
 </plist>

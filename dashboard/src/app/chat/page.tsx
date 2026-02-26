@@ -10,6 +10,18 @@ interface ChatMessage {
   messageCount?: number;
 }
 
+interface ChatHistoryItem {
+  role: "user" | "assistant";
+  content: string;
+}
+
+const STARTER_PROMPTS = [
+  "What changed most in AGI this week?",
+  "Which topics are heating up and who is driving them?",
+  "What are the top 3 actionable follow-ups for me today?",
+  "Show the strongest quotes and references from the last 48 hours.",
+];
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -20,10 +32,12 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const question = input.trim();
+  async function sendQuestion(question: string) {
     if (!question || loading) return;
+
+    const history: ChatHistoryItem[] = messages
+      .slice(-10)
+      .map(({ role, content }) => ({ role, content }));
 
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: question }]);
@@ -33,7 +47,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, history }),
       });
       const data = await res.json();
       if (data.error) {
@@ -61,6 +75,15 @@ export default function ChatPage() {
     }
   }
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await sendQuestion(input.trim());
+  }
+
+  async function askPrompt(prompt: string) {
+    await sendQuestion(prompt.trim());
+  }
+
   return (
     <div className="flex h-[calc(100vh-9rem)] flex-col gap-4">
       <header className="fade-up space-y-2">
@@ -79,11 +102,16 @@ export default function ChatPage() {
               <p className="vibe-title text-xl text-slate-200">
                 Ask anything about the group chats
               </p>
-              <div className="mt-4 flex flex-col gap-2 text-sm text-slate-500">
-                <p>&quot;What was the main discussion in AGI House today?&quot;</p>
-                <p>&quot;Who mentioned multi-agent systems this week?&quot;</p>
-                <p>&quot;What links were shared about context windows?&quot;</p>
-                <p>&quot;Where could I contribute based on my expertise?&quot;</p>
+              <div className="mt-4 grid gap-2 text-left text-sm text-slate-500 sm:grid-cols-2">
+                {STARTER_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => askPrompt(prompt)}
+                    className="rounded-md border border-slate-700/70 bg-slate-900/45 px-3 py-2 text-left text-sm text-slate-300 hover:border-cyan-300/60 hover:text-slate-100"
+                  >
+                    {prompt}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -146,7 +174,7 @@ export default function ChatPage() {
           disabled={loading || !input.trim()}
           className="vibe-button rounded-lg px-4 py-2.5 text-sm tracking-wide disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Asking..." : "Ask ->"}
+          {loading ? "Asking..." : "Ask"}
         </button>
       </form>
     </div>

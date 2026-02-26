@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import path from "path";
+import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
 
 const DB_PATH =
   process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
@@ -10,10 +11,6 @@ const DEFAULT_EXCLUDED_GROUPS = [
   "MTB Rides",
   "Plum",
 ];
-
-const DEFAULT_USER_ALIASES: Record<string, string> = {
-  dbmcco: "Braydon",
-};
 
 interface RoomScope {
   mode: "active_groups" | "excluded_groups" | "all";
@@ -96,9 +93,10 @@ function buildRoomScopeWhere(alias: string, scope: RoomScope): {
 }
 
 function loadUserAliases(): UserAliasMap {
+  const subjectName = getSubjectName();
   const aliases: UserAliasMap = {};
-  for (const [raw, canonical] of Object.entries(DEFAULT_USER_ALIASES)) {
-    aliases[raw.toLowerCase()] = canonical;
+  for (const alias of getSubjectAliases(subjectName)) {
+    aliases[alias.toLowerCase()] = subjectName;
   }
 
   const envRaw = process.env.VIBEZ_USER_ALIASES;
@@ -149,8 +147,102 @@ export interface DailyReport {
   briefing_json: string | null;
   contributions: string | null;
   trends: string | null;
+  daily_memo: string | null;
+  conversation_arcs: string | null;
   stats: string | null;
   generated_at: string | null;
+}
+
+export interface RecentUpdateQuote {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+}
+
+export interface RecentUpdateTopic {
+  topic: string;
+  count: number;
+}
+
+export interface RecentUpdateChannel {
+  name: string;
+  count: number;
+}
+
+export interface RecentUpdateSnapshot {
+  window_start_iso: string;
+  window_end_iso: string;
+  window_label: string;
+  next_refresh_iso: string;
+  next_refresh_label: string;
+  refresh_cadence: string;
+  message_count: number;
+  active_users: number;
+  active_channels: number;
+  top_topics: RecentUpdateTopic[];
+  top_channels: RecentUpdateChannel[];
+  quotes: RecentUpdateQuote[];
+  summary: string;
+}
+
+export interface VibezRadarGapQuote {
+  id: string;
+  timestamp: number;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  relevance_score: number | null;
+}
+
+export interface VibezRadarGap {
+  topic: string;
+  message_count: number;
+  people: number;
+  channels: number;
+  first_seen: string;
+  last_seen: string;
+  avg_relevance: number | null;
+  reason: string;
+  sample_quote: VibezRadarGapQuote | null;
+}
+
+export interface VibezRadarRedundancy {
+  type: "thread_overlap" | "message_duplication";
+  score_pct: number;
+  title: string;
+  detail: string;
+}
+
+export interface VibezRadarThreadQuality {
+  thread_title: string;
+  evidence_messages: number;
+  evidence_people: number;
+  newest_evidence: string | null;
+  quality: "strong" | "mixed" | "thin";
+  notes: string[];
+}
+
+export interface VibezRadarSnapshot {
+  generated_at: string;
+  window_hours: number;
+  window_start_iso: string;
+  coverage: {
+    topic_coverage_pct: number;
+    classification_coverage_pct: number;
+    duplicate_pressure_pct: number;
+  };
+  totals: {
+    messages: number;
+    people: number;
+    channels: number;
+    briefing_threads: number;
+  };
+  gaps: VibezRadarGap[];
+  redundancies: VibezRadarRedundancy[];
+  thread_quality: VibezRadarThreadQuality[];
 }
 
 export type ContributionNeedType =
@@ -344,7 +436,7 @@ const HIGH_EFFORT_RE =
   /\b(comprehensive|deep dive|full plan|big refactor|architecture|research packet|end-to-end)\b/i;
 const QUICK_WIN_RE = /\b(quick|small|short|simple|one-liner|fast)\b/i;
 const GROUP_IMPACT_RE = /\b(we|team|everyone|anyone|community|group|channel)\b/i;
-const BRAYDON_RE = /\b(braydon|dbmcco)\b/i;
+const SELF_MENTION_RE = buildSelfMentionRegex();
 
 interface ContributionRawRow {
   id: string;
@@ -373,7 +465,7 @@ interface ContributionPrep {
   has_explicit_need: boolean;
   has_question: boolean;
   has_dependency: boolean;
-  has_braydon_mention: boolean;
+  has_self_mention: boolean;
 }
 
 function clampScore(value: number, min = 0, max = 10): number {
@@ -485,7 +577,7 @@ export function getContributionDashboard(
       has_explicit_need: NEED_RE.test(text),
       has_question: text.includes("?"),
       has_dependency: DEPENDENCY_RE.test(text),
-      has_braydon_mention: BRAYDON_RE.test(text),
+      has_self_mention: SELF_MENTION_RE.test(text),
     };
   });
 
@@ -550,11 +642,11 @@ export function getContributionDashboard(
     );
 
     const needStrength = clampScore(
-      (item.has_explicit_need ? 4 : 0) +
+        (item.has_explicit_need ? 4 : 0) +
         (item.has_question ? 2 : 0) +
         (item.row.contribution_hint ? 2 : 0) +
         (item.need_type !== "none" ? 1.5 : 0) +
-        (item.has_braydon_mention ? 1 : 0),
+        (item.has_self_mention ? 1 : 0),
     );
 
     const agingBase =
@@ -590,7 +682,7 @@ export function getContributionDashboard(
     );
 
     const comparativeAdvantage = clampScore(
-      (item.has_braydon_mention ? 3 : 0) +
+      (item.has_self_mention ? 3 : 0) +
         (item.row.contribution_hint ? 2 : 0) +
         (hasValueMatch ? 2 : 0) +
         ((item.row.relevance_score ?? 0) >= 8 ? 1.5 : 0) +
@@ -618,7 +710,7 @@ export function getContributionDashboard(
     const relationshipStakes = clampScore(
       2 +
         Math.min(3, Math.log2(senderSignal + 1) * 1.1) +
-        (item.has_braydon_mention ? 2 : 0) +
+        (item.has_self_mention ? 2 : 0) +
         (senderSignal >= Math.max(4, senderMax * 0.15) ? 2 : 0) +
         (item.row.room_name.toLowerCase().includes("vibez") ? 0.5 : 0),
     );
@@ -900,6 +992,213 @@ export function getReport(date: string): DailyReport | null {
   return row || null;
 }
 
+export function getPreviousReport(beforeDate: string): DailyReport | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      "SELECT * FROM daily_reports WHERE report_date < ? ORDER BY report_date DESC LIMIT 1",
+    )
+    .get(beforeDate) as DailyReport | undefined;
+  db.close();
+  return row || null;
+}
+
+function computeRecentUpdateWindow(now: Date): {
+  windowStart: Date;
+  windowEnd: Date;
+  nextRefresh: Date;
+} {
+  const morning = new Date(now);
+  morning.setHours(4, 30, 0, 0);
+  const evening = new Date(now);
+  evening.setHours(16, 30, 0, 0);
+
+  if (now.getTime() >= evening.getTime()) {
+    return {
+      windowStart: evening,
+      windowEnd: now,
+      nextRefresh: new Date(evening.getTime() + 12 * 60 * 60 * 1000),
+    };
+  }
+  if (now.getTime() >= morning.getTime()) {
+    return {
+      windowStart: morning,
+      windowEnd: now,
+      nextRefresh: evening,
+    };
+  }
+
+  const previousEvening = new Date(evening);
+  previousEvening.setDate(previousEvening.getDate() - 1);
+  return {
+    windowStart: previousEvening,
+    windowEnd: now,
+    nextRefresh: morning,
+  };
+}
+
+function formatRecentUpdateWindowLabel(windowStart: Date, now: Date): string {
+  const sameDay = windowStart.toDateString() === now.toDateString();
+  if (sameDay) {
+    return `Since ${windowStart.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`;
+  }
+  return `Since ${windowStart.toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+}
+
+function formatRecentUpdateNextRefreshLabel(nextRefresh: Date): string {
+  return nextRefresh.toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+interface RecentUpdateRow {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+  topics: string | null;
+}
+
+function pickRecentQuotes(rows: RecentUpdateRow[], userAliases: UserAliasMap): RecentUpdateQuote[] {
+  const senderCounts = new Map<string, number>();
+  return rows
+    .filter((row) => {
+      const body = (row.body || "").trim();
+      if (body.length < 70) return false;
+      if (/^https?:\/\//i.test(body)) return false;
+      const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases).toLowerCase();
+      if (sender.includes("whatsappbot")) return false;
+      return true;
+    })
+    .map((row) => {
+      const hoursOld = Math.max(0, (Date.now() - row.timestamp) / (1000 * 60 * 60));
+      const recencyBonus = Math.max(0, 12 - hoursOld) * 0.18;
+      const relevance = row.relevance_score ?? 0;
+      const score = relevance * 2 + recencyBonus;
+      return { row, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .filter(({ row }) => {
+      const senderName = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+      const count = senderCounts.get(senderName) || 0;
+      if (count >= 1) return false;
+      senderCounts.set(senderName, count + 1);
+      return true;
+    })
+    .slice(0, 3)
+    .map(({ row }) => ({
+      id: row.id,
+      room_name: row.room_name,
+      sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+      body: row.body || "",
+      timestamp: row.timestamp,
+      relevance_score: row.relevance_score,
+    }));
+}
+
+export function getRecentUpdateSnapshot(): RecentUpdateSnapshot {
+  const now = new Date();
+  const { windowStart, windowEnd, nextRefresh } = computeRecentUpdateWindow(now);
+  const windowStartTs = windowStart.getTime();
+  const windowEndTs = windowEnd.getTime();
+
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  const roomScope = buildRoomScopeWhere("m", scope);
+  const userAliases = loadUserAliases();
+
+  const whereParts = ["m.timestamp >= ?", "m.timestamp <= ?"];
+  const whereParams: unknown[] = [windowStartTs, windowEndTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    whereParams.push(...roomScope.params);
+  }
+  const whereClause = `WHERE ${whereParts.join(" AND ")}`;
+
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+              c.relevance_score, c.topics
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       ${whereClause}
+       ORDER BY m.timestamp DESC
+       LIMIT 2500`
+    )
+    .all(...whereParams) as RecentUpdateRow[];
+  db.close();
+
+  const uniqueSenders = new Set<string>();
+  const channelCounts = new Map<string, number>();
+  const topicCounts = new Map<string, number>();
+  for (const row of rows) {
+    uniqueSenders.add(normalizeSenderName(row.sender_name || "Unknown", userAliases));
+    channelCounts.set(row.room_name, (channelCounts.get(row.room_name) || 0) + 1);
+    for (const topic of new Set(parseTopics(row.topics))) {
+      topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
+    }
+  }
+
+  const top_topics = Array.from(topicCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([topic, count]) => ({ topic, count }));
+
+  const top_channels = Array.from(channelCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([name, count]) => ({ name, count }));
+
+  const quotes = pickRecentQuotes(rows, userAliases);
+  const messageCount = rows.length;
+  const topTopicLabels = top_topics.slice(0, 3).map((item) => item.topic);
+  const topChannelLabels = top_channels.slice(0, 2).map((item) => item.name);
+  let summary = "";
+  if (messageCount === 0) {
+    summary = `${formatRecentUpdateWindowLabel(windowStart, now)}: no new messages yet in this refresh window.`;
+  } else {
+    const summaryParts = [
+      `${messageCount} messages`,
+      `from ${uniqueSenders.size} people`,
+      `across ${channelCounts.size} channel${channelCounts.size === 1 ? "" : "s"}`,
+    ];
+    summary = `${formatRecentUpdateWindowLabel(windowStart, now)}: ${summaryParts.join(" ")}.`;
+    if (topTopicLabels.length > 0) {
+      summary += ` Top topics: ${topTopicLabels.join(", ")}.`;
+    }
+    if (topChannelLabels.length > 0) {
+      summary += ` Most active: ${topChannelLabels.join(", ")}.`;
+    }
+  }
+
+  return {
+    window_start_iso: windowStart.toISOString(),
+    window_end_iso: windowEnd.toISOString(),
+    window_label: formatRecentUpdateWindowLabel(windowStart, now),
+    next_refresh_iso: nextRefresh.toISOString(),
+    next_refresh_label: formatRecentUpdateNextRefreshLabel(nextRefresh),
+    refresh_cadence: "4:30 AM / 4:30 PM",
+    message_count: messageCount,
+    active_users: uniqueSenders.size,
+    active_channels: channelCounts.size,
+    top_topics,
+    top_channels,
+    quotes,
+    summary,
+  };
+}
+
 export function getRooms(): string[] {
   const db = getDb();
   const scope = loadRoomScope(db);
@@ -1078,6 +1377,56 @@ export interface SeasonalityStats {
   }[];
 }
 
+export interface RelationshipNode {
+  id: string;
+  messages: number;
+  channels: number;
+  replies_out: number;
+  replies_in: number;
+  dm_signals: number;
+  top_topics: string[];
+}
+
+export interface RelationshipEdge {
+  source: string;
+  target: string;
+  weight: number;
+  replies: number;
+  mentions: number;
+  dm_signals: number;
+  turns: number;
+}
+
+export interface TopicAlignmentEdge {
+  source: string;
+  target: string;
+  similarity: number;
+  overlap_count: number;
+  shared_topics: string[];
+}
+
+export interface RelationshipNetworkStats {
+  nodes: RelationshipNode[];
+  edges: RelationshipEdge[];
+  summaries: {
+    included_nodes: number;
+    total_users_in_window: number;
+    total_messages: number;
+    directed_edges: number;
+    dm_signal_messages: number;
+  };
+}
+
+export interface TopicAlignmentNetworkStats {
+  nodes: RelationshipNode[];
+  edges: TopicAlignmentEdge[];
+  summaries: {
+    included_nodes: number;
+    compared_nodes: number;
+    alignment_edges: number;
+  };
+}
+
 export interface StatsDashboard {
   window_days: number;
   generated_at: string;
@@ -1104,6 +1453,10 @@ export interface StatsDashboard {
   topics: TopicStat[];
   cooccurrence: TopicCooccurrence[];
   seasonality: SeasonalityStats;
+  network: {
+    relationships: RelationshipNetworkStats;
+    topic_alignment: TopicAlignmentNetworkStats;
+  };
 }
 
 export interface TopicDrilldownMessage {
@@ -1233,6 +1586,578 @@ function peakIndex(values: number[]): number {
   return idx;
 }
 
+const DM_SIGNAL_RE =
+  /\b(dm|direct message|offline|off line|take (this )?offline|message me|ping me)\b/i;
+const REPLY_SIGNAL_RE =
+  /\b(reply|respond|agree|good point|great point|thanks|thank you|yes\b|no\b|\+1|exactly|makes sense)\b/i;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function participantMentionRegex(name: string): RegExp {
+  const escaped = escapeRegex(name.trim());
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i");
+}
+
+function topTopicsForUser(topicCounts: Map<string, number>, limit = 4): string[] {
+  return Array.from(topicCounts.entries())
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    })
+    .slice(0, limit)
+    .map(([topic]) => topic);
+}
+
+function cosineSimilarity(a: Map<string, number>, b: Map<string, number>): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (const value of a.values()) {
+    normA += value * value;
+  }
+  for (const value of b.values()) {
+    normB += value * value;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  for (const [topic, value] of a.entries()) {
+    const other = b.get(topic);
+    if (!other) continue;
+    dot += value * other;
+  }
+  return dot / Math.sqrt(normA * normB);
+}
+
+const RADAR_STOPWORDS = new Set([
+  "about",
+  "after",
+  "again",
+  "also",
+  "because",
+  "being",
+  "between",
+  "could",
+  "from",
+  "have",
+  "https",
+  "just",
+  "more",
+  "only",
+  "over",
+  "really",
+  "should",
+  "that",
+  "them",
+  "then",
+  "there",
+  "these",
+  "they",
+  "this",
+  "what",
+  "when",
+  "where",
+  "which",
+  "with",
+  "would",
+  "your",
+]);
+
+interface BriefingThreadShape {
+  title: string;
+  insights: string;
+}
+
+interface VibezRadarRawRow {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+  topics: string | null;
+}
+
+interface VibezRadarPreparedRow {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+  raw_topics: string | null;
+  topics: string[];
+  body_tokens: Set<string>;
+  fingerprint: string;
+}
+
+interface VibezRadarClusterAccumulator {
+  topic: string;
+  rows: VibezRadarPreparedRow[];
+  people: Set<string>;
+  channels: Set<string>;
+  first_ts: number;
+  last_ts: number;
+  relevance_total: number;
+  relevance_count: number;
+  unclassified: boolean;
+  covered: boolean;
+}
+
+function parseBriefingThreads(raw: string | null): BriefingThreadShape[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const record = entry as Record<string, unknown>;
+        const title = String(record.title || "").trim();
+        const insights = String(record.insights || "").trim();
+        if (!title && !insights) return null;
+        return { title, insights };
+      })
+      .filter((entry): entry is BriefingThreadShape => entry !== null);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeRadarBody(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[`*_>#~\[\]()]/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function radarTokens(text: string): string[] {
+  return normalizeRadarBody(text)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !RADAR_STOPWORDS.has(token));
+}
+
+function intersectionCount(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let count = 0;
+  for (const token of small) {
+    if (large.has(token)) count += 1;
+  }
+  return count;
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  const overlap = intersectionCount(a, b);
+  if (overlap === 0) return 0;
+  return overlap / (a.size + b.size - overlap);
+}
+
+function topicMatchesThread(topic: string, threadText: string, threadTokens: Set<string>): boolean {
+  const normalizedTopic = topic.toLowerCase().trim();
+  if (!normalizedTopic) return false;
+  if (threadText.includes(normalizedTopic)) return true;
+  const topicTokenSet = new Set(radarTokens(normalizedTopic));
+  if (topicTokenSet.size === 0) return false;
+  const overlap = intersectionCount(topicTokenSet, threadTokens);
+  return overlap >= Math.min(2, topicTokenSet.size);
+}
+
+function tsLabel(ts: number): string {
+  return new Date(ts).toLocaleString();
+}
+
+export function getVibezRadarSnapshot(
+  report: DailyReport | null,
+  windowHours = 48,
+): VibezRadarSnapshot | null {
+  if (!report) return null;
+
+  const threads = parseBriefingThreads(report.briefing_json);
+  const resolvedWindowHours = Math.max(24, Math.min(Math.floor(windowHours), 168));
+  const nowTs = Date.now();
+  const windowStartTs = nowTs - resolvedWindowHours * 60 * 60 * 1000;
+
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  const userAliases = loadUserAliases();
+  const roomScope = buildRoomScopeWhere("m", scope);
+  const whereParts = ["m.timestamp >= ?"];
+  const whereParams: unknown[] = [windowStartTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    whereParams.push(...roomScope.params);
+  }
+  const whereClause = `WHERE ${whereParts.join(" AND ")}`;
+
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp, c.relevance_score, c.topics
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       ${whereClause}
+       ORDER BY m.timestamp ASC
+       LIMIT 5000`,
+    )
+    .all(...whereParams) as VibezRadarRawRow[];
+  db.close();
+
+  const preparedRows: VibezRadarPreparedRow[] = rows.map((row) => ({
+    id: row.id,
+    room_name: row.room_name || "Unknown",
+    sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+    body: row.body || "",
+    timestamp: row.timestamp,
+    relevance_score: row.relevance_score,
+    raw_topics: row.topics,
+    topics: parseTopics(row.topics),
+    body_tokens: new Set(radarTokens(row.body || "")),
+    fingerprint: normalizeRadarBody(row.body || ""),
+  }));
+
+  const threadFeatures = threads.map((thread) => {
+    const text = `${thread.title} ${thread.insights}`.toLowerCase();
+    return {
+      title: thread.title || "Untitled thread",
+      text,
+      tokens: new Set(radarTokens(text)),
+    };
+  });
+
+  const uniquePeople = new Set<string>();
+  const uniqueChannels = new Set<string>();
+  const topicCounts = new Map<string, number>();
+  const fingerprintCounts = new Map<string, number>();
+  let withTopicsCount = 0;
+
+  for (const row of preparedRows) {
+    uniquePeople.add(row.sender_name);
+    uniqueChannels.add(row.room_name);
+    if (row.topics.length > 0) {
+      withTopicsCount += 1;
+      for (const topic of new Set(row.topics)) {
+        topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
+      }
+    }
+    if (row.fingerprint.length >= 48) {
+      fingerprintCounts.set(row.fingerprint, (fingerprintCounts.get(row.fingerprint) || 0) + 1);
+    }
+  }
+
+  const clusters = new Map<string, VibezRadarClusterAccumulator>();
+  for (const row of preparedRows) {
+    const topics = Array.from(new Set(row.topics));
+    const primaryTopic =
+      topics.length > 0
+        ? [...topics].sort((a, b) => {
+            const countA = topicCounts.get(a) || 0;
+            const countB = topicCounts.get(b) || 0;
+            if (countA !== countB) return countB - countA;
+            return a.localeCompare(b);
+          })[0]
+        : "Unclassified signal";
+    const existing = clusters.get(primaryTopic) || {
+      topic: primaryTopic,
+      rows: [],
+      people: new Set<string>(),
+      channels: new Set<string>(),
+      first_ts: row.timestamp,
+      last_ts: row.timestamp,
+      relevance_total: 0,
+      relevance_count: 0,
+      unclassified: topics.length === 0,
+      covered: false,
+    };
+    existing.rows.push(row);
+    existing.people.add(row.sender_name);
+    existing.channels.add(row.room_name);
+    existing.first_ts = Math.min(existing.first_ts, row.timestamp);
+    existing.last_ts = Math.max(existing.last_ts, row.timestamp);
+    if (row.relevance_score !== null && row.relevance_score !== undefined) {
+      existing.relevance_total += row.relevance_score;
+      existing.relevance_count += 1;
+    }
+    clusters.set(primaryTopic, existing);
+  }
+
+  for (const cluster of clusters.values()) {
+    if (cluster.unclassified) continue;
+    const directTopicMatch = threadFeatures.some((thread) =>
+      topicMatchesThread(cluster.topic, thread.text, thread.tokens),
+    );
+    if (directTopicMatch) {
+      cluster.covered = true;
+      continue;
+    }
+
+    const clusterTokenCounts = new Map<string, number>();
+    for (const row of cluster.rows) {
+      for (const token of row.body_tokens) {
+        clusterTokenCounts.set(token, (clusterTokenCounts.get(token) || 0) + 1);
+      }
+    }
+    const clusterTopTokens = new Set(
+      Array.from(clusterTokenCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 16)
+        .map(([token]) => token),
+    );
+    cluster.covered = threadFeatures.some(
+      (thread) => intersectionCount(clusterTopTokens, thread.tokens) >= 2,
+    );
+  }
+
+  const duplicateMessages = Array.from(fingerprintCounts.values()).reduce(
+    (sum, count) => sum + (count > 1 ? count - 1 : 0),
+    0,
+  );
+
+  const topicalVolume = Array.from(clusters.values())
+    .filter((cluster) => !cluster.unclassified)
+    .reduce((sum, cluster) => sum + cluster.rows.length, 0);
+  const topicalCoveredVolume = Array.from(clusters.values())
+    .filter((cluster) => !cluster.unclassified && cluster.covered)
+    .reduce((sum, cluster) => sum + cluster.rows.length, 0);
+
+  const topicCoveragePct =
+    topicalVolume > 0 ? Number(((topicalCoveredVolume / topicalVolume) * 100).toFixed(1)) : 0;
+  const classificationCoveragePct =
+    preparedRows.length > 0 ? Number(((withTopicsCount / preparedRows.length) * 100).toFixed(1)) : 0;
+  const duplicatePressurePct =
+    preparedRows.length > 0 ? Number(((duplicateMessages / preparedRows.length) * 100).toFixed(1)) : 0;
+
+  const reportGeneratedTs = report.generated_at ? new Date(report.generated_at).getTime() : NaN;
+  const gapThreshold = Math.max(5, Math.floor(preparedRows.length * 0.03));
+  const uncoveredGaps: VibezRadarGap[] = Array.from(clusters.values())
+    .filter((cluster) => !cluster.unclassified && !cluster.covered)
+    .filter((cluster) => cluster.rows.length >= gapThreshold && cluster.people.size >= 2)
+    .sort((a, b) => b.rows.length - a.rows.length)
+    .slice(0, 6)
+    .map((cluster) => {
+      const quoteCandidates = cluster.rows.filter((row) => row.body.trim().length >= 40);
+      const sampleRow = [...(quoteCandidates.length > 0 ? quoteCandidates : cluster.rows)].sort(
+        (a, b) =>
+          (b.relevance_score ?? Number.NEGATIVE_INFINITY) -
+            (a.relevance_score ?? Number.NEGATIVE_INFINITY) || b.timestamp - a.timestamp,
+      )[0];
+
+      const reasons: string[] = [];
+      if (!Number.isNaN(reportGeneratedTs) && cluster.last_ts > reportGeneratedTs) {
+        reasons.push("Signal rose after the latest briefing timestamp.");
+      }
+      if (classificationCoveragePct < 65) {
+        reasons.push("Topic coverage in classifications is currently thin.");
+      }
+      if (cluster.channels.size === 1 && cluster.people.size <= 3) {
+        reasons.push("Discussion is concentrated in one channel and may have looked narrow.");
+      }
+      if (reasons.length === 0) {
+        reasons.push("High recent volume is not represented in current briefing priorities.");
+      }
+
+      return {
+        topic: cluster.topic,
+        message_count: cluster.rows.length,
+        people: cluster.people.size,
+        channels: cluster.channels.size,
+        first_seen: tsLabel(cluster.first_ts),
+        last_seen: tsLabel(cluster.last_ts),
+        avg_relevance:
+          cluster.relevance_count > 0
+            ? Number((cluster.relevance_total / cluster.relevance_count).toFixed(2))
+            : null,
+        reason: reasons.join(" "),
+        sample_quote: sampleRow
+          ? {
+              id: sampleRow.id,
+              timestamp: sampleRow.timestamp,
+              room_name: sampleRow.room_name,
+              sender_name: sampleRow.sender_name,
+              body: sampleRow.body,
+              relevance_score: sampleRow.relevance_score,
+            }
+        : null,
+      };
+    });
+
+  const lateBreakingGaps: VibezRadarGap[] = Number.isNaN(reportGeneratedTs)
+    ? []
+    : Array.from(clusters.values())
+        .filter((cluster) => !cluster.unclassified && cluster.covered)
+        .filter((cluster) => cluster.last_ts > reportGeneratedTs)
+        .filter((cluster) => cluster.rows.length >= gapThreshold * 2 && cluster.people.size >= 3)
+        .sort((a, b) => b.rows.length - a.rows.length)
+        .slice(0, 3)
+        .map((cluster) => {
+          const sampleRow = [...cluster.rows]
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .find((row) => row.body.trim().length >= 40);
+          return {
+            topic: cluster.topic,
+            message_count: cluster.rows.length,
+            people: cluster.people.size,
+            channels: cluster.channels.size,
+            first_seen: tsLabel(cluster.first_ts),
+            last_seen: tsLabel(cluster.last_ts),
+            avg_relevance:
+              cluster.relevance_count > 0
+                ? Number((cluster.relevance_total / cluster.relevance_count).toFixed(2))
+                : null,
+            reason:
+              "Volume accelerated after briefing cutoff; monitor for stale summary framing.",
+            sample_quote: sampleRow
+              ? {
+                  id: sampleRow.id,
+                  timestamp: sampleRow.timestamp,
+                  room_name: sampleRow.room_name,
+                  sender_name: sampleRow.sender_name,
+                  body: sampleRow.body,
+                  relevance_score: sampleRow.relevance_score,
+                }
+              : null,
+          };
+        });
+
+  const gapByTopic = new Map<string, VibezRadarGap>();
+  for (const gap of uncoveredGaps) {
+    gapByTopic.set(gap.topic, gap);
+  }
+  for (const gap of lateBreakingGaps) {
+    if (!gapByTopic.has(gap.topic)) {
+      gapByTopic.set(gap.topic, gap);
+    }
+  }
+  const gaps = Array.from(gapByTopic.values())
+    .sort((a, b) => b.message_count - a.message_count)
+    .slice(0, 6);
+
+  const unclassifiedCluster = clusters.get("Unclassified signal");
+  if (
+    unclassifiedCluster &&
+    unclassifiedCluster.rows.length >= gapThreshold &&
+    classificationCoveragePct < 70
+  ) {
+    const sample = unclassifiedCluster.rows[unclassifiedCluster.rows.length - 1];
+    gaps.push({
+      topic: "Unclassified signal",
+      message_count: unclassifiedCluster.rows.length,
+      people: unclassifiedCluster.people.size,
+      channels: unclassifiedCluster.channels.size,
+      first_seen: tsLabel(unclassifiedCluster.first_ts),
+      last_seen: tsLabel(unclassifiedCluster.last_ts),
+      avg_relevance:
+        unclassifiedCluster.relevance_count > 0
+          ? Number((unclassifiedCluster.relevance_total / unclassifiedCluster.relevance_count).toFixed(2))
+          : null,
+      reason:
+        "Large message volume without extracted topics suggests classification drift or vocabulary changes.",
+      sample_quote: sample
+        ? {
+            id: sample.id,
+            timestamp: sample.timestamp,
+            room_name: sample.room_name,
+            sender_name: sample.sender_name,
+            body: sample.body,
+            relevance_score: sample.relevance_score,
+          }
+        : null,
+    });
+  }
+
+  const redundancies: VibezRadarRedundancy[] = [];
+  for (let i = 0; i < threadFeatures.length; i += 1) {
+    for (let j = i + 1; j < threadFeatures.length; j += 1) {
+      const left = threadFeatures[i];
+      const right = threadFeatures[j];
+      const similarity = jaccardSimilarity(left.tokens, right.tokens);
+      if (similarity < 0.4) continue;
+      const scorePct = Number((similarity * 100).toFixed(1));
+      redundancies.push({
+        type: "thread_overlap",
+        score_pct: scorePct,
+        title: `${left.title} ↔ ${right.title}`,
+        detail: `${scorePct}% lexical overlap between thread summaries; consider sharper differentiation.`,
+      });
+    }
+  }
+  if (duplicatePressurePct >= 12) {
+    redundancies.push({
+      type: "message_duplication",
+      score_pct: duplicatePressurePct,
+      title: "Repeated source messages",
+      detail: `${duplicatePressurePct}% of recent messages are near-duplicates, which can inflate perceived importance.`,
+    });
+  }
+
+  const thread_quality: VibezRadarThreadQuality[] = threadFeatures
+    .map((thread) => {
+      const evidenceRows = preparedRows.filter((row) => {
+        const topicHit = row.topics.some((topic) => topicMatchesThread(topic, thread.text, thread.tokens));
+        if (topicHit) return true;
+        return intersectionCount(row.body_tokens, thread.tokens) >= 3;
+      });
+      const evidencePeople = new Set(evidenceRows.map((row) => row.sender_name));
+      const newestEvidenceTs =
+        evidenceRows.length > 0
+          ? evidenceRows.reduce((max, row) => Math.max(max, row.timestamp), evidenceRows[0].timestamp)
+          : null;
+      let quality: "strong" | "mixed" | "thin" = "thin";
+      if (evidenceRows.length >= 8 && evidencePeople.size >= 4) quality = "strong";
+      else if (evidenceRows.length >= 3 && evidencePeople.size >= 2) quality = "mixed";
+
+      const notes: string[] = [];
+      if (quality === "strong") {
+        notes.push("Backed by broad, recent message evidence.");
+      } else if (quality === "mixed") {
+        notes.push("Moderate evidence; validate before acting.");
+      } else {
+        notes.push("Thin supporting evidence in the current window.");
+      }
+      if (evidenceRows.length > 0 && evidencePeople.size === 1) {
+        notes.push("Signal is concentrated in one voice.");
+      }
+      if (newestEvidenceTs !== null && nowTs - newestEvidenceTs > 24 * 60 * 60 * 1000) {
+        notes.push("No fresh evidence in the last 24h.");
+      }
+
+      return {
+        thread_title: thread.title,
+        evidence_messages: evidenceRows.length,
+        evidence_people: evidencePeople.size,
+        newest_evidence: newestEvidenceTs === null ? null : tsLabel(newestEvidenceTs),
+        quality,
+        notes,
+      };
+    })
+    .sort((a, b) => b.evidence_messages - a.evidence_messages)
+    .slice(0, 8);
+
+  return {
+    generated_at: new Date().toISOString(),
+    window_hours: resolvedWindowHours,
+    window_start_iso: new Date(windowStartTs).toISOString(),
+    coverage: {
+      topic_coverage_pct: topicCoveragePct,
+      classification_coverage_pct: classificationCoveragePct,
+      duplicate_pressure_pct: duplicatePressurePct,
+    },
+    totals: {
+      messages: preparedRows.length,
+      people: uniquePeople.size,
+      channels: uniqueChannels.size,
+      briefing_threads: threads.length,
+    },
+    gaps: gaps.slice(0, 6),
+    redundancies: redundancies.sort((a, b) => b.score_pct - a.score_pct).slice(0, 6),
+    thread_quality,
+  };
+}
+
 export function getStatsDashboard(windowDays: number | null = 90): StatsDashboard {
   const resolvedWindow = resolveWindowDays(windowDays);
   const cutoffTs =
@@ -1264,7 +2189,7 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
 
   const rows = db
     .prepare(
-      `SELECT m.timestamp, m.sender_name, m.room_name, c.topics, c.relevance_score
+      `SELECT m.timestamp, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
        FROM messages m
        LEFT JOIN classifications c ON m.id = c.message_id
        ${windowWhere}
@@ -1274,6 +2199,7 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     timestamp: number;
     sender_name: string;
     room_name: string;
+    body: string;
     topics: string | null;
     relevance_score: number | null;
   }[];
@@ -1307,9 +2233,51 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
   const topics = new Map<string, TopicAccumulator>();
   const topicFirstSeenEver = new Map<string, number>();
   const cooccurrence = new Map<string, PairAccumulator>();
+  const userTopicCounts = new Map<string, Map<string, number>>();
+  const userChannels = new Map<string, Set<string>>();
+  const relationshipEdges = new Map<string, RelationshipEdge>();
+  const relationshipInbound = new Map<string, number>();
+  const relationshipOutbound = new Map<string, number>();
+  const dmSignalsByUser = new Map<string, number>();
+  const roomHistory = new Map<string, Array<{ sender: string; ts: number; body: string }>>();
+  const mentionRegexByName = new Map<string, RegExp>();
+  let dmSignalMessages = 0;
 
   let relevanceTotal = 0;
   let relevanceCount = 0;
+
+  function addRelationshipEdge(
+    source: string,
+    target: string,
+    delta: { replies?: number; mentions?: number; dm_signals?: number; turns?: number },
+  ): void {
+    if (!source || !target || source === target) return;
+    const key = `${source}=>${target}`;
+    const existing = relationshipEdges.get(key) || {
+      source,
+      target,
+      weight: 0,
+      replies: 0,
+      mentions: 0,
+      dm_signals: 0,
+      turns: 0,
+    };
+    existing.replies += delta.replies ?? 0;
+    existing.mentions += delta.mentions ?? 0;
+    existing.dm_signals += delta.dm_signals ?? 0;
+    existing.turns += delta.turns ?? 0;
+    existing.weight = Number(
+      (
+        existing.replies * 1.8 +
+        existing.mentions * 1.3 +
+        existing.dm_signals * 2.4 +
+        existing.turns * 0.8
+      ).toFixed(3),
+    );
+    relationshipEdges.set(key, existing);
+    relationshipOutbound.set(source, (relationshipOutbound.get(source) || 0) + 1);
+    relationshipInbound.set(target, (relationshipInbound.get(target) || 0) + 1);
+  }
 
   for (const row of allTopicRows) {
     const ts = row.timestamp;
@@ -1379,7 +2347,67 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     }
     channels.set(channel, channelAcc);
 
+    const userTopicMap = userTopicCounts.get(sender) || new Map<string, number>();
+    const userChannelSet = userChannels.get(sender) || new Set<string>();
+    userChannelSet.add(channel);
+    userChannels.set(sender, userChannelSet);
+
+    const body = String(row.body || "");
+    const bodyLower = body.toLowerCase();
+    const history = roomHistory.get(channel) || [];
+    const recentHistory = history.filter((item) => ts - item.ts <= 2 * 60 * 60 * 1000);
+    const recentParticipants = Array.from(
+      new Set(recentHistory.map((item) => item.sender).filter((name) => name !== sender)),
+    ).slice(-12);
+
+    const mentionedTargets = new Set<string>();
+    for (const participant of recentParticipants) {
+      const regex =
+        mentionRegexByName.get(participant) || participantMentionRegex(participant.toLowerCase());
+      mentionRegexByName.set(participant, regex);
+      if (regex.test(bodyLower)) {
+        mentionedTargets.add(participant);
+      }
+    }
+
+    const lastDifferent = [...recentHistory]
+      .reverse()
+      .find((item) => item.sender !== sender && ts - item.ts <= 45 * 60 * 1000);
+
+    if (mentionedTargets.size > 0) {
+      for (const target of mentionedTargets) {
+        addRelationshipEdge(sender, target, { mentions: 1 });
+      }
+    }
+
+    if (lastDifferent) {
+      const lastAskedQuestion = lastDifferent.body.includes("?");
+      const currentIsReplyLike =
+        body.includes("?") || REPLY_SIGNAL_RE.test(bodyLower) || lastAskedQuestion;
+      if (currentIsReplyLike) {
+        addRelationshipEdge(sender, lastDifferent.sender, { replies: 1 });
+      } else {
+        addRelationshipEdge(sender, lastDifferent.sender, { turns: 1 });
+      }
+    }
+
+    const hasDmSignal = DM_SIGNAL_RE.test(bodyLower);
+    if (hasDmSignal) {
+      dmSignalMessages += 1;
+      dmSignalsByUser.set(sender, (dmSignalsByUser.get(sender) || 0) + 1);
+      const dmTargets =
+        mentionedTargets.size > 0
+          ? Array.from(mentionedTargets)
+          : lastDifferent
+            ? [lastDifferent.sender]
+            : [];
+      for (const target of dmTargets) {
+        addRelationshipEdge(sender, target, { dm_signals: 1 });
+      }
+    }
+
     for (const topic of parsedTopics) {
+      userTopicMap.set(topic, (userTopicMap.get(topic) || 0) + 1);
       const topicAcc = topics.get(topic) || {
         messages: 0,
         activeDays: new Set<string>(),
@@ -1404,6 +2432,7 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
       topicAcc.hourCounts[d.getHours()] += 1;
       topics.set(topic, topicAcc);
     }
+    userTopicCounts.set(sender, userTopicMap);
 
     const messageTopics = Array.from(new Set(parsedTopics)).sort((a, b) =>
       a.localeCompare(b),
@@ -1428,6 +2457,9 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
         }
       }
     }
+
+    recentHistory.push({ sender, ts, body: bodyLower });
+    roomHistory.set(channel, recentHistory.slice(-40));
   }
 
   const timeline: DailyCount[] = timelineDays.map((date) => ({
@@ -1570,6 +2602,66 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     })),
   };
 
+  const relationshipNodes: RelationshipNode[] = Array.from(users.entries())
+    .map(([name, acc]) => ({
+      id: name,
+      messages: acc.messages,
+      channels: userChannels.get(name)?.size || 0,
+      replies_out: relationshipOutbound.get(name) || 0,
+      replies_in: relationshipInbound.get(name) || 0,
+      dm_signals: dmSignalsByUser.get(name) || 0,
+      top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
+    }))
+    .sort((a, b) => b.messages - a.messages)
+    .slice(0, 220);
+
+  const relationshipNodeSet = new Set(relationshipNodes.map((node) => node.id));
+  const relationshipEdgeStats: RelationshipEdge[] = Array.from(relationshipEdges.values())
+    .filter(
+      (edge) =>
+        relationshipNodeSet.has(edge.source) &&
+        relationshipNodeSet.has(edge.target) &&
+        edge.weight >= 1,
+    )
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 1800);
+
+  const alignmentNodes = relationshipNodes.slice(0, 120);
+  const alignmentEdges: TopicAlignmentEdge[] = [];
+  for (let i = 0; i < alignmentNodes.length; i += 1) {
+    for (let j = i + 1; j < alignmentNodes.length; j += 1) {
+      const left = alignmentNodes[i];
+      const right = alignmentNodes[j];
+      const leftTopics = userTopicCounts.get(left.id) || new Map<string, number>();
+      const rightTopics = userTopicCounts.get(right.id) || new Map<string, number>();
+      if (leftTopics.size === 0 || rightTopics.size === 0) continue;
+
+      const similarity = cosineSimilarity(leftTopics, rightTopics);
+      if (similarity < 0.18) continue;
+
+      const shared = Array.from(leftTopics.keys())
+        .filter((topic) => rightTopics.has(topic))
+        .map((topic) => ({
+          topic,
+          score: Math.min(leftTopics.get(topic) || 0, rightTopics.get(topic) || 0),
+        }))
+        .sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return a.topic.localeCompare(b.topic);
+        });
+      if (shared.length < 2) continue;
+
+      alignmentEdges.push({
+        source: left.id,
+        target: right.id,
+        similarity: Number(similarity.toFixed(3)),
+        overlap_count: shared.length,
+        shared_topics: shared.slice(0, 4).map((item) => item.topic),
+      });
+    }
+  }
+  alignmentEdges.sort((a, b) => b.similarity - a.similarity);
+
   return {
     window_days: windowDaysValue,
     generated_at: new Date().toISOString(),
@@ -1599,6 +2691,28 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
     topics: topicStats,
     cooccurrence: cooccurrenceStats,
     seasonality,
+    network: {
+      relationships: {
+        nodes: relationshipNodes,
+        edges: relationshipEdgeStats,
+        summaries: {
+          included_nodes: relationshipNodes.length,
+          total_users_in_window: users.size,
+          total_messages: rows.length,
+          directed_edges: relationshipEdgeStats.length,
+          dm_signal_messages: dmSignalMessages,
+        },
+      },
+      topic_alignment: {
+        nodes: alignmentNodes,
+        edges: alignmentEdges.slice(0, 1400),
+        summaries: {
+          included_nodes: alignmentNodes.length,
+          compared_nodes: alignmentNodes.length,
+          alignment_edges: alignmentEdges.length,
+        },
+      },
+    },
   };
 }
 

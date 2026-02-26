@@ -6,15 +6,15 @@
     <string>com.vibez-monitor.sync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/braydon/projects/personal/vibez-monitor/backend/.venv/bin/python</string>
-        <string>/Users/braydon/projects/personal/vibez-monitor/backend/scripts/run_sync.py</string>
+        <string>__VIBEZ_ROOT__/backend/.venv/bin/python</string>
+        <string>__VIBEZ_ROOT__/backend/scripts/run_sync.py</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/braydon/projects/personal/vibez-monitor</string>
+    <string>__VIBEZ_ROOT__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>VIBEZ_DB_PATH</key>
-        <string>/Users/braydon/projects/personal/vibez-monitor/vibez.db</string>
+        <string>__VIBEZ_ROOT__/vibez.db</string>
         <key>BEEPER_API_URL</key>
         <string>http://localhost:23373</string>
     </dict>
@@ -23,8 +23,8 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/sync-stdout.log</string>
+    <string>__LOG_DIR__/sync-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/sync-stderr.log</string>
+    <string>__LOG_DIR__/sync-stderr.log</string>
 </dict>
 </plist>

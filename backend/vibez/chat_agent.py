@@ -13,12 +13,13 @@ import anthropic
 from vibez.config import Config
 from vibez.db import get_connection
 from vibez.dossier import load_dossier, get_voice_profile
+from vibez.profile import get_subject_name, get_subject_possessive
 
 logger = logging.getLogger("vibez.chat_agent")
 
-CHAT_SYSTEM = """You are Braydon's chat analyst for the Vibez WhatsApp ecosystem.
+CHAT_SYSTEM_TEMPLATE = """You are {subject_possessive} chat analyst for the Vibez WhatsApp ecosystem.
 You answer questions about what's happening in the group chats, who said what,
-trending topics, and help Braydon understand conversations he may have missed.
+trending topics, and help {subject_name} understand conversations they may have missed.
 
 Be concise, specific, and cite who said what when relevant. If you don't have
 enough context to answer, say so clearly."""
@@ -96,6 +97,9 @@ def get_recent_summary(db_path: Path) -> str:
 
 async def chat(config: Config, question: str, lookback_days: int = 7) -> str:
     """Answer a question about the chat content."""
+    subject_name = get_subject_name(config.subject_name)
+    subject_possessive = get_subject_possessive(subject_name)
+
     # Search for relevant messages
     messages = search_messages(config.db_path, question, lookback_days)
 
@@ -103,7 +107,7 @@ async def chat(config: Config, question: str, lookback_days: int = 7) -> str:
     briefing_context = get_recent_summary(config.db_path)
 
     # Load dossier for profile context
-    dossier = load_dossier()
+    dossier = load_dossier(config.dossier_path)
     voice = get_voice_profile(dossier) if dossier else ""
 
     # Build context block
@@ -130,7 +134,10 @@ suggest concrete actions."""
     response = client.messages.create(
         model=config.synthesis_model,
         max_tokens=1024,
-        system=CHAT_SYSTEM,
+        system=CHAT_SYSTEM_TEMPLATE.format(
+            subject_name=subject_name,
+            subject_possessive=subject_possessive,
+        ),
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text

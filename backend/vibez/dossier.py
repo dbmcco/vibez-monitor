@@ -6,14 +6,19 @@ import json
 import logging
 from pathlib import Path
 
-logger = logging.getLogger("vibez.dossier")
+from vibez.profile import (
+    DEFAULT_SUBJECT_NAME,
+    get_dossier_path,
+    get_subject_name,
+    get_subject_possessive,
+)
 
-DOSSIER_PATH = Path.home() / ".dossier" / "context.json"
+logger = logging.getLogger("vibez.dossier")
 
 
 def load_dossier(path: Path | None = None) -> dict | None:
     """Load the dossier context.json. Returns None if unavailable."""
-    p = path or DOSSIER_PATH
+    p = path or get_dossier_path()
     if not p.exists():
         logger.warning("Dossier not found at %s", p)
         return None
@@ -24,12 +29,16 @@ def load_dossier(path: Path | None = None) -> dict | None:
         return None
 
 
-def format_dossier_for_classifier(dossier: dict) -> str:
+def format_dossier_for_classifier(
+    dossier: dict, subject_name: str = DEFAULT_SUBJECT_NAME
+) -> str:
     """Format dossier context for injection into classifier prompts."""
+    resolved_subject = get_subject_name(subject_name)
+    subject_possessive = get_subject_possessive(resolved_subject)
     identity = dossier.get("identity", {})
     summary = dossier.get("summary", "")
 
-    lines = ["BRAYDON'S EXPERTISE & CONTRIBUTION LENS:"]
+    lines = [f"{subject_possessive.upper()} EXPERTISE & CONTRIBUTION LENS:"]
 
     if identity.get("expertise"):
         lines.append(f"Expertise: {identity['expertise']}")
@@ -51,17 +60,21 @@ def format_dossier_for_classifier(dossier: dict) -> str:
 
     lines.append(
         "\nWhen flagging contribution opportunities, match against these specific lenses — "
-        "not just topic keywords, but where Braydon's unique perspective adds value."
+        f"not just topic keywords, but where {subject_possessive} unique perspective adds value."
     )
     return "\n".join(lines)
 
 
-def format_dossier_for_synthesis(dossier: dict) -> str:
+def format_dossier_for_synthesis(
+    dossier: dict, subject_name: str = DEFAULT_SUBJECT_NAME
+) -> str:
     """Format dossier context for injection into synthesis prompts."""
+    resolved_subject = get_subject_name(subject_name)
+    subject_possessive = get_subject_possessive(resolved_subject)
     identity = dossier.get("identity", {})
     summary = dossier.get("summary", "")
 
-    lines = ["BRAYDON'S PROFILE (for contribution matching):"]
+    lines = [f"{subject_possessive.upper()} PROFILE (for contribution matching):"]
 
     if identity.get("voice_summary"):
         lines.append(f"Voice: {identity['voice_summary'][:400]}")
@@ -73,8 +86,8 @@ def format_dossier_for_synthesis(dossier: dict) -> str:
         lines.append(f"Current work: {summary[:500]}")
 
     lines.append(
-        "\nMatch contributions to his SPECIFIC expertise, not generic 'you could add value here.' "
-        "Draft messages should sound like him — warm, question-driven, concrete examples, "
+        f"\nMatch contributions to {subject_possessive} SPECIFIC expertise, not generic 'you could add value here.' "
+        f"Draft messages should sound like {resolved_subject} — warm, question-driven, concrete examples, "
         "governance framing, connecting dots across domains."
     )
     return "\n".join(lines)

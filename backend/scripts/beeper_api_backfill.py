@@ -36,10 +36,22 @@ def api_get(path: str, token: str, params: dict | None = None) -> dict:
 
 def get_whatsapp_groups(token: str) -> list[dict]:
     """List all WhatsApp group chats."""
+    def is_whatsapp_group(chat: dict) -> bool:
+        network = str(chat.get("network", "")).strip().casefold()
+        account_id = str(chat.get("accountID", "")).strip().casefold()
+        return (
+            chat.get("type") == "group"
+            and (
+                network == "whatsapp"
+                or account_id == "whatsapp"
+                or account_id.startswith("whatsapp")
+            )
+        )
+
     data = api_get("/v1/chats", token, {"limit": "200"})
     return [
         c for c in data["items"]
-        if c.get("network") == "WhatsApp" and c.get("type") == "group"
+        if is_whatsapp_group(c)
     ]
 
 

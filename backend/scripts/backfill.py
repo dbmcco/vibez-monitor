@@ -1,5 +1,6 @@
 """Import existing WhatsApp chat exports into the vibez-monitor database."""
 
+import argparse
 import asyncio
 import json
 import re
@@ -18,9 +19,7 @@ TS_RE = re.compile(
     r"^\s*[\u200e\u200f\u202a\u202b\u202c\ufeff]*\[(\d{1,2}/\d{1,2}/\d{2,4}),\s+([0-9:]+\s*[AP]M)\]\s+(.*)$"
 )
 
-EXPORT_DIR = Path(
-    "/Users/braydon/projects/personal/WhatsApp Chat - The vibez (code code code)"
-)
+DEFAULT_EXPORT_DIR = Path(__file__).resolve().parents[2] / "exports"
 
 
 def normalize_text(value: str) -> str:
@@ -119,11 +118,23 @@ def parse_and_import(zip_path: Path, db_path: Path) -> list[dict]:
 
 def main():
     """Import exports without classification (classification is expensive and optional)."""
+    parser = argparse.ArgumentParser(description="Import WhatsApp export zips into vibez.db")
+    parser.add_argument(
+        "--export-dir",
+        default=str(DEFAULT_EXPORT_DIR),
+        help="Directory containing WhatsApp export .zip files.",
+    )
+    args = parser.parse_args()
+
+    export_dir = Path(args.export_dir).expanduser()
     config = Config.from_env()
     init_db(config.db_path)
 
-    zip_paths = sorted(EXPORT_DIR.glob("*.zip"))
-    print(f"Found {len(zip_paths)} export zips")
+    zip_paths = sorted(export_dir.glob("*.zip"))
+    print(f"Found {len(zip_paths)} export zips in {export_dir}")
+    if not zip_paths:
+        print("No zip files found. Pass --export-dir to point at your chat export directory.")
+        return
 
     total = 0
     for zp in zip_paths:

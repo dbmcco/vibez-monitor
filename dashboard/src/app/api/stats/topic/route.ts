@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getTopicDrilldown, TopicDrilldown } from "@/lib/db";
+import { getSubjectName, getSubjectPossessive } from "@/lib/profile";
 
-const TOPIC_SYSTEM_PROMPT = `You are Braydon's strategic topic analyst for the Vibez community.
+function buildTopicSystemPrompt(subjectName: string, subjectPossessive: string): string {
+  return `You are ${subjectPossessive} strategic topic analyst for the Vibez community.
 Given topic analytics and message excerpts, provide:
 1) a concise summary of what matters now,
-2) practical guidance for how Braydon should engage,
+2) practical guidance for how ${subjectName} should engage,
 3) watch-outs or blind spots,
 4) high-leverage next questions.
 
 Be specific, concrete, and action-oriented.`;
+}
 
 interface TopicInsights {
   summary: string;
@@ -72,6 +75,8 @@ function parseInsights(raw: string): TopicInsights | null {
 async function generateTopicInsights(drilldown: TopicDrilldown): Promise<TopicInsights | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
+  const subjectName = getSubjectName();
+  const subjectPossessive = getSubjectPossessive(subjectName);
 
   const client = new Anthropic({ apiKey });
   const topUsers = drilldown.top_users
@@ -123,7 +128,7 @@ Return valid JSON only with keys:
   const response = await client.messages.create({
     model: process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6",
     max_tokens: 900,
-    system: TOPIC_SYSTEM_PROMPT,
+    system: buildTopicSystemPrompt(subjectName, subjectPossessive),
     messages: [{ role: "user", content: prompt }],
   });
 

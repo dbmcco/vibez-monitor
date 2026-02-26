@@ -29,6 +29,25 @@ def test_config_defaults(tmp_path):
     assert cfg.sync_timeout_ms == 30000
     assert cfg.classifier_model == "claude-sonnet-4-6"
     assert cfg.synthesis_model == "claude-sonnet-4-6"
+    assert cfg.subject_name == "User"
+    assert cfg.self_aliases == ("User",)
+
+
+def test_config_profile_overrides(tmp_path):
+    env = {
+        "ANTHROPIC_API_KEY": "sk-test-key",
+        "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
+        "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
+        "VIBEZ_SUBJECT_NAME": "Alex",
+        "VIBEZ_SELF_ALIASES": "alex,a.smith",
+        "VIBEZ_DOSSIER_PATH": str(tmp_path / "custom_dossier.json"),
+    }
+    with patch.dict(os.environ, env, clear=False):
+        cfg = Config.from_env()
+
+    assert cfg.subject_name == "Alex"
+    assert cfg.self_aliases == ("Alex", "a.smith")
+    assert str(cfg.dossier_path).endswith("custom_dossier.json")
 
 
 def test_read_beeper_token(tmp_path):

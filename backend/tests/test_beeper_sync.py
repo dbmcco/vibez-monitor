@@ -31,6 +31,21 @@ def test_get_whatsapp_groups_filters_to_whatsapp_groups(monkeypatch):
     assert [g["id"] for g in groups] == ["g1"]
 
 
+def test_get_whatsapp_groups_accepts_account_id_when_network_missing(monkeypatch):
+    payload = {
+        "items": [
+            {"id": "g1", "accountID": "whatsapp", "type": "group", "title": "The vibez"},
+            {"id": "g2", "accountID": "whatsapp", "type": "dm", "title": "Direct thread"},
+            {"id": "g3", "accountID": "slackgo.T123", "type": "group", "title": "General"},
+        ]
+    }
+    monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
+
+    groups = get_whatsapp_groups("http://localhost:23373", "token")
+
+    assert [g["id"] for g in groups] == ["g1"]
+
+
 def test_get_whatsapp_groups_excludes_known_non_community_groups(monkeypatch):
     payload = {
         "items": [
@@ -106,6 +121,21 @@ def test_parse_skips_empty_text():
         "sortKey": "666",
         "type": "TEXT",
         "text": "",
+    }
+    result = parse_beeper_message(msg, "Test")
+    assert result is None
+
+
+def test_parse_skips_encrypted_placeholder():
+    msg = {
+        "id": "667",
+        "chatID": "!room:beeper.local",
+        "senderID": "@u:b",
+        "senderName": "Someone",
+        "timestamp": "2026-02-18T10:00:00.000Z",
+        "sortKey": "667",
+        "type": "TEXT",
+        "text": "  Encrypted  ",
     }
     result = parse_beeper_message(msg, "Test")
     assert result is None

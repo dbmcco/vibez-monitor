@@ -48,6 +48,17 @@ def test_build_synthesis_prompt(tmp_db):
 
 def test_parse_synthesis_report_valid():
     raw = json.dumps({
+        "daily_memo": "People moved from tool demos to governance tradeoffs.",
+        "conversation_arcs": [
+            {
+                "title": "Agent controls",
+                "participants": ["Sam", "Harper"],
+                "core_exchange": "Debate around boundaries for remote execution.",
+                "why_it_matters": "This will shape trust and adoption.",
+                "likely_next": "More experiments with safeguards.",
+                "how_to_add_value": "Share concrete guardrail patterns.",
+            }
+        ],
         "briefing": [{"title": "Amplifier discussion", "participants": ["Sam", "Harper"],
                        "insights": "New context management approach", "links": []}],
         "contributions": [{"thread": "Amplifier discussion",
@@ -56,12 +67,16 @@ def test_parse_synthesis_report_valid():
         "links": [],
     })
     report = parse_synthesis_report(raw)
+    assert report["daily_memo"]
+    assert len(report["conversation_arcs"]) == 1
     assert len(report["briefing"]) == 1
     assert len(report["contributions"]) == 1
 
 
 def test_parse_synthesis_report_invalid():
     report = parse_synthesis_report("not json")
+    assert report["daily_memo"] == ""
+    assert report["conversation_arcs"] == []
     assert report["briefing"] == []
     assert report["contributions"] == []
 
@@ -69,6 +84,18 @@ def test_parse_synthesis_report_invalid():
 def test_make_pithy_report_trims_and_limits_items():
     long_text = " ".join(["word"] * 200)
     report = {
+        "daily_memo": long_text,
+        "conversation_arcs": [
+            {
+                "title": long_text,
+                "participants": ["Alice"] * 10,
+                "core_exchange": long_text,
+                "why_it_matters": long_text,
+                "likely_next": long_text,
+                "how_to_add_value": long_text,
+            }
+            for _ in range(8)
+        ],
         "briefing": [
             {
                 "title": long_text,
@@ -111,6 +138,11 @@ def test_make_pithy_report_trims_and_limits_items():
 
     pithy = make_pithy_report(report)
 
+    assert len(pithy["daily_memo"]) <= 523
+    assert len(pithy["conversation_arcs"]) == 4
+    assert len(pithy["conversation_arcs"][0]["participants"]) == 6
+    assert len(pithy["conversation_arcs"][0]["core_exchange"]) <= 183
+    assert len(pithy["conversation_arcs"][0]["how_to_add_value"]) <= 143
     assert len(pithy["briefing"]) == 5
     assert len(pithy["contributions"]) == 5
     assert len(pithy["links"]) == 10

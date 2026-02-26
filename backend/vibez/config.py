@@ -7,6 +7,12 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vibez.profile import (
+    DEFAULT_SUBJECT_NAME,
+    get_dossier_path,
+    get_self_aliases,
+    get_subject_name,
+)
 
 def read_beeper_token(beeper_db_path: str | Path) -> str:
     """Read the Matrix access token from Beeper's local database."""
@@ -36,6 +42,9 @@ class Config:
     classifier_model: str = "claude-sonnet-4-6"
     synthesis_model: str = "claude-sonnet-4-6"
     synthesis_hour: int = 6
+    subject_name: str = DEFAULT_SUBJECT_NAME
+    self_aliases: tuple[str, ...] = field(default_factory=get_self_aliases)
+    dossier_path: Path = field(default_factory=get_dossier_path)
     log_dir: Path = field(
         default_factory=lambda: Path.home() / "Library/Logs/vibez-monitor"
     )
@@ -58,6 +67,11 @@ class Config:
         token = os.environ.get("MATRIX_ACCESS_TOKEN", "")
         if not token and beeper_db.exists():
             token = read_beeper_token(beeper_db)
+        subject_name = get_subject_name(os.environ.get("VIBEZ_SUBJECT_NAME"))
+        self_aliases = get_self_aliases(
+            subject_name=subject_name,
+            raw_aliases=os.environ.get("VIBEZ_SELF_ALIASES"),
+        )
 
         return cls(
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
@@ -74,6 +88,9 @@ class Config:
             classifier_model=os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-6"),
             synthesis_model=os.environ.get("SYNTHESIS_MODEL", "claude-sonnet-4-6"),
             synthesis_hour=int(os.environ.get("SYNTHESIS_HOUR", "6")),
+            subject_name=subject_name,
+            self_aliases=self_aliases,
+            dossier_path=get_dossier_path(os.environ.get("VIBEZ_DOSSIER_PATH")),
             log_dir=Path(
                 os.environ.get(
                     "LOG_DIR", str(Path.home() / "Library/Logs/vibez-monitor")

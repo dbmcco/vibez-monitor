@@ -68,3 +68,13 @@ def test_default_value_config_seeded(tmp_db):
     conn = get_connection(tmp_db)
     cursor = conn.execute("SELECT COUNT(*) FROM value_config")
     assert cursor.fetchone()[0] == 3  # topics, projects, alert_threshold
+
+
+def test_daily_report_extended_columns_present(tmp_db):
+    init_db(tmp_db)
+    conn = get_connection(tmp_db)
+    cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(daily_reports)")
+    }
+    assert "daily_memo" in cols
+    assert "conversation_arcs" in cols

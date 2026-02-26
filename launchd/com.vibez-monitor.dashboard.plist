@@ -7,11 +7,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/braydon/projects/personal/vibez-monitor/dashboard/scripts/start-dashboard.sh</string>
+        <string>__VIBEZ_ROOT__/dashboard/scripts/start-dashboard.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/braydon/projects/personal/vibez-monitor/dashboard</string>
+    <string>__VIBEZ_ROOT__/dashboard</string>
 
     <key>RunAtLoad</key>
     <true/>
@@ -19,16 +19,10 @@
     <key>KeepAlive</key>
     <true/>
 
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/Users/braydon/.nvm/versions/node/v22.22.0/bin:/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    </dict>
-
     <key>StandardOutPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/dashboard-stdout.log</string>
+    <string>__LOG_DIR__/dashboard-stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/dashboard-stderr.log</string>
+    <string>__LOG_DIR__/dashboard-stderr.log</string>
 </dict>
 </plist>

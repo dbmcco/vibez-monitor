@@ -24,6 +24,7 @@ logger = logging.getLogger("vibez.sync")
 DEFAULT_API_BASE = "http://localhost:23373"
 POLL_INTERVAL = 30  # seconds between polls
 TOKEN_WARN_DAYS = 3  # warn when token expires within this many days
+IGNORED_TEXT_BODIES = {"encrypted"}
 
 # Default groups to exclude from monitoring (not part of the AGI community)
 DEFAULT_EXCLUDED_GROUPS = {
@@ -93,11 +94,23 @@ def get_whatsapp_groups(
     """List WhatsApp group chats from Beeper, excluding non-community groups."""
     if excluded_groups is None:
         excluded_groups = load_excluded_groups()
+
+    def is_whatsapp_group(chat: dict) -> bool:
+        network = str(chat.get("network", "")).strip().casefold()
+        account_id = str(chat.get("accountID", "")).strip().casefold()
+        return (
+            chat.get("type") == "group"
+            and (
+                network == "whatsapp"
+                or account_id == "whatsapp"
+                or account_id.startswith("whatsapp")
+            )
+        )
+
     data = api_get(base_url, "/v1/chats", token, {"limit": "200"})
     return [
         c for c in data.get("items", [])
-        if c.get("network") == "WhatsApp"
-        and c.get("type") == "group"
+        if is_whatsapp_group(c)
         and c.get("title") not in excluded_groups
     ]
 
@@ -111,7 +124,10 @@ def parse_beeper_message(msg: dict, room_name: str) -> dict[str, Any] | None:
         return None
 
     text = msg.get("text", "") or ""
-    if not text.strip():
+    normalized_text = " ".join(text.split()).casefold()
+    if not normalized_text:
+        return None
+    if normalized_text in IGNORED_TEXT_BODIES:
         return None
 
     ts_str = msg["timestamp"].replace("Z", "+00:00")

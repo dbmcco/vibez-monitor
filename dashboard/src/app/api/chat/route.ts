@@ -2,28 +2,51 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchMessages, getLatestBriefingMd } from "@/lib/db";
 import fs from "fs";
-import path from "path";
+import { getDossierPath, getSubjectName, getSubjectPossessive } from "@/lib/profile";
 
-const SYSTEM_PROMPT = `You are Braydon's chat analyst for the Vibez WhatsApp ecosystem.
+function buildSystemPrompt(subjectName: string, subjectPossessive: string): string {
+  return `You are ${subjectPossessive} chat analyst for the Vibez WhatsApp ecosystem.
 You answer questions about what's happening in the group chats, who said what,
-trending topics, and help Braydon understand conversations he may have missed.
+trending topics, and help ${subjectName} understand conversations they may have missed.
 
 Be concise, specific, and cite who said what when relevant. If you don't have
-enough context to answer, say so clearly.`;
+enough context to answer, say so clearly.
 
-function loadDossierContext(): string {
+When the user asks follow-ups, use the conversation context provided.`;
+}
+
+interface ChatHistoryItem {
+  role: "user" | "assistant";
+  content: string;
+}
+
+function sanitizeHistory(input: unknown): ChatHistoryItem[] {
+  if (!Array.isArray(input)) return [];
+  const items: ChatHistoryItem[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const role = (item as { role?: unknown }).role;
+    const content = (item as { content?: unknown }).content;
+    if (
+      (role === "user" || role === "assistant") &&
+      typeof content === "string" &&
+      content.trim().length > 0
+    ) {
+      items.push({ role, content: content.trim().slice(0, 1200) });
+    }
+  }
+  return items.slice(-10);
+}
+
+function loadDossierContext(subjectName: string, subjectPossessive: string): string {
   try {
-    const dossierPath = path.join(
-      process.env.HOME || "",
-      ".dossier",
-      "context.json"
-    );
+    const dossierPath = getDossierPath();
     const raw = fs.readFileSync(dossierPath, "utf-8");
     const dossier = JSON.parse(raw);
     const identity = dossier.identity || {};
     const parts: string[] = [];
     if (identity.voice_summary)
-      parts.push(`Braydon's profile: ${identity.voice_summary.slice(0, 300)}`);
+      parts.push(`${subjectPossessive} profile: ${identity.voice_summary.slice(0, 300)}`);
     if (identity.expertise)
       parts.push(`Expertise: ${identity.expertise}`);
     if (dossier.summary)
@@ -36,7 +59,10 @@ function loadDossierContext(): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { question, lookbackDays = 7 } = await request.json();
+    const { question, lookbackDays = 7, history } = await request.json();
+    const subjectName = getSubjectName();
+    const subjectPossessive = getSubjectPossessive(subjectName);
+    const systemPrompt = buildSystemPrompt(subjectName, subjectPossessive);
 
     if (!question || typeof question !== "string") {
       return NextResponse.json(
@@ -45,6 +71,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const chatHistory = sanitizeHistory(history);
+
     // Search for relevant messages
     const messages = searchMessages({ query: question, lookbackDays });
 
@@ -52,7 +80,7 @@ export async function POST(request: NextRequest) {
     const briefing = getLatestBriefingMd();
 
     // Load dossier context
-    const dossierContext = loadDossierContext();
+    const dossierContext = loadDossierContext(subjectName, subjectPossessive);
 
     // Build message context
     let msgBlock = "";
@@ -70,9 +98,22 @@ export async function POST(request: NextRequest) {
       msgBlock = "(no matching messages found in the last " + lookbackDays + " days)";
     }
 
+    let historyBlock = "";
+    if (chatHistory.length > 0) {
+      historyBlock =
+        "Conversation context:\n" +
+        chatHistory
+          .map(
+            (item) =>
+              `${item.role === "user" ? "User" : "Assistant"}: ${item.content}`
+          )
+          .join("\n\n") +
+        "\n\n";
+    }
+
     const prompt = `${dossierContext ? dossierContext + "\n\n" : ""}${
       briefing ? "Latest briefing:\n" + briefing.slice(0, 1500) + "\n\n" : ""
-    }Relevant messages (${messages.length} found):
+    }${historyBlock}Relevant messages (${messages.length} found):
 ${msgBlock}
 
 Question: ${question}
@@ -91,7 +132,7 @@ Answer based on the messages above. Be specific — cite who said what, which gr
     const response = await client.messages.create({
       model: process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6",
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: "user", content: prompt }],
     });
 

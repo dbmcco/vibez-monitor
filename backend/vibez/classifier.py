@@ -13,17 +13,22 @@ import anthropic
 from vibez.config import Config
 from vibez.db import get_connection
 from vibez.paia_events_adapter import publish_event
+from vibez.profile import (
+    DEFAULT_SUBJECT_NAME,
+    get_subject_name,
+    get_subject_possessive,
+)
 
 logger = logging.getLogger("vibez.classifier")
 
-CLASSIFY_SYSTEM = """You are a message classifier for Braydon's WhatsApp attention firewall.
-You classify messages by relevance to Braydon's interests and identify contribution opportunities.
+CLASSIFY_SYSTEM_TEMPLATE = """You are a message classifier for {subject_possessive} WhatsApp attention firewall.
+You classify messages by relevance to {subject_name}'s interests and identify contribution opportunities.
 Always respond with valid JSON only. No prose, no markdown fences."""
 
 CLASSIFY_TEMPLATE = """Classify this WhatsApp message.
 
-Braydon's interest topics: {topics}
-Braydon's active projects: {projects}
+{subject_name}'s interest topics: {topics}
+{subject_name}'s active projects: {projects}
 
 {dossier_context}
 
@@ -37,12 +42,12 @@ Recent thread context:
 
 Respond with JSON:
 {{
-  "relevance_score": <0-10, how relevant to Braydon's interests>,
+  "relevance_score": <0-10, how relevant to {subject_name}'s interests>,
   "topics": [<topic tags from the message>],
   "entities": [<tools, repos, concepts, people mentioned>],
-  "contribution_flag": <true if Braydon could add value based on his projects/expertise>,
-  "contribution_themes": [<if flagged, 1-3 theme slugs for what Braydon could contribute to, e.g. "multi-agent-orchestration", "local-first-tools", "context-management">],
-  "contribution_hint": "<if flagged, specific action: what could he share, build, or respond with>",
+  "contribution_flag": <true if {subject_name} could add value based on {subject_possessive} projects/expertise>,
+  "contribution_themes": [<if flagged, 1-3 theme slugs for what {subject_name} could contribute to, e.g. "multi-agent-orchestration", "local-first-tools", "context-management">],
+  "contribution_hint": "<if flagged, specific action: what could {subject_name} share, build, or respond with>",
   "alert_level": "<'hot' if needs attention now, 'digest' if include in daily summary, 'none' if low value>"
 }}"""
 
@@ -52,8 +57,11 @@ def build_classify_prompt(
     value_config: dict[str, Any],
     context_messages: list[dict[str, Any]] | None = None,
     dossier_context: str = "",
+    subject_name: str = DEFAULT_SUBJECT_NAME,
 ) -> str:
     """Build the classification prompt for a single message."""
+    resolved_subject = get_subject_name(subject_name)
+    subject_possessive = get_subject_possessive(resolved_subject)
     context_lines = ""
     if context_messages:
         for cm in context_messages[-3:]:
@@ -62,6 +70,8 @@ def build_classify_prompt(
         context_lines = "  (no recent context)"
 
     return CLASSIFY_TEMPLATE.format(
+        subject_name=resolved_subject,
+        subject_possessive=subject_possessive,
         topics=", ".join(value_config.get("topics", [])),
         projects=", ".join(value_config.get("projects", [])),
         dossier_context=dossier_context,
@@ -182,20 +192,35 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     value_cfg = load_value_config(config.db_path)
+    subject_name = get_subject_name(config.subject_name)
+    subject_possessive = get_subject_possessive(subject_name)
 
     # Load dossier once for the batch
-    dossier = load_dossier()
-    dossier_ctx = format_dossier_for_classifier(dossier) if dossier else ""
+    dossier = load_dossier(config.dossier_path)
+    dossier_ctx = (
+        format_dossier_for_classifier(dossier, subject_name=subject_name)
+        if dossier
+        else ""
+    )
 
     for msg in messages:
         try:
             context = get_recent_context(config.db_path, msg["room_id"], msg["timestamp"])
-            prompt = build_classify_prompt(msg, value_cfg, context, dossier_context=dossier_ctx)
+            prompt = build_classify_prompt(
+                msg,
+                value_cfg,
+                context,
+                dossier_context=dossier_ctx,
+                subject_name=subject_name,
+            )
 
             response = client.messages.create(
                 model=config.classifier_model,
                 max_tokens=256,
-                system=CLASSIFY_SYSTEM,
+                system=CLASSIFY_SYSTEM_TEMPLATE.format(
+                    subject_name=subject_name,
+                    subject_possessive=subject_possessive,
+                ),
                 messages=[{"role": "user", "content": prompt}],
             )
             raw_text = response.content[0].text
