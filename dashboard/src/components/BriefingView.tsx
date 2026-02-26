@@ -129,6 +129,38 @@ interface VibezRadarSnapshot {
   thread_quality: VibezRadarThreadQuality[];
 }
 
+interface SemanticArcMessage {
+  id: string;
+  sender_name: string;
+  room_name: string;
+  body: string;
+  timestamp: number;
+}
+
+interface SemanticArc {
+  id: string;
+  title: string;
+  message_count: number;
+  people: number;
+  channels: number;
+  coherence: number;
+  momentum: "rising" | "steady" | "cooling";
+  first_seen: string;
+  last_seen: string;
+  top_people: string[];
+  sample_messages: SemanticArcMessage[];
+}
+
+interface SemanticBriefing {
+  enabled: boolean;
+  coverage_pct: number;
+  orphan_pct: number;
+  avg_coherence: number;
+  drift_risk: "low" | "medium" | "high";
+  checks: string[];
+  arcs: SemanticArc[];
+}
+
 interface StoredConversationArc {
   title?: string;
   participants?: string[];
@@ -152,6 +184,7 @@ interface Props {
   evidence_messages?: EvidenceMessage[];
   recent_update?: RecentUpdateSnapshot | null;
   radar?: VibezRadarSnapshot | null;
+  semantic_briefing?: SemanticBriefing | null;
 }
 
 const STOPWORDS = new Set([
@@ -324,6 +357,12 @@ function qualityBadge(quality: "strong" | "mixed" | "thin"): string {
   if (quality === "strong") return "border-emerald-400/40 bg-emerald-400/10 text-emerald-200";
   if (quality === "mixed") return "border-amber-400/40 bg-amber-400/10 text-amber-200";
   return "border-rose-400/40 bg-rose-400/10 text-rose-200";
+}
+
+function semanticRiskBadge(risk: "low" | "medium" | "high"): string {
+  if (risk === "high") return "border-rose-400/40 bg-rose-400/10 text-rose-200";
+  if (risk === "medium") return "border-amber-400/40 bg-amber-400/10 text-amber-200";
+  return "border-emerald-400/40 bg-emerald-400/10 text-emerald-200";
 }
 
 type BriefingTab = "snapshot" | "daily" | "evidence" | "radar";
@@ -605,6 +644,7 @@ export function BriefingView({
   evidence_messages = [],
   recent_update = null,
   radar = null,
+  semantic_briefing = null,
 }: Props) {
   const threads = parseJson<Thread[]>(briefing_json, []);
   const contributions = parseJson<Contribution[]>(contributions_json, []);
@@ -897,6 +937,103 @@ export function BriefingView({
         </section>
       )}
 
+      {activeTab === "radar" && semantic_briefing?.enabled && (
+        <section className="vibe-panel fade-up rounded-xl p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="vibe-title text-lg text-slate-100">Semantic Arc Intelligence</h3>
+            <span
+              className={`rounded border px-2 py-0.5 text-xs uppercase tracking-wide ${semanticRiskBadge(
+                semantic_briefing.drift_risk,
+              )}`}
+            >
+              Drift {semantic_briefing.drift_risk}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-slate-300">
+            Embedding-based cluster view of recent conversations to catch arcs that topic tags miss.
+          </p>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+              <p className="text-xs text-slate-400">Semantic Coverage</p>
+              <p className="mt-1 text-xl font-semibold text-slate-100">
+                {semantic_briefing.coverage_pct.toFixed(1)}%
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+              <p className="text-xs text-slate-400">Unclustered</p>
+              <p className="mt-1 text-xl font-semibold text-slate-100">
+                {semantic_briefing.orphan_pct.toFixed(1)}%
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+              <p className="text-xs text-slate-400">Avg Coherence</p>
+              <p className="mt-1 text-xl font-semibold text-slate-100">
+                {(semantic_briefing.avg_coherence * 100).toFixed(1)}%
+              </p>
+            </div>
+          </div>
+
+          {semantic_briefing.checks.length > 0 && (
+            <div className="mt-4 rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+              <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                Semantic Checks
+              </p>
+              <ul className="mt-2 space-y-1 text-sm text-slate-300">
+                {semantic_briefing.checks.slice(0, 3).map((check, index) => (
+                  <li key={`${check}-${index}`} className="list-disc pl-1">
+                    {check}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {semantic_briefing.arcs.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                Top Semantic Arcs
+              </p>
+              <div className="grid gap-3 md:grid-cols-2">
+                {semantic_briefing.arcs.slice(0, 6).map((arc) => (
+                  <article
+                    key={arc.id}
+                    className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-100">{arc.title}</p>
+                      <span
+                        className={`rounded border px-2 py-0.5 text-xs ${
+                          arc.momentum === "rising"
+                            ? "border-rose-400/35 bg-rose-400/10 text-rose-200"
+                            : arc.momentum === "cooling"
+                              ? "border-slate-500/35 bg-slate-700/20 text-slate-300"
+                              : "border-cyan-400/35 bg-cyan-400/10 text-cyan-200"
+                        }`}
+                      >
+                        {arc.momentum}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-400">
+                      {arc.message_count} msgs · {arc.people} people · {arc.channels} channels ·
+                      coherence {(arc.coherence * 100).toFixed(0)}%
+                    </p>
+                    <p className="mt-2 text-xs text-slate-300">
+                      {arc.top_people.slice(0, 4).join(", ")}
+                    </p>
+                    {arc.sample_messages[0] && (
+                      <p className="mt-2 text-xs leading-relaxed text-slate-400">
+                        “{excerpt(arc.sample_messages[0].body, 160)}”
+                      </p>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       {activeTab === "snapshot" && (
         <>
           <section className="grid gap-4 lg:grid-cols-[1.25fr_1fr]">
@@ -949,6 +1086,17 @@ export function BriefingView({
                     {Math.max(trendData.emerging?.length || 0, trendData.fading?.length || 0)}
                   </p>
                 </div>
+                {semantic_briefing?.enabled && (
+                  <div className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+                    <p className="text-xs text-slate-400">Semantic Arcs (14d)</p>
+                    <p className="mt-1 text-xl font-semibold text-slate-100">
+                      {semantic_briefing.arcs.length}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Drift: {semantic_briefing.drift_risk}
+                    </p>
+                  </div>
+                )}
               </div>
             </article>
           </section>

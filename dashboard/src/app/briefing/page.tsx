@@ -114,6 +114,38 @@ interface VibezRadarSnapshot {
   thread_quality: VibezRadarThreadQuality[];
 }
 
+interface SemanticArcMessage {
+  id: string;
+  sender_name: string;
+  room_name: string;
+  body: string;
+  timestamp: number;
+}
+
+interface SemanticArc {
+  id: string;
+  title: string;
+  message_count: number;
+  people: number;
+  channels: number;
+  coherence: number;
+  momentum: "rising" | "steady" | "cooling";
+  first_seen: string;
+  last_seen: string;
+  top_people: string[];
+  sample_messages: SemanticArcMessage[];
+}
+
+interface SemanticBriefing {
+  enabled: boolean;
+  coverage_pct: number;
+  orphan_pct: number;
+  avg_coherence: number;
+  drift_risk: "low" | "medium" | "high";
+  checks: string[];
+  arcs: SemanticArc[];
+}
+
 function localIsoDate(): string {
   const now = new Date();
   const year = now.getFullYear();
@@ -128,6 +160,7 @@ export default function BriefingPage() {
   const [evidenceMessages, setEvidenceMessages] = useState<EvidenceMessage[]>([]);
   const [recentUpdate, setRecentUpdate] = useState<RecentUpdateSnapshot | null>(null);
   const [radar, setRadar] = useState<VibezRadarSnapshot | null>(null);
+  const [semanticBriefing, setSemanticBriefing] = useState<SemanticBriefing | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -144,16 +177,19 @@ export default function BriefingPage() {
             previous_report: Report | null;
             recent_update: RecentUpdateSnapshot | null;
             radar: VibezRadarSnapshot | null;
+            semantic_briefing: SemanticBriefing | null;
           };
           setReport(payload.report || null);
           setPreviousReport(payload.previous_report || null);
           setRecentUpdate(payload.recent_update || null);
           setRadar(payload.radar || null);
+          setSemanticBriefing(payload.semantic_briefing || null);
         } else {
           setReport(null);
           setPreviousReport(null);
           setRecentUpdate(null);
           setRadar(null);
+          setSemanticBriefing(null);
         }
         if (messageResult.status === "fulfilled") {
           const payload = messageResult.value as { messages?: EvidenceMessage[] };
@@ -169,6 +205,7 @@ export default function BriefingPage() {
         setPreviousReport(null);
         setRecentUpdate(null);
         setRadar(null);
+        setSemanticBriefing(null);
         setEvidenceMessages([]);
         setLoading(false);
       });
@@ -224,6 +261,7 @@ export default function BriefingPage() {
         evidence_messages={evidenceMessages}
         recent_update={recentUpdate}
         radar={radar}
+        semantic_briefing={semanticBriefing}
       />
     </div>
   );
