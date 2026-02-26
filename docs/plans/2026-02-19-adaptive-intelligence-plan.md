@@ -77,7 +77,7 @@ def test_analyst_reports_table_exists(tmp_db):
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_db.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_db.py -v`
 Expected: FAIL — `user_feedback` and `analyst_reports` tables don't exist
 
 **Step 3: Add tables to schema**
@@ -177,13 +177,13 @@ def test_init_db_creates_tables(tmp_db):
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_db.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_db.py -v`
 Expected: ALL PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/vibez/db.py backend/tests/test_db.py
 git commit -m "feat: add user_feedback and analyst_reports tables"
 ```
@@ -355,13 +355,13 @@ export async function DELETE(request: NextRequest) {
 
 **Step 3: Run the dashboard to verify API works**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor/dashboard && npm run build`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor/dashboard && npm run build`
 Expected: Build succeeds without TypeScript errors
 
 **Step 4: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add dashboard/src/lib/db.ts dashboard/src/app/api/feedback/route.ts dashboard/src/app/api/settings/route.ts
 git commit -m "feat: add feedback API with dismiss/bookmark CRUD"
 ```
@@ -583,13 +583,13 @@ export default function ContributePage() {
 
 **Step 3: Build and verify**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor/dashboard && npm run build`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor/dashboard && npm run build`
 Expected: Build succeeds
 
 **Step 4: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add dashboard/src/components/ContributionCard.tsx dashboard/src/app/contribute/page.tsx
 git commit -m "feat: add dismiss/bookmark buttons to contribution cards"
 ```
@@ -872,13 +872,13 @@ export function Nav() {
 
 **Step 5: Build and verify**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor/dashboard && npm run build`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor/dashboard && npm run build`
 Expected: Build succeeds
 
 **Step 6: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add dashboard/src/app/queue/page.tsx dashboard/src/app/api/bookmarks/route.ts dashboard/src/lib/db.ts dashboard/src/components/Nav.tsx
 git commit -m "feat: add bookmark queue page with count badge in nav"
 ```
@@ -916,7 +916,7 @@ def test_build_classify_prompt_with_dismissed_themes():
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_classifier.py::test_build_classify_prompt_with_dismissed_themes -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_classifier.py::test_build_classify_prompt_with_dismissed_themes -v`
 Expected: FAIL — `build_classify_prompt() got an unexpected keyword argument 'dismissed_themes'`
 
 **Step 3: Add dismissed_themes parameter to build_classify_prompt**
@@ -990,13 +990,13 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_classifier.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_classifier.py -v`
 Expected: ALL PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/vibez/classifier.py backend/tests/test_classifier.py
 git commit -m "feat: classifier learns from dismissed themes"
 ```
@@ -1027,7 +1027,7 @@ def test_build_synthesis_prompt_with_dismissed_themes(tmp_db):
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_synthesis.py::test_build_synthesis_prompt_with_dismissed_themes -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_synthesis.py::test_build_synthesis_prompt_with_dismissed_themes -v`
 Expected: FAIL
 
 **Step 3: Add dismissed_themes to build_synthesis_prompt**
@@ -1078,13 +1078,13 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
 
 **Step 4: Run tests**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_synthesis.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_synthesis.py -v`
 Expected: ALL PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/vibez/synthesis.py backend/tests/test_synthesis.py
 git commit -m "feat: synthesis deprioritizes dismissed themes"
 ```
@@ -1138,7 +1138,7 @@ def test_format_work_context_prompt():
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_work_context.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_work_context.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'vibez.work_context'`
 
 **Step 3: Implement work_context.py**
@@ -1257,12 +1257,12 @@ DEFAULT_VALUE_CONFIG = {
     "projects": [...],  # unchanged
     "alert_threshold": 7,
     "repos": [
-        "/Users/braydon/projects/experiments/amplifier",
-        "/Users/braydon/projects/experiments/driftdriver",
-        "/Users/braydon/projects/experiments/workgraph",
-        "/Users/braydon/projects/experiments/speedrift-ecosystem",
-        "/Users/braydon/projects/personal/vibez-monitor",
-        "/Users/braydon/projects/personal/moneycommand",
+        "/Users/<user>/projects/experiments/amplifier",
+        "/Users/<user>/projects/experiments/driftdriver",
+        "/Users/<user>/projects/experiments/workgraph",
+        "/Users/<user>/projects/experiments/speedrift-ecosystem",
+        "/Users/<user>/projects/personal/vibez-monitor",
+        "/Users/<user>/projects/personal/moneycommand",
     ],
 }
 ```
@@ -1279,13 +1279,13 @@ def test_default_value_config_seeded(tmp_db):
 
 **Step 4: Run tests**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_work_context.py backend/tests/test_db.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_work_context.py backend/tests/test_db.py -v`
 Expected: ALL PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/vibez/work_context.py backend/tests/test_work_context.py backend/vibez/db.py backend/tests/test_db.py
 git commit -m "feat: add git work context summarizer"
 ```
@@ -1332,7 +1332,7 @@ def test_build_synthesis_prompt_with_work_context(tmp_db):
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_classifier.py::test_build_classify_prompt_with_work_context backend/tests/test_synthesis.py::test_build_synthesis_prompt_with_work_context -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_classifier.py::test_build_classify_prompt_with_work_context backend/tests/test_synthesis.py::test_build_synthesis_prompt_with_work_context -v`
 Expected: FAIL
 
 **Step 3: Add work_context parameter**
@@ -1403,13 +1403,13 @@ Update `run_daily_synthesis`:
 
 **Step 4: Run all tests**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/ -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/ -v`
 Expected: ALL PASS
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/vibez/classifier.py backend/vibez/synthesis.py backend/tests/test_classifier.py backend/tests/test_synthesis.py
 git commit -m "feat: inject work context into classifier and synthesis prompts"
 ```
@@ -1520,7 +1520,7 @@ def test_parse_pov_invalid():
 
 **Step 3: Run tests to verify they fail**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_analyst.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_analyst.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
 **Step 4: Implement analyst.py**
@@ -1792,13 +1792,13 @@ async def run_analyst(config: Config, synthesis_report: dict[str, Any]) -> dict[
 
 **Step 5: Run tests**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_analyst.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python -m pytest backend/tests/test_analyst.py -v`
 Expected: ALL PASS
 
 **Step 6: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/vibez/analyst.py backend/tests/test_analyst.py backend/vibez/config.py
 git commit -m "feat: add analyst module with question generation, Perplexity research, and PoV synthesis"
 ```
@@ -1886,13 +1886,13 @@ if __name__ == "__main__":
 
 **Step 2: Verify the pipeline runs**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && backend/.venv/bin/python backend/scripts/run_synthesis.py 2>&1 | head -20`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && backend/.venv/bin/python backend/scripts/run_synthesis.py 2>&1 | head -20`
 Expected: Logs showing work context refresh, synthesis, and analyst steps
 
 **Step 3: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add backend/scripts/run_synthesis.py
 git commit -m "feat: wire work context + analyst into daily synthesis pipeline"
 ```
@@ -2075,13 +2075,13 @@ export default function AnalystPage() {
 
 **Step 4: Build and verify**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor/dashboard && npm run build`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor/dashboard && npm run build`
 Expected: Build succeeds
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add dashboard/src/app/analyst/page.tsx dashboard/src/app/api/analyst/route.ts dashboard/src/lib/db.ts
 git commit -m "feat: add analyst dashboard page with question/research/PoV display"
 ```
@@ -2171,7 +2171,7 @@ export default function SettingsPage() {
           <label className="mb-1 block text-sm font-medium text-zinc-300">Git Repos (for work context)</label>
           <textarea className="w-full rounded bg-zinc-800 p-3 text-sm font-mono text-zinc-200" rows={4}
             value={reposInput} onChange={(e) => setReposInput(e.target.value)}
-            placeholder="/Users/braydon/projects/experiments/amplifier&#10;/Users/braydon/projects/experiments/workgraph" />
+            placeholder="/Users/<user>/projects/experiments/amplifier&#10;/Users/<user>/projects/experiments/workgraph" />
           <p className="mt-1 text-xs text-zinc-500">One repo path per line. Used by the git work context summarizer.</p>
         </div>
         <div>
@@ -2210,13 +2210,13 @@ export default function SettingsPage() {
 
 **Step 2: Build and verify**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor/dashboard && npm run build`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor/dashboard && npm run build`
 Expected: Build succeeds
 
 **Step 3: Commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add dashboard/src/app/settings/page.tsx
 git commit -m "feat: add repos config and dismissed themes management to settings"
 ```
@@ -2229,13 +2229,13 @@ git commit -m "feat: add repos config and dismissed themes management to setting
 
 ```bash
 # Get a key from https://www.perplexity.ai/ if needed
-echo "PERPLEXITY_API_KEY=pplx-your-key-here" >> /Users/braydon/projects/personal/vibez-monitor/.env
+echo "PERPLEXITY_API_KEY=<your-perplexity-api-key>" >> /Users/<user>/projects/personal/vibez-monitor/.env
 ```
 
 **Step 2: Run the migration on the live database**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 backend/.venv/bin/python -c "from vibez.db import init_db; init_db('vibez.db')"
 ```
 
@@ -2244,7 +2244,7 @@ Expected: No errors. New tables created.
 **Step 3: Run the full daily pipeline**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 backend/.venv/bin/python backend/scripts/run_synthesis.py 2>&1
 ```
 
@@ -2259,7 +2259,7 @@ Expected: Logs showing:
 **Step 4: Verify dashboard**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor/dashboard
+cd /Users/<user>/projects/personal/vibez-monitor/dashboard
 npm run dev
 ```
 
@@ -2272,7 +2272,7 @@ Then visit:
 **Step 5: Run all backend tests**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 backend/.venv/bin/python -m pytest backend/tests/ -v
 ```
 
@@ -2281,7 +2281,7 @@ Expected: ALL PASS
 **Step 6: Final commit**
 
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 git add -A
 git commit -m "feat: complete adaptive intelligence layer — dismiss/learn, bookmarks, git context, analyst agent"
 ```

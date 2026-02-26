@@ -68,7 +68,7 @@ vibez-monitor/
 - **WhatsApp room detection:** Store entries with `com.beeper.bridge_name: "whatsapp"` in their `m.bridge` state
 - **Room ID format:** `!xxxxx:beeper.local`
 - **Sync endpoint:** `GET /_matrix/client/v3/sync?since={next_batch}&timeout=30000`
-- **Existing analysis scripts:** `/Users/braydon/projects/personal/WhatsApp Chat - The vibez (code code code)/analysis/`
+- **Existing analysis scripts:** `/Users/<user>/projects/personal/WhatsApp Chat - The vibez (code code code)/analysis/`
 - **Existing exports:** 10 zips in parent directory, parsed by `whatsapp_analysis.py`
 
 ---
@@ -133,7 +133,7 @@ def tmp_db(tmp_path):
 **Step 4: Create .env.example**
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
 VIBEZ_DB_PATH=./vibez.db
 BEEPER_DB_PATH=~/Library/Application Support/BeeperTexts/account.db
 MATRIX_HOMESERVER=https://matrix.beeper.com
@@ -157,7 +157,7 @@ dist/
 
 **Step 6: Install Python dependencies**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && pip install -e "backend[dev]"`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && pip install -e "backend[dev]"`
 Expected: Successful install of httpx, anthropic, python-dotenv, pytest
 
 **Step 7: Commit**
@@ -253,7 +253,7 @@ def test_insert_and_read_classification(tmp_db):
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && python -m pytest backend/tests/test_db.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && python -m pytest backend/tests/test_db.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'vibez.db'`
 
 **Step 3: Write the implementation**
@@ -369,7 +369,7 @@ def init_db(db_path: str | Path) -> None:
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor && python -m pytest backend/tests/test_db.py -v`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor && python -m pytest backend/tests/test_db.py -v`
 Expected: All 4 tests PASS
 
 **Step 5: Commit**
@@ -1747,14 +1747,14 @@ git commit -m "feat: daily synthesis agent with briefing, contributions, and tre
 
 Run:
 ```bash
-cd /Users/braydon/projects/personal/vibez-monitor
+cd /Users/<user>/projects/personal/vibez-monitor
 npx create-next-app@latest dashboard --typescript --tailwind --eslint --app --src-dir --no-import-alias --use-npm
 ```
 Expected: Next.js project created in `dashboard/`
 
 **Step 2: Install better-sqlite3**
 
-Run: `cd /Users/braydon/projects/personal/vibez-monitor/dashboard && npm install better-sqlite3 && npm install -D @types/better-sqlite3`
+Run: `cd /Users/<user>/projects/personal/vibez-monitor/dashboard && npm install better-sqlite3 && npm install -D @types/better-sqlite3`
 
 **Step 3: Create the SQLite reader**
 
@@ -2630,10 +2630,10 @@ git commit -m "feat: briefing, contribute, and settings pages"
     <array>
         <string>/usr/bin/env</string>
         <string>python3</string>
-        <string>/Users/braydon/projects/personal/vibez-monitor/backend/scripts/run_sync.py</string>
+        <string>/Users/<user>/projects/personal/vibez-monitor/backend/scripts/run_sync.py</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/braydon/projects/personal/vibez-monitor</string>
+    <string>/Users/<user>/projects/personal/vibez-monitor</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -2644,9 +2644,9 @@ git commit -m "feat: briefing, contribute, and settings pages"
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/sync-stdout.log</string>
+    <string>/Users/<user>/Library/Logs/vibez-monitor/sync-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/sync-stderr.log</string>
+    <string>/Users/<user>/Library/Logs/vibez-monitor/sync-stderr.log</string>
 </dict>
 </plist>
 ```
@@ -2664,10 +2664,10 @@ git commit -m "feat: briefing, contribute, and settings pages"
     <array>
         <string>/usr/bin/env</string>
         <string>python3</string>
-        <string>/Users/braydon/projects/personal/vibez-monitor/backend/scripts/run_synthesis.py</string>
+        <string>/Users/<user>/projects/personal/vibez-monitor/backend/scripts/run_synthesis.py</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/braydon/projects/personal/vibez-monitor</string>
+    <string>/Users/<user>/projects/personal/vibez-monitor</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -2681,9 +2681,9 @@ git commit -m "feat: briefing, contribute, and settings pages"
         <integer>0</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/synthesis-stdout.log</string>
+    <string>/Users/<user>/Library/Logs/vibez-monitor/synthesis-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/braydon/Library/Logs/vibez-monitor/synthesis-stderr.log</string>
+    <string>/Users/<user>/Library/Logs/vibez-monitor/synthesis-stderr.log</string>
 </dict>
 </plist>
 ```
@@ -2740,7 +2740,7 @@ TS_RE = re.compile(
 )
 
 EXPORT_DIR = Path(
-    "/Users/braydon/projects/personal/WhatsApp Chat - The vibez (code code code)"
+    "/Users/<user>/projects/personal/WhatsApp Chat - The vibez (code code code)"
 )
 
 

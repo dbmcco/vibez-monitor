@@ -20,7 +20,7 @@ All four feed into the existing classifier and synthesis pipeline — no new inf
 - Backend: Python (existing vibez package), pp-cli (Perplexity), Haiku for cheap summarization
 - Frontend: Next.js (existing dashboard), new pages + API routes
 - Database: SQLite (new tables: user_feedback, bookmarks, analyst_reports)
-- Research: pp-cli at /Users/braydon/projects/experiments/pp (Perplexity sonar-reasoning)
+- Research: pp-cli at /Users/<user>/projects/experiments/pp (Perplexity sonar-reasoning)
 
 ---
 
@@ -122,12 +122,12 @@ New value_config key `repos`:
 ```json
 {
   "repos": [
-    "/Users/braydon/projects/experiments/amplifier",
-    "/Users/braydon/projects/experiments/driftdriver",
-    "/Users/braydon/projects/experiments/workgraph",
-    "/Users/braydon/projects/experiments/speedrift-ecosystem",
-    "/Users/braydon/projects/personal/vibez-monitor",
-    "/Users/braydon/projects/personal/moneycommand"
+    "/Users/<user>/projects/experiments/amplifier",
+    "/Users/<user>/projects/experiments/driftdriver",
+    "/Users/<user>/projects/experiments/workgraph",
+    "/Users/<user>/projects/experiments/speedrift-ecosystem",
+    "/Users/<user>/projects/personal/vibez-monitor",
+    "/Users/<user>/projects/personal/moneycommand"
   ]
 }
 ```

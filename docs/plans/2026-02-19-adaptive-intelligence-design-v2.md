@@ -17,7 +17,7 @@ Two-app architecture:
 - project-pulse: Python, cron/launchd, JSON output to `~/.project-pulse/context.json`
 - vibez-monitor backend: Python (existing), Anthropic API (Sonnet), Perplexity API (sonar-reasoning)
 - vibez-monitor dashboard: Next.js (existing), minus Live Feed, plus Analyst page
-- Data sources: dbm_dossier (`/Users/braydon/projects/personal/dbm_dossier`), project-pulse output
+- Data sources: dbm_dossier (`/Users/<user>/projects/personal/dbm_dossier`), project-pulse output
 
 ---
 
@@ -40,11 +40,11 @@ Automated, zero-intervention project context service. Scans Braydon's repos and 
 ```json
 {
   "generated_at": "2026-02-19T06:00:00Z",
-  "scan_roots": ["/Users/braydon/projects/personal", "/Users/braydon/projects/experiments"],
+  "scan_roots": ["/Users/<user>/projects/personal", "/Users/<user>/projects/experiments"],
   "projects": [
     {
       "name": "paia-os",
-      "path": "/Users/braydon/projects/experiments/paia-os",
+      "path": "/Users/<user>/projects/experiments/paia-os",
       "description": "Clean-room rebuild of assistant-system — hierarchy of intelligent agents with Paia as chief of staff",
       "recent_commits": 74,
       "last_commit": "2026-02-18",
@@ -79,8 +79,8 @@ After scanning all repos, call Haiku to generate the `summary` field — a 3-4 s
 ```json
 {
   "scan_roots": [
-    "/Users/braydon/projects/personal",
-    "/Users/braydon/projects/experiments"
+    "/Users/<user>/projects/personal",
+    "/Users/<user>/projects/experiments"
   ],
   "exclude_dirs": ["node_modules", ".venv", "__pycache__", ".git"],
   "exclude_repos": [],
