@@ -1076,14 +1076,14 @@ from vibez.db import get_connection
 
 logger = logging.getLogger("vibez.classifier")
 
-CLASSIFY_SYSTEM = """You are a message classifier for Braydon's WhatsApp attention firewall.
-You classify messages by relevance to Braydon's interests and identify contribution opportunities.
+CLASSIFY_SYSTEM = """You are a message classifier for the user's WhatsApp attention firewall.
+You classify messages by relevance to the user's interests and identify contribution opportunities.
 Always respond with valid JSON only. No prose, no markdown fences."""
 
 CLASSIFY_TEMPLATE = """Classify this WhatsApp message.
 
-Braydon's interest topics: {topics}
-Braydon's active projects: {projects}
+the user's interest topics: {topics}
+the user's active projects: {projects}
 
 Message:
   From: {sender_name}
@@ -1095,10 +1095,10 @@ Recent thread context:
 
 Respond with JSON:
 {{
-  "relevance_score": <0-10, how relevant to Braydon's interests>,
+  "relevance_score": <0-10, how relevant to the user's interests>,
   "topics": [<topic tags from the message>],
   "entities": [<tools, repos, concepts, people mentioned>],
-  "contribution_flag": <true if Braydon could add value>,
+  "contribution_flag": <true if the user could add value>,
   "contribution_hint": "<if flagged, why and what could he contribute>",
   "alert_level": "<'hot' if needs attention now, 'digest' if include in daily summary, 'none' if low value>"
 }}"""
@@ -1413,14 +1413,14 @@ from vibez.db import get_connection, init_db
 
 logger = logging.getLogger("vibez.synthesis")
 
-SYNTHESIS_SYSTEM = """You are Braydon's daily intelligence analyst for the Vibez WhatsApp ecosystem.
+SYNTHESIS_SYSTEM = """You are the user's daily intelligence analyst for the Vibez WhatsApp ecosystem.
 You produce structured daily briefings that help him stay engaged with minimal reading.
 Always respond with valid JSON only. No prose outside the JSON structure."""
 
 SYNTHESIS_TEMPLATE = """Generate today's briefing from {msg_count} messages across {group_count} groups.
 
-Braydon's interest topics: {topics}
-Braydon's active projects: {projects}
+the user's interest topics: {topics}
+the user's active projects: {projects}
 
 {previous_context}
 
@@ -1440,7 +1440,7 @@ Respond with JSON:
   "contributions": [
     {{
       "thread": "<which thread>",
-      "why": "<why Braydon's knowledge is relevant>",
+      "why": "<why the user's knowledge is relevant>",
       "action": "<specific suggested action>"
     }}
   ],
@@ -1454,7 +1454,7 @@ Respond with JSON:
       "url": "<link>",
       "title": "<what it is>",
       "category": "<tool|repo|article|discussion>",
-      "relevance": "<why it matters to Braydon>"
+      "relevance": "<why it matters to the user>"
     }}
   ]
 }}

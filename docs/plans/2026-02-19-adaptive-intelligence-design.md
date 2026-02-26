@@ -2,7 +2,7 @@
 
 ## Goal
 
-Transform vibez-monitor from a passive daily briefing tool into an adaptive intelligence system that learns from user feedback, knows what Braydon is actively building, and proactively researches questions the chat ecosystem raises.
+Transform vibez-monitor from a passive daily briefing tool into an adaptive intelligence system that learns from user feedback, knows what the user is actively building, and proactively researches questions the chat ecosystem raises.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ Before each classification call in `classifier.py`:
 - Inject into classifier prompt as negative signal:
 
 ```
-DISMISSED THEMES (Braydon finds these less relevant, down-weight):
+DISMISSED THEMES (the user finds these less relevant, down-weight):
   multi-agent-orchestration: dismissed 3 times
   productivity: dismissed 1 time
 ```
@@ -61,7 +61,7 @@ This is prompt-level preference learning — no fine-tuning required. The classi
 
 Before daily synthesis in `synthesis.py`:
 - Load dismissal patterns
-- Add to synthesis prompt: "Braydon has dismissed these contribution themes recently: [list]. Deprioritize similar suggestions."
+- Add to synthesis prompt: "the user has dismissed these contribution themes recently: [list]. Deprioritize similar suggestions."
 
 ### Dashboard UI
 
@@ -114,7 +114,7 @@ API routes:
 
 ### Module: `backend/vibez/work_context.py`
 
-Scans a configurable list of local git repos and summarizes what Braydon is actively working on.
+Scans a configurable list of local git repos and summarizes what the user is actively working on.
 
 ### Configuration
 
@@ -142,7 +142,7 @@ Runs daily before synthesis (or on-demand):
    - `git log --since="3 days ago" --oneline --no-merges` (subprocess)
    - `git diff --stat HEAD~5..HEAD` (what files changed)
 2. Bundle all repo summaries into a single prompt
-3. Call Haiku (cheap, fast): "Summarize what Braydon is actively building and shipping across these repos. Be specific about features, not just file names."
+3. Call Haiku (cheap, fast): "Summarize what the user is actively building and shipping across these repos. Be specific about features, not just file names."
 4. Store result in value_config as `work_context` (JSON string with timestamp)
 
 ### Classifier Integration
@@ -209,7 +209,7 @@ You are an intelligence analyst monitoring 18 WhatsApp groups of AI/agentic expe
 
 Today's key threads: [from synthesis]
 Emerging trends: [from synthesis]
-Braydon's active work: [from work context]
+the user's active work: [from work context]
 
 What 3-5 questions does today's conversation make you genuinely curious about?
 
@@ -218,7 +218,7 @@ Look for:
 - Contradictions: Where do people disagree and who's right?
 - Unexplored angles: What's the second-order effect of what's being discussed?
 - Connections: What threads connect to each other in ways nobody mentioned?
-- Opportunities: What could Braydon build/share that nobody's asked for yet?
+- Opportunities: What could the user build/share that nobody's asked for yet?
 
 Return JSON:
 [
@@ -252,7 +252,7 @@ Now form a point of view on each. Be opinionated. Be specific.
 For each question:
 - What did the research reveal?
 - What's your take? (not neutral — pick a side)
-- What should Braydon do about it? (specific action, not "keep an eye on it")
+- What should the user do about it? (specific action, not "keep an eye on it")
 - Confidence level: high/medium/low (based on research quality)
 
 [questions + research results]
@@ -264,7 +264,7 @@ Return JSON:
     "research_summary": "2-3 sentences of key findings",
     "citations": ["url1", "url2"],
     "pov": "Opinionated 2-3 sentence take",
-    "action": "Specific action for Braydon",
+    "action": "Specific action for the user",
     "confidence": "high|medium|low"
   }
 ]

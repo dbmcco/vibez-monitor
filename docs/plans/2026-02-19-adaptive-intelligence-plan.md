@@ -940,7 +940,7 @@ def build_classify_prompt(
 
     dismissed_block = ""
     if dismissed_themes:
-        dismissed_block = "\nDISMISSED THEMES (Braydon finds these less relevant, down-weight):\n"
+        dismissed_block = "\nDISMISSED THEMES (the user finds these less relevant, down-weight):\n"
         for theme, count in dismissed_themes:
             times = "time" if count == 1 else "times"
             dismissed_block += f"  {theme}: dismissed {count} {times}\n"
@@ -1046,7 +1046,7 @@ def build_synthesis_prompt(
 
     dismissed_block = ""
     if dismissed_themes:
-        dismissed_block = "\nDEPRIORITIZED THEMES (Braydon has dismissed these, deprioritize):\n"
+        dismissed_block = "\nDEPRIORITIZED THEMES (the user has dismissed these, deprioritize):\n"
         for theme, count in dismissed_themes:
             dismissed_block += f"  {theme} (dismissed {count}x)\n"
 
@@ -1220,7 +1220,7 @@ async def summarize_work_context(config: Config, activity: list[dict[str, str]])
         max_tokens=500,
         messages=[{
             "role": "user",
-            "content": f"Summarize what Braydon is actively building and shipping across these repos. "
+            "content": f"Summarize what the user is actively building and shipping across these repos. "
                        f"Be specific about features, not just file names. 2-3 sentences per repo.\n\n{raw_context}",
         }],
     )
@@ -1311,7 +1311,7 @@ def test_build_classify_prompt_with_work_context():
         "body": "check out the new streaming feature",
     }
     value_config = {"topics": ["agentic-architecture"], "projects": ["Amplifier"]}
-    work_context = "Braydon is building streaming support in Amplifier and task dependency resolution in workgraph."
+    work_context = "the user is building streaming support in Amplifier and task dependency resolution in workgraph."
     prompt = build_classify_prompt(message, value_config, work_context=work_context)
     assert "CURRENT WORK" in prompt
     assert "streaming support in Amplifier" in prompt
@@ -1557,7 +1557,7 @@ QUESTIONS_TEMPLATE = """Today's key threads from the Vibez WhatsApp ecosystem:
 Emerging trends: {emerging}
 Fading trends: {fading}
 
-Braydon's active work: {work_context}
+the user's active work: {work_context}
 
 What 3-5 questions does today's conversation make you genuinely curious about?
 
@@ -1566,7 +1566,7 @@ Look for:
 - Contradictions: Where do people disagree and who's right?
 - Unexplored angles: What's the second-order effect of what's being discussed?
 - Connections: What threads connect to each other in ways nobody mentioned?
-- Opportunities: What could Braydon build/share that nobody's asked for yet?
+- Opportunities: What could the user build/share that nobody's asked for yet?
 
 Return JSON array:
 [
@@ -1583,7 +1583,7 @@ Always respond with valid JSON only. No prose outside the JSON array."""
 POV_TEMPLATE = """You researched these questions about the AI/agentic ecosystem.
 Form a point of view on each. Be opinionated. Be specific.
 
-Braydon's active work: {work_context}
+the user's active work: {work_context}
 
 Questions and research:
 {research_block}
@@ -1595,7 +1595,7 @@ For each question, return JSON array:
     "research_summary": "2-3 sentences of key findings",
     "citations": ["url1", "url2"],
     "pov": "Opinionated 2-3 sentence take",
-    "action": "Specific action for Braydon (not 'keep an eye on it')",
+    "action": "Specific action for the user (not 'keep an eye on it')",
     "confidence": "high|medium|low"
   }}
 ]"""

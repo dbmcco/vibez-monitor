@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-18
 **Status:** Approved
-**Author:** Braydon + Claude
+**Author:** the user + Claude
 
 ## Overview
 
@@ -10,7 +10,7 @@ An agentic daily monitoring system for the Vibez WhatsApp ecosystem (10 groups, 
 
 ## Problem
 
-The Vibez group is extremely valuable — cutting-edge AI agentic discussion — but the volume is overwhelming. Braydon needs to:
+The Vibez group is extremely valuable — cutting-edge AI agentic discussion — but the volume is overwhelming. the user needs to:
 1. Stay engaged bidirectionally without reading everything
 2. Extract value (key threads, decisions, tools, links)
 3. Contribute value back (identify where his knowledge/projects are relevant)
@@ -127,7 +127,7 @@ sync_state (
 
 **Model:** Claude Sonnet (claude-sonnet-4-6)
 
-Runs on each message batch. Prompt classifies against Braydon's value config:
+Runs on each message batch. Prompt classifies against the user's value config:
 - Agentic architecture patterns (multi-agent, context management, orchestration)
 - Practical tools and repos (actionable links, libraries)
 - Business application of AI (workflows, productivity)
@@ -141,7 +141,7 @@ Output: structured JSON with relevance_score, topics, entities, contribution_fla
 
 Runs daily at 6am. Reads all classified messages from last 24h. Generates:
 1. **Briefing** — Top 3-5 threads: title, participants, key insights, links
-2. **Contributions** — Where Braydon can add value: thread reference, why, suggested action
+2. **Contributions** — Where the user can add value: thread reference, why, suggested action
 3. **Trends** — Topic shifts week-over-week, emerging themes, who's driving what
 4. **Links** — Top links shared, categorized and annotated
 

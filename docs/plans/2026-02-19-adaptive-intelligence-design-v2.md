@@ -2,7 +2,7 @@
 
 ## Goal
 
-Transform vibez-monitor from a passive daily briefing tool into a strategic intelligence analyst that deeply understands who Braydon is (dossier), what he's building (project-pulse), and what the AGI community is discussing — then generates actionable contribution opportunities and opinionated research PoVs.
+Transform vibez-monitor from a passive daily briefing tool into a strategic intelligence analyst that deeply understands who the user is (dossier), what he's building (project-pulse), and what the AGI community is discussing — then generates actionable contribution opportunities and opinionated research PoVs.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ Two-app architecture:
 
 ### Purpose
 
-Automated, zero-intervention project context service. Scans Braydon's repos and produces a structured JSON snapshot that any app can consume.
+Automated, zero-intervention project context service. Scans the user's repos and produces a structured JSON snapshot that any app can consume.
 
 ### Data Sources Per Repo
 
@@ -65,7 +65,7 @@ Automated, zero-intervention project context service. Scans Braydon's repos and 
 
 ### Summary Generation
 
-After scanning all repos, call Haiku to generate the `summary` field — a 3-4 sentence narrative of what Braydon is actively building and shipping. This is the primary context string consumed by downstream apps.
+After scanning all repos, call Haiku to generate the `summary` field — a 3-4 sentence narrative of what the user is actively building and shipping. This is the primary context string consumed by downstream apps.
 
 ### Scheduling
 
@@ -139,7 +139,7 @@ project-pulse/
 
 ### Dossier Integration
 
-The classifier and synthesis prompts get enriched with Braydon's dossier context:
+The classifier and synthesis prompts get enriched with the user's dossier context:
 
 **Into classifier prompt:**
 ```
@@ -151,13 +151,13 @@ BRAYDON'S EXPERTISE & CONTRIBUTION LENS:
 - Active projects: [from project-pulse summary]
 
 When flagging contribution opportunities, match against these specific lenses —
-not just topic keywords, but where Braydon's unique perspective adds value.
+not just topic keywords, but where the user's unique perspective adds value.
 ```
 
 **Into synthesis prompt:**
 ```
 BRAYDON'S PROFILE (for contribution matching):
-- Career: Music Theory PhD → healthcare entrepreneur (Intempio) → AI-assisted development (LightForge)
+- Career: Music Theory PhD → healthcare entrepreneur (prior-venture) → AI-assisted development (current-venture)
 - Expertise: governance/guardrails, workflow design, cross-domain pattern theft, economics-first thinking
 - Current work: [project-pulse summary]
 - Contribution style: questions-driven, concrete examples, governance framing, "what does it cost when it breaks?"
@@ -175,10 +175,10 @@ Same as original design — question generation from synthesis, Perplexity resea
 
 **Question generation prompt gets:**
 ```
-Braydon's lens: [dossier signature frames + decomposition loop]
-Braydon's active work: [project-pulse summary]
+the user's lens: [dossier signature frames + decomposition loop]
+the user's active work: [project-pulse summary]
 
-Generate questions that Braydon's SPECIFIC background would find interesting —
+Generate questions that the user's SPECIFIC background would find interesting —
 not generic AI industry questions, but ones that connect to his governance focus,
 cross-domain pattern recognition, or active projects.
 ```
