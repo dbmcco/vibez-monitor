@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const report = date ? getReport(date) : getLatestReport();
     const previous_report = report ? getPreviousReport(report.report_date) : null;
     const recent_update = getRecentUpdateSnapshot();
-    const radar = getVibezRadarSnapshot(report, 48);
+    const radar = await getVibezRadarSnapshot(report, 48);
     return NextResponse.json({ report, previous_report, recent_update, radar });
   } catch {
     return NextResponse.json({

@@ -18,6 +18,7 @@ It ingests Beeper Desktop messages, classifies relevance + contribution opportun
 
 - Ingests decrypted message metadata/content from Beeper Desktop API (`http://localhost:23373`)
 - Stores normalized messages and classifications in local SQLite (`vibez.db`)
+- Optionally mirrors message embeddings to Postgres + pgvector for hybrid semantic retrieval
 - Flags hot alerts and contribution opportunities
 - Produces structured daily briefings with:
   - daily memo
@@ -28,7 +29,8 @@ It ingests Beeper Desktop messages, classifies relevance + contribution opportun
   - `Chat` agent over your message corpus
   - `Briefing` executive pulse + evidence
   - `Contribute` prioritization model
-  - `Stats` trends, coverage, and network views
+  - `Stats` trends, coverage, network views, and semantic arc clustering/drift checks
+  - semantic boosts for Chat retrieval, Radar arc evidence, and Contribute opportunity density when pgvector is enabled
 
 ## Repo Layout
 
@@ -78,6 +80,29 @@ npm run dev
 ```
 
 Then open `http://localhost:3100`.
+
+## Optional: pgvector Hybrid Retrieval
+
+Enable this when you want semantic retrieval for chat questions and briefing-arc evidence.
+
+1. Set these in `.env`:
+
+```bash
+VIBEZ_PGVECTOR_URL=postgresql://user:pass@localhost:5432/vibez
+VIBEZ_PGVECTOR_TABLE=vibez_message_embeddings
+VIBEZ_PGVECTOR_DIM=256
+VIBEZ_PGVECTOR_INDEX_ON_SYNC=true
+```
+
+2. Backfill existing SQLite history into pgvector:
+
+```bash
+backend/.venv/bin/python backend/scripts/pgvector_index.py --lookback-days 180
+```
+
+3. Keep embeddings current:
+
+- `backend/scripts/run_sync.py` now auto-indexes newly synced/classified rows when `VIBEZ_PGVECTOR_URL` is set.
 
 ## Profile Personalization
 

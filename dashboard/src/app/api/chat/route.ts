@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
     const chatHistory = sanitizeHistory(history);
 
     // Search for relevant messages
-    const messages = searchMessages({ query: question, lookbackDays });
+    const messages = await searchMessages({ query: question, lookbackDays });
 
     // Get latest briefing for high-level context
     const briefing = getLatestBriefingMd();

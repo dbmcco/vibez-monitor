@@ -1,6 +1,12 @@
 import Database from "better-sqlite3";
 import path from "path";
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
+import {
+  computeSemanticAnalytics,
+  searchHybridMessages,
+  searchThreadEvidence,
+  type SemanticAnalytics,
+} from "@/lib/semantic";
 
 const DB_PATH =
   process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
@@ -61,6 +67,13 @@ function loadRoomScope(db: Database.Database): RoomScope {
     return { mode: "excluded_groups", activeGroupIds: [], activeGroupNames: [], excludedGroups };
   }
   return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
+}
+
+export function getCurrentRoomScope(): RoomScope {
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  db.close();
+  return scope;
 }
 
 function buildRoomScopeWhere(alias: string, scope: RoomScope): {
@@ -1229,7 +1242,7 @@ export function getValueConfig(): Record<string, unknown> {
   return config;
 }
 
-export function searchMessages(opts: {
+function searchMessagesKeyword(opts: {
   query: string;
   lookbackDays?: number;
   limit?: number;
@@ -1290,6 +1303,32 @@ export function searchMessages(opts: {
     ...row,
     sender_name: normalizeSenderName(row.sender_name, userAliases),
   }));
+}
+
+export async function searchMessages(opts: {
+  query: string;
+  lookbackDays?: number;
+  limit?: number;
+}): Promise<Message[]> {
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  const userAliases = loadUserAliases();
+  db.close();
+
+  const semanticRows = await searchHybridMessages({
+    query: opts.query,
+    lookbackDays: opts.lookbackDays,
+    limit: opts.limit,
+    roomScope: scope,
+  });
+  if (semanticRows && semanticRows.length > 0) {
+    return semanticRows.map((row) => ({
+      ...row,
+      sender_name: normalizeSenderName(row.sender_name, userAliases),
+    }));
+  }
+
+  return searchMessagesKeyword(opts);
 }
 
 export function getLatestBriefingMd(): string | null {
@@ -1457,6 +1496,7 @@ export interface StatsDashboard {
     relationships: RelationshipNetworkStats;
     topic_alignment: TopicAlignmentNetworkStats;
   };
+  semantic: SemanticAnalytics;
 }
 
 export interface TopicDrilldownMessage {
@@ -1772,10 +1812,10 @@ function tsLabel(ts: number): string {
   return new Date(ts).toLocaleString();
 }
 
-export function getVibezRadarSnapshot(
+export async function getVibezRadarSnapshot(
   report: DailyReport | null,
   windowHours = 48,
-): VibezRadarSnapshot | null {
+): Promise<VibezRadarSnapshot | null> {
   if (!report) return null;
 
   const threads = parseBriefingThreads(report.briefing_json);
@@ -1820,13 +1860,21 @@ export function getVibezRadarSnapshot(
     fingerprint: normalizeRadarBody(row.body || ""),
   }));
 
-  const threadFeatures = threads.map((thread) => {
+  const threadFeatures = threads.map((thread, index) => {
     const text = `${thread.title} ${thread.insights}`.toLowerCase();
     return {
+      key: `thread-${index}`,
       title: thread.title || "Untitled thread",
       text,
       tokens: new Set(radarTokens(text)),
     };
+  });
+
+  const semanticThreadEvidence = await searchThreadEvidence({
+    threads: threadFeatures.map((thread) => ({ key: thread.key, text: thread.text })),
+    cutoffTs: windowStartTs,
+    perThreadLimit: 26,
+    roomScope: scope,
   });
 
   const uniquePeople = new Set<string>();
@@ -2094,29 +2142,65 @@ export function getVibezRadarSnapshot(
     });
   }
 
+  const preparedById = new Map(preparedRows.map((row) => [row.id, row]));
   const thread_quality: VibezRadarThreadQuality[] = threadFeatures
     .map((thread) => {
-      const evidenceRows = preparedRows.filter((row) => {
-        const topicHit = row.topics.some((topic) => topicMatchesThread(topic, thread.text, thread.tokens));
+      const lexicalRows = preparedRows.filter((row) => {
+        const topicHit = row.topics.some((topic) =>
+          topicMatchesThread(topic, thread.text, thread.tokens),
+        );
         if (topicHit) return true;
         return intersectionCount(row.body_tokens, thread.tokens) >= 3;
       });
+      const semantic = semanticThreadEvidence.get(thread.key);
+
+      const evidenceById = new Map<string, VibezRadarPreparedRow>();
+      for (const row of lexicalRows) {
+        evidenceById.set(row.id, row);
+      }
+      for (const id of semantic?.message_ids || []) {
+        const matched = preparedById.get(id);
+        if (matched) {
+          evidenceById.set(id, matched);
+        }
+      }
+      const evidenceRows = Array.from(evidenceById.values());
       const evidencePeople = new Set(evidenceRows.map((row) => row.sender_name));
-      const newestEvidenceTs =
+      for (const senderName of semantic?.sender_names || []) {
+        evidencePeople.add(senderName);
+      }
+
+      let newestEvidenceTs: number | null =
         evidenceRows.length > 0
-          ? evidenceRows.reduce((max, row) => Math.max(max, row.timestamp), evidenceRows[0].timestamp)
+          ? evidenceRows.reduce(
+              (max, row) => Math.max(max, row.timestamp),
+              evidenceRows[0].timestamp,
+            )
           : null;
+      if (semantic?.newest_timestamp) {
+        newestEvidenceTs =
+          newestEvidenceTs === null
+            ? semantic.newest_timestamp
+            : Math.max(newestEvidenceTs, semantic.newest_timestamp);
+      }
+
       let quality: "strong" | "mixed" | "thin" = "thin";
       if (evidenceRows.length >= 8 && evidencePeople.size >= 4) quality = "strong";
       else if (evidenceRows.length >= 3 && evidencePeople.size >= 2) quality = "mixed";
 
       const notes: string[] = [];
+      const semanticOnlyCount = Math.max(0, (semantic?.message_ids.length || 0) - lexicalRows.length);
       if (quality === "strong") {
         notes.push("Backed by broad, recent message evidence.");
       } else if (quality === "mixed") {
         notes.push("Moderate evidence; validate before acting.");
       } else {
         notes.push("Thin supporting evidence in the current window.");
+      }
+      if (semanticOnlyCount > 0) {
+        notes.push(
+          `Semantic retrieval surfaced ${semanticOnlyCount} additional related messages outside strict lexical overlap.`,
+        );
       }
       if (evidenceRows.length > 0 && evidencePeople.size === 1) {
         notes.push("Signal is concentrated in one voice.");
@@ -2158,7 +2242,9 @@ export function getVibezRadarSnapshot(
   };
 }
 
-export function getStatsDashboard(windowDays: number | null = 90): StatsDashboard {
+export async function getStatsDashboard(
+  windowDays: number | null = 90,
+): Promise<StatsDashboard> {
   const resolvedWindow = resolveWindowDays(windowDays);
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
@@ -2662,6 +2748,29 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
   }
   alignmentEdges.sort((a, b) => b.similarity - a.similarity);
 
+  const semanticLookbackDays =
+    resolvedWindow === null
+      ? Math.min(Math.max(windowDaysValue, 30), 365)
+      : Math.min(Math.max(resolvedWindow, 30), 365);
+  const semanticCutoffTs =
+    Date.now() - semanticLookbackDays * 24 * 60 * 60 * 1000;
+  const semantic =
+    (await computeSemanticAnalytics({
+      roomScope: scope,
+      cutoffTs: semanticCutoffTs,
+      lookbackDays: semanticLookbackDays,
+      maxClusters: 12,
+    })) || {
+      enabled: false,
+      coverage_pct: 0,
+      orphan_pct: 0,
+      avg_coherence: 0,
+      drift_risk: "low",
+      checks: ["pgvector not configured; semantic analytics disabled."],
+      arcs: [],
+      trends: [],
+    };
+
   return {
     window_days: windowDaysValue,
     generated_at: new Date().toISOString(),
@@ -2713,6 +2822,7 @@ export function getStatsDashboard(windowDays: number | null = 90): StatsDashboar
         },
       },
     },
+    semantic,
   };
 }
 

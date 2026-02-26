@@ -19,6 +19,7 @@ from vibez.profile import (
     get_subject_name,
     get_subject_possessive,
 )
+from vibez.semantic_index import get_semantic_arc_hints
 
 logger = logging.getLogger("vibez.synthesis")
 
@@ -40,6 +41,9 @@ Messages (chronological, with classifications):
 
 CONTRIBUTION THEMES from classifier (cluster these):
 {contribution_themes_block}
+
+SEMANTIC ARC HINTS (embedding clusters):
+{semantic_arc_hints_block}
 
 {subject_messages_block}
 
@@ -195,6 +199,7 @@ def build_synthesis_prompt(
     dossier_context: str = "",
     subject_name: str = DEFAULT_SUBJECT_NAME,
     subject_messages: list[dict[str, Any]] | None = None,
+    semantic_arc_hints: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the synthesis prompt from classified messages."""
     resolved_subject = get_subject_name(subject_name)
@@ -223,6 +228,20 @@ def build_synthesis_prompt(
     else:
         contribution_themes_block = "  (none flagged yet)\n"
 
+    semantic_arc_hints_block = "  (pgvector hints unavailable)\n"
+    if semantic_arc_hints:
+        lines: list[str] = []
+        for hint in semantic_arc_hints[:6]:
+            title = _compact_text(hint.get("title", "semantic thread"), 60)
+            momentum = str(hint.get("momentum", "steady"))
+            message_count = int(hint.get("message_count", 0) or 0)
+            people = int(hint.get("people", 0) or 0)
+            quote = _compact_text(hint.get("sample_quote", ""), 200)
+            lines.append(
+                f"  - {title} | {message_count} msgs | {people} people | {momentum} | {quote}"
+            )
+        semantic_arc_hints_block = "\n".join(lines) + "\n"
+
     previous_context = ""
     if previous_briefing:
         previous_context = f"Yesterday's key threads (for continuity):\n{previous_briefing[:1000]}\n"
@@ -245,6 +264,7 @@ def build_synthesis_prompt(
         dossier_context=dossier_context,
         previous_context=previous_context, messages_block=messages_block,
         contribution_themes_block=contribution_themes_block,
+        semantic_arc_hints_block=semantic_arc_hints_block,
         subject_messages_block=subject_messages_block,
     )
 
@@ -553,11 +573,24 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
         config.self_aliases,
     )
 
+    semantic_arc_hints: list[dict[str, Any]] = []
+    if config.pgvector_url:
+        try:
+            semantic_arc_hints = get_semantic_arc_hints(
+                config.pgvector_url,
+                lookback_hours=24,
+                table=config.pgvector_table,
+                max_arcs=6,
+            )
+        except Exception:
+            logger.exception("Failed to load semantic arc hints for synthesis prompt")
+
     prompt = build_synthesis_prompt(
         messages, value_cfg, previous,
         dossier_context=dossier_context,
         subject_name=subject_name,
         subject_messages=subject_msgs,
+        semantic_arc_hints=semantic_arc_hints,
     )
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)

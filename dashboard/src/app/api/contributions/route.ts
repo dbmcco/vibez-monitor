@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "crypto";
-import { getContributionDashboard } from "@/lib/db";
+import { getContributionDashboard, getCurrentRoomScope } from "@/lib/db";
 import { getSubjectName, getSubjectPossessive } from "@/lib/profile";
+import { scoreSemanticNeighborhood } from "@/lib/semantic";
 
 function parsePositiveInt(value: string | null, fallback: number): number {
   if (!value) return fallback;
@@ -39,9 +40,65 @@ interface SmartContributionPayload {
 type ContributionDashboard = ReturnType<typeof getContributionDashboard>;
 type BaseOpportunity = ContributionDashboard["opportunities"][number];
 type EnhancedOpportunity = BaseOpportunity & {
+  semantic_support?: {
+    related_messages: number;
+    related_people: number;
+    density_bonus: number;
+  };
   priority_score_model?: number;
   model_intel?: SmartContributionEval;
 };
+
+function mergeSemanticSupport(
+  dashboard: ContributionDashboard,
+  densityById: Map<string, { related_messages: number; related_people: number }>,
+) {
+  if (densityById.size === 0) return dashboard;
+  const opportunities = dashboard.opportunities.map((item) => {
+    const density = densityById.get(item.id);
+    if (!density) return item as EnhancedOpportunity;
+    const densityBonus = Math.min(
+      8,
+      density.related_messages * 0.35 + density.related_people * 0.6,
+    );
+    return {
+      ...(item as EnhancedOpportunity),
+      priority_score: Number(Math.min(100, item.priority_score + densityBonus).toFixed(1)),
+      semantic_support: {
+        related_messages: density.related_messages,
+        related_people: density.related_people,
+        density_bonus: Number(densityBonus.toFixed(1)),
+      },
+      reasons: [
+        ...item.reasons,
+        `Semantically connected to ${density.related_messages} nearby messages across ${density.related_people} people.`,
+      ],
+    };
+  });
+
+  opportunities.sort((a, b) => {
+    if (b.priority_score !== a.priority_score) return b.priority_score - a.priority_score;
+    return b.timestamp - a.timestamp;
+  });
+
+  const byId = new Map(opportunities.map((item) => [item.id, item]));
+  const sections = dashboard.sections.map((section) => ({
+    ...section,
+    items: section.items
+      .map((item) => byId.get(item.id) || item)
+      .sort((a, b) => b.priority_score - a.priority_score),
+  }));
+
+  return {
+    ...dashboard,
+    opportunities,
+    sections,
+    semantic_model: {
+      enabled: true,
+      coverage: Number(((densityById.size / Math.max(1, dashboard.opportunities.length)) * 100).toFixed(1)),
+    },
+  };
+}
 
 function buildSmartSystemPrompt(subjectName: string, subjectPossessive: string): string {
   return `You are ${subjectPossessive} strategic contribution intelligence model for a highly technical AI/OSS/business-learning community.
@@ -344,7 +401,15 @@ export async function GET(request: NextRequest) {
     const days = parsePositiveInt(request.nextUrl.searchParams.get("days"), 45);
     const limit = parsePositiveInt(request.nextUrl.searchParams.get("limit"), 600);
     const smart = parseBoolean(request.nextUrl.searchParams.get("smart"), true);
-    const dashboard = getContributionDashboard({ lookbackDays: days, limit });
+    const dashboardBase = getContributionDashboard({ lookbackDays: days, limit });
+    const cutoffTs = Date.now() - days * 24 * 60 * 60 * 1000;
+    const densityById = await scoreSemanticNeighborhood({
+      messageIds: dashboardBase.opportunities.slice(0, 120).map((item) => item.id),
+      cutoffTs,
+      roomScope: getCurrentRoomScope(),
+      neighborLimit: 16,
+    });
+    const dashboard = mergeSemanticSupport(dashboardBase, densityById);
     const modelName = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
     let smartPayload: SmartContributionPayload | null = null;
     if (smart) {

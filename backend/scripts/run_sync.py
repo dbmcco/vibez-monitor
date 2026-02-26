@@ -34,12 +34,40 @@ async def main():
     logger.info("Database: %s", config.db_path)
     logger.info("API: %s", config.beeper_api_url)
     logger.info("Poll interval: %ds", config.poll_interval)
+    if config.pgvector_url:
+        logger.info(
+            "pgvector indexing enabled (table=%s, dim=%d)",
+            config.pgvector_table,
+            config.pgvector_dimensions,
+        )
 
     # Classify new messages inline as they arrive
     from vibez.classifier import classify_messages
+    from vibez.semantic_index import index_sqlite_messages
 
     async def on_messages(messages):
         await classify_messages(config, messages)
+        if not (config.pgvector_url and config.pgvector_index_on_sync):
+            return
+        message_ids = [
+            str(msg.get("id"))
+            for msg in messages
+            if isinstance(msg, dict) and msg.get("id")
+        ]
+        if not message_ids:
+            return
+        try:
+            indexed = index_sqlite_messages(
+                config.db_path,
+                config.pgvector_url,
+                table=config.pgvector_table,
+                dimensions=config.pgvector_dimensions,
+                message_ids=message_ids,
+            )
+            if indexed:
+                logger.info("Indexed %d messages into pgvector", indexed)
+        except Exception:
+            logger.exception("Failed to index sync batch into pgvector")
 
     await sync_loop(
         db_path=config.db_path,

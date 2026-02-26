@@ -14,6 +14,7 @@ from vibez.config import Config
 from vibez.db import get_connection
 from vibez.dossier import load_dossier, get_voice_profile
 from vibez.profile import get_subject_name, get_subject_possessive
+from vibez.semantic_index import search_hybrid_pgvector
 
 logger = logging.getLogger("vibez.chat_agent")
 
@@ -30,8 +31,25 @@ def search_messages(
     query: str,
     lookback_days: int = 7,
     limit: int = 50,
+    *,
+    pg_url: str = "",
+    pg_table: str = "vibez_message_embeddings",
+    pg_dimensions: int = 256,
 ) -> list[dict[str, Any]]:
-    """Search messages relevant to a query using full-text matching."""
+    """Search messages relevant to a query using pgvector when available."""
+    if pg_url:
+        try:
+            return search_hybrid_pgvector(
+                pg_url,
+                query,
+                lookback_days=lookback_days,
+                limit=limit,
+                table=pg_table,
+                dimensions=pg_dimensions,
+            )
+        except Exception:
+            logger.exception("pgvector search failed; falling back to SQLite keyword search")
+
     conn = get_connection(db_path)
     cutoff_ts = int((datetime.now() - timedelta(days=lookback_days)).timestamp() * 1000)
 
@@ -101,7 +119,14 @@ async def chat(config: Config, question: str, lookback_days: int = 7) -> str:
     subject_possessive = get_subject_possessive(subject_name)
 
     # Search for relevant messages
-    messages = search_messages(config.db_path, question, lookback_days)
+    messages = search_messages(
+        config.db_path,
+        question,
+        lookback_days,
+        pg_url=config.pgvector_url,
+        pg_table=config.pgvector_table,
+        pg_dimensions=config.pgvector_dimensions,
+    )
 
     # Get latest briefing for high-level context
     briefing_context = get_recent_summary(config.db_path)

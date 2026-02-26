@@ -4,6 +4,7 @@ import asyncio
 import argparse
 import fcntl
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -18,8 +19,9 @@ from vibez.classifier import (
     parse_classification,
     load_value_config,
     write_hot_alert,
-    CLASSIFY_SYSTEM,
+    CLASSIFY_SYSTEM_TEMPLATE,
 )
+from vibez.profile import get_subject_name, get_subject_possessive
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen2.5:3b"  # faster than qwen3:8b (no thinking overhead)
@@ -35,6 +37,7 @@ async def classify_one(
     semaphore: asyncio.Semaphore,
     model: str,
     num_predict: int,
+    system_prompt: str,
 ) -> tuple[dict, dict] | None:
     """Classify a single message via Ollama. Returns message+classification on success."""
     async with semaphore:
@@ -45,7 +48,7 @@ async def classify_one(
                 json={
                     "model": model,
                     "messages": [
-                        {"role": "system", "content": CLASSIFY_SYSTEM},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt},
                     ],
                     "stream": False,
@@ -171,6 +174,12 @@ async def main():
         return
 
     value_cfg = load_value_config(db_path)
+    subject_name = get_subject_name(os.environ.get("VIBEZ_SUBJECT_NAME"))
+    subject_possessive = get_subject_possessive(subject_name)
+    system_prompt = CLASSIFY_SYSTEM_TEMPLATE.format(
+        subject_name=subject_name,
+        subject_possessive=subject_possessive,
+    )
     semaphore = asyncio.Semaphore(max(1, args.concurrency))
     start = time.time()
     done = 0
@@ -189,7 +198,15 @@ async def main():
         for i in range(0, total, chunk_size):
             chunk = messages[i : i + chunk_size]
             tasks = [
-                classify_one(client, msg, value_cfg, semaphore, args.model, num_predict)
+                classify_one(
+                    client,
+                    msg,
+                    value_cfg,
+                    semaphore,
+                    args.model,
+                    num_predict,
+                    system_prompt,
+                )
                 for msg in chunk
             ]
             results = await asyncio.gather(*tasks)

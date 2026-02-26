@@ -37,6 +37,10 @@ class Config:
     )
     beeper_api_url: str = "http://localhost:23373"
     beeper_api_token: str = ""
+    pgvector_url: str = ""
+    pgvector_table: str = "vibez_message_embeddings"
+    pgvector_dimensions: int = 256
+    pgvector_index_on_sync: bool = True
     sync_timeout_ms: int = 30000
     poll_interval: int = 30
     classifier_model: str = "claude-sonnet-4-6"
@@ -83,6 +87,15 @@ class Config:
             beeper_db_path=beeper_db,
             beeper_api_url=os.environ.get("BEEPER_API_URL", "http://localhost:23373"),
             beeper_api_token=os.environ.get("BEEPER_API_TOKEN", ""),
+            pgvector_url=os.environ.get("VIBEZ_PGVECTOR_URL", ""),
+            pgvector_table=os.environ.get(
+                "VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings"
+            ),
+            pgvector_dimensions=int(os.environ.get("VIBEZ_PGVECTOR_DIM", "256")),
+            pgvector_index_on_sync=os.environ.get(
+                "VIBEZ_PGVECTOR_INDEX_ON_SYNC", "true"
+            ).lower()
+            not in {"0", "false", "no", "off"},
             sync_timeout_ms=int(os.environ.get("SYNC_TIMEOUT_MS", "30000")),
             poll_interval=int(os.environ.get("POLL_INTERVAL", "30")),
             classifier_model=os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-6"),

@@ -84,6 +84,47 @@ interface TopicAlignmentEdge {
   shared_topics: string[];
 }
 
+interface SemanticArcMessage {
+  id: string;
+  sender_name: string;
+  room_name: string;
+  body: string;
+  timestamp: number;
+}
+
+interface SemanticArc {
+  id: string;
+  title: string;
+  message_count: number;
+  people: number;
+  channels: number;
+  coherence: number;
+  momentum: "rising" | "steady" | "cooling";
+  first_seen: string;
+  last_seen: string;
+  top_people: string[];
+  sample_messages: SemanticArcMessage[];
+}
+
+interface SemanticTrendPoint {
+  date: string;
+  arc_count: number;
+  covered_messages: number;
+  avg_coherence: number;
+  emerging_arcs: number;
+}
+
+interface SemanticAnalytics {
+  enabled: boolean;
+  coverage_pct: number;
+  orphan_pct: number;
+  avg_coherence: number;
+  drift_risk: "low" | "medium" | "high";
+  checks: string[];
+  arcs: SemanticArc[];
+  trends: SemanticTrendPoint[];
+}
+
 interface StatsDashboard {
   window_days: number;
   generated_at: string;
@@ -132,6 +173,7 @@ interface StatsDashboard {
       };
     };
   };
+  semantic: SemanticAnalytics;
 }
 
 interface TopicDrilldownMessage {
@@ -2599,6 +2641,7 @@ type DayRange = 30 | 90 | 180 | 365 | "all";
 const SECTION_LINKS = [
   { id: "volume-trend", label: "Volume" },
   { id: "coverage-trend", label: "Coverage" },
+  { id: "semantic-arcs", label: "Semantic Arcs" },
   { id: "topic-explorer", label: "Topics" },
   { id: "people-network", label: "People Network" },
   { id: "topic-graph", label: "Graph" },
@@ -2781,6 +2824,23 @@ export default function StatsPage() {
     const percent = point.count > 0 ? Math.round((withTopics / point.count) * 100) : 0;
     return { date: point.date, count: percent };
   });
+  const semanticTrendDaily: DailyCount[] = stats.semantic.trends.map((point) => ({
+    date: point.date,
+    count: point.covered_messages,
+  }));
+  const semanticEmergingDaily: DailyCount[] = stats.semantic.trends.map((point) => ({
+    date: point.date,
+    count: point.emerging_arcs,
+  }));
+  const semanticCoverageLabel = `${stats.semantic.coverage_pct.toFixed(1)}%`;
+  const semanticOrphanLabel = `${stats.semantic.orphan_pct.toFixed(1)}%`;
+  const semanticCoherenceLabel = `${(stats.semantic.avg_coherence * 100).toFixed(1)}%`;
+  const semanticRiskTone =
+    stats.semantic.drift_risk === "high"
+      ? "text-rose-300 border-rose-400/40 bg-rose-400/10"
+      : stats.semantic.drift_risk === "medium"
+        ? "text-amber-200 border-amber-400/35 bg-amber-400/10"
+        : "text-emerald-200 border-emerald-400/35 bg-emerald-400/10";
 
   return (
     <div className="space-y-6">
@@ -2882,6 +2942,132 @@ export default function StatsPage() {
           </span>
         </div>
         <InteractiveTimelineChart daily={coverageDaily} color="#f59e0b" yLabel="% covered" />
+      </section>
+
+      <section id="semantic-arcs" className="vibe-panel scroll-mt-28 rounded-xl p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="vibe-title text-lg">Semantic Arcs & Drift Checks</h2>
+          <span
+            className={`rounded border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${semanticRiskTone}`}
+          >
+            Drift risk: {stats.semantic.drift_risk}
+          </span>
+        </div>
+        <p className="mb-4 text-sm text-slate-300">
+          Arc clusters are built from pgvector nearest-neighbor density so you can inspect
+          conversation themes independent of explicit topic tags.
+        </p>
+
+        {!stats.semantic.enabled ? (
+          <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 px-3 py-2 text-sm text-slate-300">
+            Semantic analytics are disabled for this environment.
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Cluster coverage</div>
+                <div className="mt-1 text-xl font-semibold text-slate-100">{semanticCoverageLabel}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Unclustered</div>
+                <div className="mt-1 text-xl font-semibold text-slate-100">{semanticOrphanLabel}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Avg coherence</div>
+                <div className="mt-1 text-xl font-semibold text-slate-100">{semanticCoherenceLabel}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-400">Arcs in view</div>
+                <div className="mt-1 text-xl font-semibold text-slate-100">{stats.semantic.arcs.length}</div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+              <p className="mb-2 text-xs uppercase tracking-wide text-slate-400">Quality checks</p>
+              <ul className="space-y-1 text-sm text-slate-200">
+                {stats.semantic.checks.map((check, index) => (
+                  <li key={`${check}-${index}`} className="list-disc pl-1">
+                    {check}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {semanticTrendDaily.length > 0 ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-slate-200">Semantic Coverage Trend</h3>
+                  <InteractiveTimelineChart
+                    daily={semanticTrendDaily}
+                    color="#38bdf8"
+                    yLabel="clustered msgs"
+                  />
+                </div>
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-slate-200">Emerging Arcs Trend</h3>
+                  <InteractiveTimelineChart
+                    daily={semanticEmergingDaily}
+                    color="#34d399"
+                    yLabel="new arcs"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-left text-slate-400">
+                  <tr>
+                    <th className="pb-2 pr-3">Arc</th>
+                    <th className="pb-2 pr-3">Msgs</th>
+                    <th className="pb-2 pr-3">People</th>
+                    <th className="pb-2 pr-3">Channels</th>
+                    <th className="pb-2 pr-3">Coherence</th>
+                    <th className="pb-2 pr-3">Momentum</th>
+                    <th className="pb-2 pr-3">Window</th>
+                    <th className="pb-2">Sample</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.semantic.arcs.map((arc) => (
+                    <tr key={arc.id} className="border-t border-slate-700/60 align-top">
+                      <td className="py-2 pr-3 text-slate-100">
+                        <div className="font-semibold">{arc.title}</div>
+                        <div className="mt-1 text-xs text-slate-400">{arc.top_people.join(", ")}</div>
+                      </td>
+                      <td className="py-2 pr-3">{arc.message_count}</td>
+                      <td className="py-2 pr-3">{arc.people}</td>
+                      <td className="py-2 pr-3">{arc.channels}</td>
+                      <td className="py-2 pr-3">{Math.round(arc.coherence * 100)}%</td>
+                      <td className="py-2 pr-3">
+                        <span
+                          className={`rounded px-2 py-0.5 text-xs ${
+                            arc.momentum === "rising"
+                              ? "badge-hot"
+                              : arc.momentum === "cooling"
+                                ? "badge-archive"
+                                : "badge-cool"
+                          }`}
+                        >
+                          {arc.momentum}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3 text-xs text-slate-300">
+                        {arc.first_seen} to {arc.last_seen}
+                      </td>
+                      <td className="py-2 text-xs text-slate-300">
+                        {arc.sample_messages[0]
+                          ? `${arc.sample_messages[0].sender_name}: ${arc.sample_messages[0].body.slice(0, 120)}`
+                          : "n/a"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </section>
 
       <section id="topic-explorer" className="scroll-mt-28 grid gap-4 xl:grid-cols-2">

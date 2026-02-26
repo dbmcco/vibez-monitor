@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
       const parsed = Number.parseInt(daysParam || "90", 10);
       days = Number.isFinite(parsed) ? parsed : 90;
     }
-    const stats = getStatsDashboard(days);
+    const stats = await getStatsDashboard(days);
     return NextResponse.json({ stats });
   } catch {
     return NextResponse.json({ stats: null }, { status: 500 });
