@@ -27,6 +27,17 @@ Built for personal intelligence workflows, but structured so anyone can run it w
 - Relationship context (who is central, who connects clusters, who to follow up with) is difficult to keep in working memory.
 - Daily briefing quality improves when synthesis uses both lexical and semantic retrieval.
 
+## Human Rationale (Why This Helps)
+
+- Without a system like this, people either skim endlessly or disengage and miss high-value moments.
+- The goal is not to read less for its own sake; it is to spend attention where it creates the most leverage.
+- In practice, daily use shifts from reactive scrolling to intentional action.
+- You get a short executive view of what changed and why it matters.
+- You get concrete contribution moves instead of vague “stay engaged” pressure.
+- You can ask focused chat questions and get grounded answers from your own history.
+- You can see who is central in the network and where relationship effort is likely to compound.
+- Over time, this creates continuity: fewer dropped threads, better follow-through, and clearer signal on what to do next.
+
 ## What It Does
 
 - Ingests decrypted message metadata/content from Beeper Desktop API (`http://localhost:23373`)
