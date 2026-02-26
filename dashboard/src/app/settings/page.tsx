@@ -77,7 +77,7 @@ export default function SettingsPage() {
             rows={2}
             value={projectsInput}
             onChange={(e) => setProjectsInput(e.target.value)}
-            placeholder="MoneyCommand, Amplifier, driftdriver"
+            placeholder="Core Platform, Analytics Pipeline, Automation Tooling"
           />
           <p className="mt-1 text-xs text-slate-400">
             Comma-separated project names the classifier matches against

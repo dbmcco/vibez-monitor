@@ -72,12 +72,12 @@ DEFAULT_VALUE_CONFIG = {
         "productivity",
     ],
     "projects": [
-        "MoneyCommand",
-        "Amplifier",
-        "driftdriver",
-        "workgraph",
-        "speedrift",
-        "home-automation",
+        "core-platform",
+        "automation-tooling",
+        "knowledge-system",
+        "analytics-pipeline",
+        "integration-workflows",
+        "ops-infrastructure",
     ],
     "alert_threshold": 7,
 }
