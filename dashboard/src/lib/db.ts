@@ -3076,6 +3076,7 @@ export function getTopicDrilldown(
 }
 
 type SpaceSource = "beeper" | "google_groups" | "other";
+const GOOGLE_GROUPS_ROOM_ID_PREFIX = "googlegroup:";
 
 export interface SourceSpaceSummary {
   source: SpaceSource;
@@ -3163,6 +3164,8 @@ export function getSpacesDashboard(
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
   }
+  whereParts.push("LOWER(m.room_id) LIKE ?");
+  whereParams.push(`${GOOGLE_GROUPS_ROOM_ID_PREFIX}%`);
   const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
 
   const rows = db
@@ -3194,8 +3197,8 @@ export function getSpacesDashboard(
   for (const row of rows) {
     const roomId = String(row.room_id || "").trim();
     const roomName = String(row.room_name || "Unknown").trim() || "Unknown";
-    const source = sourceFromRoomId(roomId);
-    const key = roomId || `${source}:${roomName}`;
+    const source: SpaceSource = "google_groups";
+    const key = roomId || `${GOOGLE_GROUPS_ROOM_ID_PREFIX}${roomName.toLowerCase()}`;
     const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
     allPeople.add(sender);
     const acc = roomAcc.get(key) || {
@@ -3229,41 +3232,20 @@ export function getSpacesDashboard(
       return b.last_seen_ts - a.last_seen_ts;
     });
 
-  const sourceAcc = new Map<
-    SpaceSource,
-    { source: SpaceSource; messages: number; rooms: number; people: Set<string> }
-  >();
-  for (const space of spaces) {
-    const acc = sourceAcc.get(space.source) || {
-      source: space.source,
-      messages: 0,
-      rooms: 0,
-      people: new Set<string>(),
-    };
-    acc.messages += space.messages;
-    acc.rooms += 1;
-    sourceAcc.set(space.source, acc);
-  }
-  for (const row of rows) {
-    const source = sourceFromRoomId(String(row.room_id || ""));
-    const acc = sourceAcc.get(source);
-    if (!acc) continue;
-    acc.people.add(normalizeSenderName(row.sender_name || "Unknown", userAliases));
-  }
-  const sources: SourceSpaceSummary[] = Array.from(sourceAcc.values())
-    .map((acc) => ({
-      source: acc.source,
-      label: sourceLabel(acc.source),
-      messages: acc.messages,
-      rooms: acc.rooms,
-      people: acc.people.size,
-    }))
-    .sort((a, b) => b.messages - a.messages);
+  const sources: SourceSpaceSummary[] = [
+    {
+      source: "google_groups",
+      label: "Google Groups",
+      messages: rows.length,
+      rooms: spaces.length,
+      people: allPeople.size,
+    },
+  ];
 
   const selectedRoomId =
     selectedSpace && spaces.some((space) => space.room_id === selectedSpace)
       ? selectedSpace
-      : spaces.find((space) => space.source === "google_groups")?.room_id || spaces[0]?.room_id || null;
+      : spaces[0]?.room_id || null;
 
   let recent_messages: SpaceRecentMessage[] = [];
   if (selectedRoomId) {

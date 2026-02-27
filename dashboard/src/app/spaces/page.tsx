@@ -5,14 +5,6 @@ import { StatusPanel } from "@/components/StatusPanel";
 
 type DayRange = 14 | 30 | 90 | "all";
 
-interface SourceSummary {
-  source: "beeper" | "google_groups" | "other";
-  label: string;
-  messages: number;
-  rooms: number;
-  people: number;
-}
-
 interface SpaceSummary {
   key: string;
   source: "beeper" | "google_groups" | "other";
@@ -49,7 +41,13 @@ interface SpacesDashboard {
     rooms: number;
     people: number;
   };
-  sources: SourceSummary[];
+  sources: {
+    source: "beeper" | "google_groups" | "other";
+    label: string;
+    messages: number;
+    rooms: number;
+    people: number;
+  }[];
   spaces: SpaceSummary[];
   selected_space: string | null;
   recent_messages: RecentMessage[];
@@ -101,8 +99,8 @@ export default function SpacesPage() {
     return (
       <StatusPanel
         loading
-        title="Loading spaces"
-        detail="Preparing source and room-level monitoring views."
+        title="Loading Google Groups"
+        detail="Preparing group-level monitoring views."
       />
     );
   }
@@ -110,8 +108,8 @@ export default function SpacesPage() {
   if (!spaces) {
     return (
       <StatusPanel
-        title="Spaces unavailable"
-        detail="Could not load source tracking right now. Try refreshing in a moment."
+        title="Google Groups unavailable"
+        detail="Could not load group tracking right now. Try refreshing in a moment."
       />
     );
   }
@@ -127,10 +125,10 @@ export default function SpacesPage() {
     <div className="space-y-6">
       <header className="fade-up space-y-2">
         <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-          Spaces
+          Google Groups Monitor
         </h1>
         <p className="vibe-subtitle">
-          Track Beeper and Google Group streams separately, with quick drilldown by room.
+          Track Google Groups ingestion only, with quick drilldown by group.
         </p>
       </header>
 
@@ -174,38 +172,23 @@ export default function SpacesPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 md:grid-cols-3">
-        {spaces.sources.map((source) => (
-          <div key={source.source} className="vibe-panel rounded-xl p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-400">{source.label}</div>
-            <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
-              <div>
-                <div className="text-slate-400">Msgs</div>
-                <div className="font-semibold text-slate-100">{source.messages}</div>
-              </div>
-              <div>
-                <div className="text-slate-400">Rooms</div>
-                <div className="font-semibold text-slate-100">{source.rooms}</div>
-              </div>
-              <div>
-                <div className="text-slate-400">People</div>
-                <div className="font-semibold text-slate-100">{source.people}</div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </section>
+      {spaces.spaces.length === 0 ? (
+        <StatusPanel
+          title="No Google Groups messages yet"
+          detail="No `googlegroup:*` messages are currently in the selected window. Confirm `GOOGLE_GROUPS_LIST_IDS` + IMAP credentials and let sync run."
+        />
+      ) : null}
 
       <section className="vibe-panel rounded-xl p-5">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="vibe-title text-lg">Room Tracker</h2>
+            <h2 className="vibe-title text-lg">Group Tracker</h2>
             <p className="text-xs text-slate-400">
-              Pick a room to inspect that stream independently from the rest of the corpus.
+              Pick a group to inspect that stream independently from the rest of the corpus.
             </p>
           </div>
           <label className="flex min-w-[280px] flex-col gap-1 text-xs text-slate-400">
-            Active room
+            Active group
             <select
               className="vibe-input rounded-md px-3 py-2 text-sm text-slate-100"
               value={spaces.selected_space || ""}
@@ -216,7 +199,7 @@ export default function SpacesPage() {
             >
               {spaces.spaces.map((space) => (
                 <option key={space.key} value={space.room_id}>
-                  {space.source_label} · {space.room_name}
+                  {space.room_name}
                 </option>
               ))}
             </select>
@@ -227,8 +210,7 @@ export default function SpacesPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-900/70 text-xs uppercase tracking-wide text-slate-400">
               <tr>
-                <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-left">Room</th>
+                <th className="px-3 py-2 text-left">Group</th>
                 <th className="px-3 py-2 text-right">Msgs</th>
                 <th className="px-3 py-2 text-right">People</th>
                 <th className="px-3 py-2 text-left">Last seen</th>
@@ -242,7 +224,6 @@ export default function SpacesPage() {
                     space.room_id === spaces.selected_space ? "bg-cyan-400/10" : "hover:bg-slate-900/50"
                   }`}
                 >
-                  <td className="px-3 py-2 text-slate-300">{space.source_label}</td>
                   <td className="px-3 py-2 text-slate-200">{space.room_name}</td>
                   <td className="px-3 py-2 text-right text-slate-300">{space.messages}</td>
                   <td className="px-3 py-2 text-right text-slate-300">{space.people}</td>
@@ -256,8 +237,7 @@ export default function SpacesPage() {
 
       <section className="vibe-panel rounded-xl p-5">
         <h2 className="vibe-title text-lg">
-          Recent Stream: {selectedSpaceMeta?.source_label || "Space"} ·{" "}
-          {selectedSpaceMeta?.room_name || "N/A"}
+          Recent Group Stream: {selectedSpaceMeta?.room_name || "N/A"}
         </h2>
         <div className="mt-3 space-y-2">
           {spaces.recent_messages.length === 0 ? (
