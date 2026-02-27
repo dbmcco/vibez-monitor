@@ -3074,3 +3074,252 @@ export function getTopicDrilldown(
     recent_messages,
   };
 }
+
+type SpaceSource = "beeper" | "google_groups" | "other";
+
+export interface SourceSpaceSummary {
+  source: SpaceSource;
+  label: string;
+  messages: number;
+  rooms: number;
+  people: number;
+}
+
+export interface SpaceRoomSummary {
+  key: string;
+  source: SpaceSource;
+  source_label: string;
+  room_id: string;
+  room_name: string;
+  messages: number;
+  people: number;
+  last_seen: string;
+  last_seen_ts: number;
+}
+
+export interface SpaceRecentMessage {
+  id: string;
+  timestamp: number;
+  date: string;
+  room_id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  relevance_score: number | null;
+}
+
+export interface SpacesDashboard {
+  window_days: number;
+  generated_at: string;
+  scope: {
+    mode: "active_groups" | "excluded_groups" | "all";
+    active_group_count: number;
+    excluded_groups: string[];
+  };
+  totals: {
+    messages: number;
+    rooms: number;
+    people: number;
+  };
+  sources: SourceSpaceSummary[];
+  spaces: SpaceRoomSummary[];
+  selected_space: string | null;
+  recent_messages: SpaceRecentMessage[];
+}
+
+function sourceFromRoomId(roomId: string): SpaceSource {
+  const normalized = roomId.trim().toLowerCase();
+  if (!normalized) return "other";
+  if (normalized.startsWith("googlegroup:")) return "google_groups";
+  if (normalized.startsWith("beeper:") || normalized.startsWith("!")) return "beeper";
+  return "other";
+}
+
+function sourceLabel(source: SpaceSource): string {
+  if (source === "google_groups") return "Google Groups";
+  if (source === "beeper") return "Beeper";
+  return "Other";
+}
+
+export function getSpacesDashboard(
+  windowDays: number | null = 30,
+  selectedSpace: string | null = null,
+): SpacesDashboard {
+  const resolvedWindow = resolveWindowDays(windowDays);
+  const cutoffTs =
+    resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
+  const db = getDb();
+  const scope = loadRoomScope(db);
+  const userAliases = loadUserAliases();
+  const roomScope = buildRoomScopeWhere("m", scope);
+
+  const whereParts: string[] = [];
+  const whereParams: unknown[] = [];
+  if (cutoffTs !== null) {
+    whereParts.push("m.timestamp >= ?");
+    whereParams.push(cutoffTs);
+  }
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    whereParams.push(...roomScope.params);
+  }
+  const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+  const rows = db
+    .prepare(
+      `SELECT m.room_id, m.room_name, m.sender_name, m.timestamp
+       FROM messages m
+       ${whereClause}
+       ORDER BY m.timestamp DESC`
+    )
+    .all(...whereParams) as {
+    room_id: string;
+    room_name: string;
+    sender_name: string;
+    timestamp: number;
+  }[];
+
+  const roomAcc = new Map<
+    string,
+    {
+      source: SpaceSource;
+      roomId: string;
+      roomName: string;
+      messages: number;
+      people: Set<string>;
+      lastTs: number;
+    }
+  >();
+  const allPeople = new Set<string>();
+  for (const row of rows) {
+    const roomId = String(row.room_id || "").trim();
+    const roomName = String(row.room_name || "Unknown").trim() || "Unknown";
+    const source = sourceFromRoomId(roomId);
+    const key = roomId || `${source}:${roomName}`;
+    const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+    allPeople.add(sender);
+    const acc = roomAcc.get(key) || {
+      source,
+      roomId: roomId || key,
+      roomName,
+      messages: 0,
+      people: new Set<string>(),
+      lastTs: row.timestamp,
+    };
+    acc.messages += 1;
+    acc.people.add(sender);
+    acc.lastTs = Math.max(acc.lastTs, row.timestamp);
+    roomAcc.set(key, acc);
+  }
+
+  const spaces: SpaceRoomSummary[] = Array.from(roomAcc.entries())
+    .map(([key, acc]) => ({
+      key,
+      source: acc.source,
+      source_label: sourceLabel(acc.source),
+      room_id: acc.roomId,
+      room_name: acc.roomName,
+      messages: acc.messages,
+      people: acc.people.size,
+      last_seen: new Date(acc.lastTs).toLocaleString(),
+      last_seen_ts: acc.lastTs,
+    }))
+    .sort((a, b) => {
+      if (b.messages !== a.messages) return b.messages - a.messages;
+      return b.last_seen_ts - a.last_seen_ts;
+    });
+
+  const sourceAcc = new Map<
+    SpaceSource,
+    { source: SpaceSource; messages: number; rooms: number; people: Set<string> }
+  >();
+  for (const space of spaces) {
+    const acc = sourceAcc.get(space.source) || {
+      source: space.source,
+      messages: 0,
+      rooms: 0,
+      people: new Set<string>(),
+    };
+    acc.messages += space.messages;
+    acc.rooms += 1;
+    sourceAcc.set(space.source, acc);
+  }
+  for (const row of rows) {
+    const source = sourceFromRoomId(String(row.room_id || ""));
+    const acc = sourceAcc.get(source);
+    if (!acc) continue;
+    acc.people.add(normalizeSenderName(row.sender_name || "Unknown", userAliases));
+  }
+  const sources: SourceSpaceSummary[] = Array.from(sourceAcc.values())
+    .map((acc) => ({
+      source: acc.source,
+      label: sourceLabel(acc.source),
+      messages: acc.messages,
+      rooms: acc.rooms,
+      people: acc.people.size,
+    }))
+    .sort((a, b) => b.messages - a.messages);
+
+  const selectedRoomId =
+    selectedSpace && spaces.some((space) => space.room_id === selectedSpace)
+      ? selectedSpace
+      : spaces.find((space) => space.source === "google_groups")?.room_id || spaces[0]?.room_id || null;
+
+  let recent_messages: SpaceRecentMessage[] = [];
+  if (selectedRoomId) {
+    const messageWhereParts = [...whereParts, "m.room_id = ?"];
+    const messageParams = [...whereParams, selectedRoomId];
+    recent_messages = db
+      .prepare(
+        `SELECT m.id, m.timestamp, m.room_id, m.room_name, m.sender_name, m.body, c.relevance_score
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         WHERE ${messageWhereParts.join(" AND ")}
+         ORDER BY m.timestamp DESC
+         LIMIT 80`
+      )
+      .all(...messageParams)
+      .map((row) => {
+        const typed = row as {
+          id: string;
+          timestamp: number;
+          room_id: string;
+          room_name: string;
+          sender_name: string;
+          body: string;
+          relevance_score: number | null;
+        };
+        return {
+          id: typed.id,
+          timestamp: typed.timestamp,
+          date: new Date(typed.timestamp).toLocaleString(),
+          room_id: typed.room_id,
+          room_name: typed.room_name,
+          sender_name: normalizeSenderName(typed.sender_name || "Unknown", userAliases),
+          body: typed.body || "",
+          relevance_score: typed.relevance_score,
+        };
+      });
+  }
+
+  db.close();
+
+  return {
+    window_days: resolvedWindow ?? Math.max(30, Math.ceil(rows.length / 200)),
+    generated_at: new Date().toISOString(),
+    scope: {
+      mode: scope.mode,
+      active_group_count: Math.max(scope.activeGroupIds.length, scope.activeGroupNames.length),
+      excluded_groups: scope.excludedGroups,
+    },
+    totals: {
+      messages: rows.length,
+      rooms: spaces.length,
+      people: allPeople.size,
+    },
+    sources,
+    spaces,
+    selected_space: selectedRoomId,
+    recent_messages,
+  };
+}

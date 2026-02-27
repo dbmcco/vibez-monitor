@@ -9,6 +9,7 @@ const links = [
   { href: "/briefing", label: "Briefing" },
   { href: "/contribute", label: "Contribute" },
   { href: "/stats", label: "Stats" },
+  { href: "/spaces", label: "Spaces" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -20,6 +21,8 @@ const PAGE_INTENT: Record<string, string> = {
     "Action queue: highest-value contributions filtered by urgency, need, and relationship leverage.",
   "/stats":
     "Pattern analysis: trends by user, channel, and topic with drilldown detail.",
+  "/spaces":
+    "Multi-stream monitoring: keep Beeper and Google Group spaces visible separately.",
   "/chat":
     "Rapid synthesis: ask focused questions and get grounded answers from message history.",
   "/settings": "System controls: tune data scope, models, and analysis behavior.",

@@ -96,32 +96,46 @@ async def main():
         except Exception:
             logger.exception("Failed to index sync batch into pgvector")
 
+    async def run_source_with_restart(name: str, source_coro_factory):
+        while True:
+            try:
+                await source_coro_factory()
+            except Exception:
+                logger.exception("%s source crashed; restarting in 10s", name)
+                await asyncio.sleep(10)
+
     tasks: list[asyncio.Task] = []
     if beeper_enabled:
         tasks.append(
             asyncio.create_task(
-                sync_loop(
-                    db_path=config.db_path,
-                    api_base=config.beeper_api_url,
-                    api_token=config.beeper_api_token,
-                    poll_interval=config.poll_interval,
-                    on_messages=on_messages,
+                run_source_with_restart(
+                    "Beeper",
+                    lambda: sync_loop(
+                        db_path=config.db_path,
+                        api_base=config.beeper_api_url,
+                        api_token=config.beeper_api_token,
+                        poll_interval=config.poll_interval,
+                        on_messages=on_messages,
+                    ),
                 )
             )
         )
     if google_enabled:
         tasks.append(
             asyncio.create_task(
-                google_groups_sync_loop(
-                    db_path=config.db_path,
-                    host=config.google_groups_imap_host,
-                    port=config.google_groups_imap_port,
-                    user=config.google_groups_imap_user,
-                    password=config.google_groups_imap_password,
-                    mailbox=config.google_groups_imap_mailbox,
-                    group_keys=google_groups,
-                    poll_interval=config.google_groups_poll_interval,
-                    on_messages=on_messages,
+                run_source_with_restart(
+                    "Google Groups",
+                    lambda: google_groups_sync_loop(
+                        db_path=config.db_path,
+                        host=config.google_groups_imap_host,
+                        port=config.google_groups_imap_port,
+                        user=config.google_groups_imap_user,
+                        password=config.google_groups_imap_password,
+                        mailbox=config.google_groups_imap_mailbox,
+                        group_keys=google_groups,
+                        poll_interval=config.google_groups_poll_interval,
+                        on_messages=on_messages,
+                    ),
                 )
             )
         )

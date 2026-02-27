@@ -54,6 +54,7 @@ Built for personal intelligence workflows, but structured so anyone can run it w
   - `Briefing` executive pulse + evidence
   - `Contribute` prioritization model
   - `Stats` trends, coverage, network views, and semantic arc clustering/drift checks
+  - `Spaces` source-aware monitoring (Beeper vs Google Groups) with room-level drilldown
   - semantic boosts for Chat retrieval, Radar arc evidence, and Contribute opportunity density when pgvector is enabled
 
 ## Feature Highlights
@@ -62,6 +63,7 @@ Built for personal intelligence workflows, but structured so anyone can run it w
 - Executive briefing with snapshot, daily memo, evidence, and radar arcs.
 - Contribution opportunity model balancing urgency, need, leverage, aging risk, and blockers.
 - Stats and trends with lifecycle analysis, co-occurrence, drilldowns, and people network graphing.
+- Spaces page for independent monitoring of each incoming stream/room.
 - Interactive people network with zoom/pan, filtering, and method transparency for relationship inference.
 - Optional pgvector hybrid retrieval for semantic arcs, drift checks, and stronger evidence recall.
 
