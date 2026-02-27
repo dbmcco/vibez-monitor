@@ -50,14 +50,22 @@ function loadExcludedGroups(): string[] {
 }
 
 function loadRoomScope(db: Database.Database): RoomScope {
-  const activeGroupsRow = db
+  const beeperActiveIdsRow = db
     .prepare("SELECT value FROM sync_state WHERE key = ?")
     .get("beeper_active_group_ids") as { value: string } | undefined;
-  const activeGroupIds = parseJsonStringArray(activeGroupsRow?.value);
-  const activeGroupNamesRow = db
+  const beeperActiveGroupIds = parseJsonStringArray(beeperActiveIdsRow?.value);
+  const beeperActiveNamesRow = db
     .prepare("SELECT value FROM sync_state WHERE key = ?")
     .get("beeper_active_group_names") as { value: string } | undefined;
-  const activeGroupNames = parseJsonStringArray(activeGroupNamesRow?.value);
+  const beeperActiveGroupNames = parseJsonStringArray(beeperActiveNamesRow?.value);
+  const googleGroupsRow = db
+    .prepare("SELECT value FROM sync_state WHERE key = ?")
+    .get("google_groups_active_group_keys") as { value: string } | undefined;
+  const googleGroupKeys = parseJsonStringArray(googleGroupsRow?.value);
+  const googleGroupIds = googleGroupKeys.map((key) => `googlegroup:${key}`);
+
+  const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));
+  const activeGroupNames = Array.from(new Set([...beeperActiveGroupNames, ...googleGroupKeys]));
   const excludedGroups = loadExcludedGroups();
 
   if (activeGroupIds.length > 0 || activeGroupNames.length > 0) {

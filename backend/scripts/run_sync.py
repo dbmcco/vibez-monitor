@@ -9,6 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vibez.config import Config
 from vibez.beeper_sync import sync_loop
+from vibez.google_groups_sync import (
+    canonical_group_key,
+    sync_loop as google_groups_sync_loop,
+)
 
 
 async def main():
@@ -25,15 +29,38 @@ async def main():
     )
 
     logger = logging.getLogger("vibez.sync")
-
-    if not config.beeper_api_token:
-        logger.error("BEEPER_API_TOKEN not set. Run OAuth flow or create token in Beeper Desktop > Settings > Developers.")
+    google_groups = {
+        key
+        for raw in config.google_groups_list_ids
+        if (key := canonical_group_key(raw))
+    }
+    beeper_enabled = bool(config.beeper_api_token)
+    google_enabled = bool(config.google_groups_enabled and google_groups)
+    if not (beeper_enabled or google_enabled):
+        logger.error(
+            "No sync source configured. Set BEEPER_API_TOKEN and/or GOOGLE_GROUPS_* env vars."
+        )
         sys.exit(1)
 
-    logger.info("Starting vibez-monitor sync service (Beeper Desktop API)")
+    logger.info("Starting vibez-monitor sync service")
     logger.info("Database: %s", config.db_path)
-    logger.info("API: %s", config.beeper_api_url)
-    logger.info("Poll interval: %ds", config.poll_interval)
+    if beeper_enabled:
+        logger.info("Beeper API: %s (poll=%ds)", config.beeper_api_url, config.poll_interval)
+    else:
+        logger.info("Beeper sync disabled (BEEPER_API_TOKEN missing)")
+    if google_enabled:
+        logger.info(
+            "Google Groups IMAP: %s:%d mailbox=%s (poll=%ds) groups=%s",
+            config.google_groups_imap_host,
+            config.google_groups_imap_port,
+            config.google_groups_imap_mailbox,
+            config.google_groups_poll_interval,
+            ", ".join(sorted(google_groups)),
+        )
+    elif config.google_groups_list_ids:
+        logger.warning(
+            "Google Groups list ids set but IMAP credentials missing; source disabled."
+        )
     if config.pgvector_url:
         logger.info(
             "pgvector indexing enabled (table=%s, dim=%d)",
@@ -69,13 +96,37 @@ async def main():
         except Exception:
             logger.exception("Failed to index sync batch into pgvector")
 
-    await sync_loop(
-        db_path=config.db_path,
-        api_base=config.beeper_api_url,
-        api_token=config.beeper_api_token,
-        poll_interval=config.poll_interval,
-        on_messages=on_messages,
-    )
+    tasks: list[asyncio.Task] = []
+    if beeper_enabled:
+        tasks.append(
+            asyncio.create_task(
+                sync_loop(
+                    db_path=config.db_path,
+                    api_base=config.beeper_api_url,
+                    api_token=config.beeper_api_token,
+                    poll_interval=config.poll_interval,
+                    on_messages=on_messages,
+                )
+            )
+        )
+    if google_enabled:
+        tasks.append(
+            asyncio.create_task(
+                google_groups_sync_loop(
+                    db_path=config.db_path,
+                    host=config.google_groups_imap_host,
+                    port=config.google_groups_imap_port,
+                    user=config.google_groups_imap_user,
+                    password=config.google_groups_imap_password,
+                    mailbox=config.google_groups_imap_mailbox,
+                    group_keys=google_groups,
+                    poll_interval=config.google_groups_poll_interval,
+                    on_messages=on_messages,
+                )
+            )
+        )
+
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

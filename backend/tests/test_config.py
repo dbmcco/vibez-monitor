@@ -22,6 +22,8 @@ def test_config_defaults(tmp_path):
         "ANTHROPIC_API_KEY": "sk-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
+        "VIBEZ_SUBJECT_NAME": "User",
+        "VIBEZ_SELF_ALIASES": "",
     }
     with patch.dict(os.environ, env, clear=False):
         cfg = Config.from_env()
@@ -64,3 +66,19 @@ def test_read_beeper_token(tmp_path):
 
     token = read_beeper_token(mock_db)
     assert token == "syt_test_token"
+
+
+def test_config_google_groups_enabled_when_imap_and_list_ids_are_set(tmp_path):
+    env = {
+        "ANTHROPIC_API_KEY": "sk-test-key",
+        "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
+        "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
+        "GOOGLE_GROUPS_IMAP_USER": "b@mcco.us",
+        "GOOGLE_GROUPS_IMAP_PASSWORD": "app-password",
+        "GOOGLE_GROUPS_LIST_IDS": "made-of-meat,other-group",
+    }
+    with patch.dict(os.environ, env, clear=False):
+        cfg = Config.from_env()
+
+    assert cfg.google_groups_enabled is True
+    assert cfg.google_groups_list_ids == ("made-of-meat", "other-group")

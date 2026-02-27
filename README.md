@@ -160,6 +160,30 @@ Where pgvector materially improves output:
 - Contribute: improved opportunity density around semantically related contribution patterns.
 - Stats: semantic coverage/orphan monitoring and arc trend diagnostics.
 
+## Optional: Google Groups Ingestion
+
+Use this when you want a Google Group (for example `made-of-meat`) to feed the same Chat/Briefing/Stats pipeline.
+
+1. In Google Groups, set delivery to send posts to your email address.
+2. Create an app password for that mailbox account (if using Gmail/Workspace with 2FA).
+3. Set env vars:
+
+```bash
+GOOGLE_GROUPS_IMAP_HOST=imap.gmail.com
+GOOGLE_GROUPS_IMAP_PORT=993
+GOOGLE_GROUPS_IMAP_USER=you@example.com
+GOOGLE_GROUPS_IMAP_PASSWORD=your-app-password
+GOOGLE_GROUPS_IMAP_MAILBOX=INBOX
+GOOGLE_GROUPS_LIST_IDS=made-of-meat
+GOOGLE_GROUPS_POLL_INTERVAL=60
+```
+
+Notes:
+
+- `GOOGLE_GROUPS_LIST_IDS` accepts comma-separated values and supports either group slug (`made-of-meat`) or full Google Groups address/list-id form.
+- `run_sync.py` now supports multi-source ingestion; it can run Beeper + Google Groups together.
+- First run initializes an IMAP UID cursor to current mailbox head (no historical backfill by default), then ingests new posts incrementally.
+
 ## Profile Personalization
 
 This repo is intentionally user-specific at runtime but user-agnostic in source.

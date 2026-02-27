@@ -14,6 +14,12 @@ from vibez.profile import (
     get_subject_name,
 )
 
+
+def _parse_csv(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
 def read_beeper_token(beeper_db_path: str | Path) -> str:
     """Read the Matrix access token from Beeper's local database."""
     conn = sqlite3.connect(str(beeper_db_path))
@@ -37,6 +43,13 @@ class Config:
     )
     beeper_api_url: str = "http://localhost:23373"
     beeper_api_token: str = ""
+    google_groups_imap_host: str = "imap.gmail.com"
+    google_groups_imap_port: int = 993
+    google_groups_imap_user: str = ""
+    google_groups_imap_password: str = ""
+    google_groups_imap_mailbox: str = "INBOX"
+    google_groups_list_ids: tuple[str, ...] = field(default_factory=tuple)
+    google_groups_poll_interval: int = 60
     pgvector_url: str = ""
     pgvector_table: str = "vibez_message_embeddings"
     pgvector_dimensions: int = 256
@@ -52,6 +65,14 @@ class Config:
     log_dir: Path = field(
         default_factory=lambda: Path.home() / "Library/Logs/vibez-monitor"
     )
+
+    @property
+    def google_groups_enabled(self) -> bool:
+        return bool(
+            self.google_groups_imap_user
+            and self.google_groups_imap_password
+            and self.google_groups_list_ids
+        )
 
     @classmethod
     def from_env(cls) -> Config:
@@ -87,6 +108,25 @@ class Config:
             beeper_db_path=beeper_db,
             beeper_api_url=os.environ.get("BEEPER_API_URL", "http://localhost:23373"),
             beeper_api_token=os.environ.get("BEEPER_API_TOKEN", ""),
+            google_groups_imap_host=os.environ.get(
+                "GOOGLE_GROUPS_IMAP_HOST", "imap.gmail.com"
+            ),
+            google_groups_imap_port=int(
+                os.environ.get("GOOGLE_GROUPS_IMAP_PORT", "993")
+            ),
+            google_groups_imap_user=os.environ.get("GOOGLE_GROUPS_IMAP_USER", ""),
+            google_groups_imap_password=os.environ.get(
+                "GOOGLE_GROUPS_IMAP_PASSWORD", ""
+            ),
+            google_groups_imap_mailbox=os.environ.get(
+                "GOOGLE_GROUPS_IMAP_MAILBOX", "INBOX"
+            ),
+            google_groups_list_ids=_parse_csv(
+                os.environ.get("GOOGLE_GROUPS_LIST_IDS")
+            ),
+            google_groups_poll_interval=int(
+                os.environ.get("GOOGLE_GROUPS_POLL_INTERVAL", "60")
+            ),
             pgvector_url=os.environ.get("VIBEZ_PGVECTOR_URL", ""),
             pgvector_table=os.environ.get(
                 "VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings"
