@@ -258,6 +258,17 @@ def _save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
     return count
 
 
+def _imap_mailbox_arg(mailbox: str) -> str:
+    """Quote mailbox names so IMAP EXAMINE/SELECT handles spaces safely."""
+    cleaned = str(mailbox or "INBOX").strip()
+    if not cleaned:
+        cleaned = "INBOX"
+    if cleaned.startswith('"') and cleaned.endswith('"'):
+        return cleaned
+    escaped = cleaned.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def poll_once(
     db_path: Path,
     host: str,
@@ -269,9 +280,10 @@ def poll_once(
 ) -> list[dict[str, Any]]:
     """Poll IMAP mailbox once and return newly parsed Google Groups messages."""
     uid_cursor = _load_uid_cursor(db_path, mailbox)
+    mailbox_arg = _imap_mailbox_arg(mailbox)
     with imaplib.IMAP4_SSL(host=host, port=port) as client:
         client.login(user, password)
-        status, _ = client.select(mailbox, readonly=True)
+        status, _ = client.select(mailbox_arg, readonly=True)
         if status != "OK":
             raise RuntimeError(f"Could not select mailbox: {mailbox}")
 
