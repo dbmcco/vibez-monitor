@@ -3077,6 +3077,25 @@ export function getTopicDrilldown(
 
 type SpaceSource = "beeper" | "google_groups" | "other";
 const GOOGLE_GROUPS_ROOM_ID_PREFIX = "googlegroup:";
+export type SpaceTriageMode = "focus" | "balanced" | "explore";
+
+interface SpaceTriageDefaults {
+  minRelevance: number;
+  maxMessages: number;
+}
+
+const SPACE_TRIAGE_DEFAULTS: Record<SpaceTriageMode, SpaceTriageDefaults> = {
+  focus: { minRelevance: 5, maxMessages: 32 },
+  balanced: { minRelevance: 3, maxMessages: 60 },
+  explore: { minRelevance: 0, maxMessages: 100 },
+};
+
+export interface SpacesDashboardOptions {
+  mode?: SpaceTriageMode;
+  query?: string;
+  minRelevance?: number;
+  maxMessages?: number;
+}
 
 export interface SourceSpaceSummary {
   source: SpaceSource;
@@ -3107,6 +3126,10 @@ export interface SpaceRecentMessage {
   sender_name: string;
   body: string;
   relevance_score: number | null;
+  contribution_flag: number | null;
+  alert_level: string | null;
+  topics: string[];
+  priority_score: number;
 }
 
 export interface SpacesDashboard {
@@ -3125,15 +3148,30 @@ export interface SpacesDashboard {
   sources: SourceSpaceSummary[];
   spaces: SpaceRoomSummary[];
   selected_space: string | null;
+  triage: {
+    mode: SpaceTriageMode;
+    query: string;
+    min_relevance: number;
+    max_messages: number;
+    filtered_messages: number;
+    high_signal_messages: number;
+    contribution_messages: number;
+    hot_alert_messages: number;
+    avg_relevance: number;
+  };
+  top_topics: {
+    topic: string;
+    messages: number;
+    avg_relevance: number;
+  }[];
+  top_people: {
+    sender_name: string;
+    messages: number;
+    avg_relevance: number;
+    contributions: number;
+    hot_alerts: number;
+  }[];
   recent_messages: SpaceRecentMessage[];
-}
-
-function sourceFromRoomId(roomId: string): SpaceSource {
-  const normalized = roomId.trim().toLowerCase();
-  if (!normalized) return "other";
-  if (normalized.startsWith("googlegroup:")) return "google_groups";
-  if (normalized.startsWith("beeper:") || normalized.startsWith("!")) return "beeper";
-  return "other";
 }
 
 function sourceLabel(source: SpaceSource): string {
@@ -3145,8 +3183,22 @@ function sourceLabel(source: SpaceSource): string {
 export function getSpacesDashboard(
   windowDays: number | null = 30,
   selectedSpace: string | null = null,
+  options: SpacesDashboardOptions = {},
 ): SpacesDashboard {
   const resolvedWindow = resolveWindowDays(windowDays);
+  const triageMode: SpaceTriageMode =
+    options.mode && options.mode in SPACE_TRIAGE_DEFAULTS ? options.mode : "focus";
+  const triageDefaults = SPACE_TRIAGE_DEFAULTS[triageMode];
+  const minRelevance = Math.max(
+    0,
+    Math.min(9, Math.round(options.minRelevance ?? triageDefaults.minRelevance)),
+  );
+  const maxMessages = Math.max(
+    10,
+    Math.min(200, Math.round(options.maxMessages ?? triageDefaults.maxMessages)),
+  );
+  const query = String(options.query || "").trim();
+  const queryLike = `%${query.toLowerCase()}%`;
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
   const db = getDb();
@@ -3247,18 +3299,41 @@ export function getSpacesDashboard(
       ? selectedSpace
       : spaces[0]?.room_id || null;
 
+  let triageFilteredMessages = 0;
+  let triageHighSignal = 0;
+  let triageContributions = 0;
+  let triageHotAlerts = 0;
+  let triageAvgRelevance = 0;
+  let top_topics: SpacesDashboard["top_topics"] = [];
+  let top_people: SpacesDashboard["top_people"] = [];
   let recent_messages: SpaceRecentMessage[] = [];
+
   if (selectedRoomId) {
     const messageWhereParts = [...whereParts, "m.room_id = ?"];
     const messageParams = [...whereParams, selectedRoomId];
-    recent_messages = db
+    if (query) {
+      messageWhereParts.push("(LOWER(m.body) LIKE ? OR LOWER(m.sender_name) LIKE ?)");
+      messageParams.push(queryLike, queryLike);
+    }
+    if (triageMode === "focus") {
+      messageWhereParts.push(
+        "(COALESCE(c.relevance_score, 0) >= ? OR COALESCE(c.contribution_flag, 0) = 1 OR c.alert_level = 'hot')",
+      );
+      messageParams.push(minRelevance);
+    } else if (minRelevance > 0) {
+      messageWhereParts.push("COALESCE(c.relevance_score, 0) >= ?");
+      messageParams.push(minRelevance);
+    }
+
+    const ranked = db
       .prepare(
-        `SELECT m.id, m.timestamp, m.room_id, m.room_name, m.sender_name, m.body, c.relevance_score
+        `SELECT m.id, m.timestamp, m.room_id, m.room_name, m.sender_name, m.body,
+                c.relevance_score, c.contribution_flag, c.alert_level, c.topics
          FROM messages m
          LEFT JOIN classifications c ON m.id = c.message_id
          WHERE ${messageWhereParts.join(" AND ")}
          ORDER BY m.timestamp DESC
-         LIMIT 80`
+         LIMIT 600`
       )
       .all(...messageParams)
       .map((row) => {
@@ -3270,18 +3345,139 @@ export function getSpacesDashboard(
           sender_name: string;
           body: string;
           relevance_score: number | null;
+          contribution_flag: number | null;
+          alert_level: string | null;
+          topics: string | null;
         };
+        const timestamp = typed.timestamp;
+        const nowTs = Date.now();
+        const ageHours = Math.max(0, (nowTs - timestamp) / 3_600_000);
+        const relevance = typed.relevance_score ?? 0;
+        const recencyBonus = Math.max(0, 1.5 - ageHours / 24);
+        const contributionBonus = (typed.contribution_flag || 0) > 0 ? 2 : 0;
+        const alertBonus =
+          typed.alert_level === "hot" ? 2.5 : typed.alert_level === "digest" ? 1 : 0;
+        const queryBonus =
+          query &&
+          (`${typed.sender_name} ${typed.body}`.toLowerCase().includes(query.toLowerCase()) || false)
+            ? 0.5
+            : 0;
+        const priorityScore =
+          relevance * 0.8 + contributionBonus + alertBonus + recencyBonus + queryBonus;
         return {
           id: typed.id,
-          timestamp: typed.timestamp,
-          date: new Date(typed.timestamp).toLocaleString(),
+          timestamp,
+          date: new Date(timestamp).toLocaleString(),
           room_id: typed.room_id,
           room_name: typed.room_name,
           sender_name: normalizeSenderName(typed.sender_name || "Unknown", userAliases),
           body: typed.body || "",
           relevance_score: typed.relevance_score,
+          contribution_flag: typed.contribution_flag,
+          alert_level: typed.alert_level,
+          topics: parseTopics(typed.topics),
+          priority_score: Number(priorityScore.toFixed(3)),
         };
       });
+
+    triageFilteredMessages = ranked.length;
+    if (ranked.length > 0) {
+      triageHighSignal = ranked.filter(
+        (item) =>
+          (item.relevance_score ?? 0) >= 7 ||
+          (item.contribution_flag || 0) > 0 ||
+          item.alert_level === "hot",
+      ).length;
+      triageContributions = ranked.filter((item) => (item.contribution_flag || 0) > 0).length;
+      triageHotAlerts = ranked.filter((item) => item.alert_level === "hot").length;
+      const relevanceRows = ranked.filter((item) => item.relevance_score !== null);
+      triageAvgRelevance =
+        relevanceRows.length > 0
+          ? Number(
+              (
+                relevanceRows.reduce((sum, item) => sum + (item.relevance_score || 0), 0) /
+                relevanceRows.length
+              ).toFixed(2),
+            )
+          : 0;
+    }
+
+    const sortedRanked = [...ranked].sort((a, b) => {
+      if (triageMode === "explore") {
+        return b.timestamp - a.timestamp || b.priority_score - a.priority_score;
+      }
+      if (triageMode === "balanced") {
+        return (
+          (b.relevance_score ?? Number.NEGATIVE_INFINITY) -
+            (a.relevance_score ?? Number.NEGATIVE_INFINITY) ||
+          b.priority_score - a.priority_score ||
+          b.timestamp - a.timestamp
+        );
+      }
+      return b.priority_score - a.priority_score || b.timestamp - a.timestamp;
+    });
+
+    recent_messages = sortedRanked.slice(0, maxMessages);
+
+    const topicAcc = new Map<string, { messages: number; relevanceTotal: number; relevanceRows: number }>();
+    const peopleAcc = new Map<
+      string,
+      { messages: number; relevanceTotal: number; relevanceRows: number; contributions: number; hotAlerts: number }
+    >();
+    for (const item of recent_messages) {
+      const person = peopleAcc.get(item.sender_name) || {
+        messages: 0,
+        relevanceTotal: 0,
+        relevanceRows: 0,
+        contributions: 0,
+        hotAlerts: 0,
+      };
+      person.messages += 1;
+      if (item.relevance_score !== null) {
+        person.relevanceTotal += item.relevance_score;
+        person.relevanceRows += 1;
+      }
+      if ((item.contribution_flag || 0) > 0) person.contributions += 1;
+      if (item.alert_level === "hot") person.hotAlerts += 1;
+      peopleAcc.set(item.sender_name, person);
+
+      for (const topic of new Set(item.topics)) {
+        const acc = topicAcc.get(topic) || { messages: 0, relevanceTotal: 0, relevanceRows: 0 };
+        acc.messages += 1;
+        if (item.relevance_score !== null) {
+          acc.relevanceTotal += item.relevance_score;
+          acc.relevanceRows += 1;
+        }
+        topicAcc.set(topic, acc);
+      }
+    }
+
+    top_topics = Array.from(topicAcc.entries())
+      .map(([topic, acc]) => ({
+        topic,
+        messages: acc.messages,
+        avg_relevance:
+          acc.relevanceRows > 0 ? Number((acc.relevanceTotal / acc.relevanceRows).toFixed(2)) : 0,
+      }))
+      .sort((a, b) => b.messages - a.messages || b.avg_relevance - a.avg_relevance)
+      .slice(0, 8);
+
+    top_people = Array.from(peopleAcc.entries())
+      .map(([sender_name, acc]) => ({
+        sender_name,
+        messages: acc.messages,
+        avg_relevance:
+          acc.relevanceRows > 0 ? Number((acc.relevanceTotal / acc.relevanceRows).toFixed(2)) : 0,
+        contributions: acc.contributions,
+        hot_alerts: acc.hotAlerts,
+      }))
+      .sort(
+        (a, b) =>
+          b.messages - a.messages ||
+          b.contributions - a.contributions ||
+          b.avg_relevance - a.avg_relevance,
+      )
+      .slice(0, 8);
   }
 
   db.close();
@@ -3302,6 +3498,19 @@ export function getSpacesDashboard(
     sources,
     spaces,
     selected_space: selectedRoomId,
+    triage: {
+      mode: triageMode,
+      query,
+      min_relevance: minRelevance,
+      max_messages: maxMessages,
+      filtered_messages: triageFilteredMessages,
+      high_signal_messages: triageHighSignal,
+      contribution_messages: triageContributions,
+      hot_alert_messages: triageHotAlerts,
+      avg_relevance: triageAvgRelevance,
+    },
+    top_topics,
+    top_people,
     recent_messages,
   };
 }

@@ -7,10 +7,34 @@ ROOT_DIR="$(cd "$DASHBOARD_DIR/.." && pwd)"
 ENV_FILE="$DASHBOARD_DIR/.env.local"
 
 if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    case "$raw" in
+      "" | \#*) continue
+    esac
+
+    key="${raw%%=*}"
+    value="${raw#*=}"
+
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      continue
+    fi
+
+    if [ "${#value}" -ge 2 ]; then
+      first_char="${value:0:1}"
+      last_char="${value: -1}"
+      if { [ "$first_char" = '"' ] && [ "$last_char" = '"' ]; } || {
+        [ "$first_char" = "'" ] && [ "$last_char" = "'" ];
+      }; then
+        value="${value:1:${#value}-2}"
+      fi
+    fi
+
+    export "$key=$value"
+  done <"$ENV_FILE"
 fi
 
 export VIBEZ_DB_PATH="${VIBEZ_DB_PATH:-$ROOT_DIR/vibez.db}"
