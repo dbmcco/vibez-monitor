@@ -303,7 +303,8 @@ def poll_once(
                 )
             return []
 
-        status, data = client.uid("SEARCH", None, f"{uid_cursor + 1}:*")
+        # Under UID SEARCH, the UID criterion must be explicit.
+        status, data = client.uid("SEARCH", None, "UID", f"{uid_cursor + 1}:*")
         if status != "OK":
             return []
         raw = data[0] if data and data[0] else b""
