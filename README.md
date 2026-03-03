@@ -69,7 +69,7 @@ Built for personal intelligence workflows, but structured so anyone can run it w
 
 ## Architecture At A Glance
 
-1. `run_sync.py` ingests Beeper desktop API data and normalizes messages into SQLite.
+1. `run_sync.py` (continuous) or `run_sync_once.py` (scheduled) ingests source data and normalizes messages into SQLite.
 2. Classification enriches messages with relevance, topics, needs, and contribution signals.
 3. Optional pgvector indexing mirrors embeddings for semantic retrieval and clustering.
 4. `run_synthesis.py` generates daily briefing artifacts and chat context resources.
@@ -94,6 +94,7 @@ If you want to host this for a group without personal "how you should contribute
 VIBEZ_PUBLIC_MODE=true
 NEXT_PUBLIC_VIBEZ_PUBLIC_MODE=true
 VIBEZ_CONTRIBUTION_INTEL_ENABLED=false
+VIBEZ_PUBLIC_EXCLUDED_GROUPS=goodsense grocers
 VIBEZ_SUBJECT_NAME=Community
 VIBEZ_SELF_ALIASES=
 ```
@@ -104,6 +105,23 @@ What this changes:
 - Removes contribution sections from Briefing API responses.
 - Disables contribution-intel persistence in backend classification/synthesis.
 - Keeps Chat, Briefing, Stats, and Groups focused on shared signal instead of personal action prompts.
+
+## Access Code Gate
+
+To require an access code before anyone can see app pages or APIs:
+
+```bash
+VIBEZ_ACCESS_CODE=your-shared-code
+VIBEZ_ACCESS_COOKIE_NAME=vibez_access_token
+VIBEZ_ACCESS_COOKIE_TTL_SECONDS=1209600
+VIBEZ_ACCESS_COOKIE_SECURE=true
+```
+
+Behavior:
+
+- If `VIBEZ_ACCESS_CODE` is empty, gate is disabled.
+- If set, users are redirected to `/access` until they enter the code.
+- Unauthorized API requests return `401` (except `/api/access` and `/api/health`).
 
 ## Repo Layout
 
@@ -142,6 +160,7 @@ cd ..
 
 ```bash
 backend/.venv/bin/python backend/scripts/run_sync.py
+backend/.venv/bin/python backend/scripts/run_sync_once.py
 backend/.venv/bin/python backend/scripts/run_synthesis.py
 ```
 
@@ -189,14 +208,14 @@ Where pgvector materially improves output:
 Recommended topology:
 
 1. `dashboard` web service (serves `http://...` UI + API routes).
-2. `sync` worker service (runs `backend/scripts/run_sync.py` continuously).
+2. `sync` worker service (continuous mode via `backend/scripts/run_sync.py`) or scheduled mode via `backend/scripts/run_sync_once.py`.
 3. `synthesis` scheduled job (runs `backend/scripts/run_synthesis.py` on schedule).
 4. Railway Postgres for pgvector embeddings.
 5. A Railway Volume for `vibez.db` (SQLite remains the primary OLTP store).
 
 Key notes:
 
-- Beeper Desktop API is local-only; cloud deployments should use Google Groups ingestion.
+- Beeper Desktop API is local-only; cloud deployments should use Google Groups unless the runtime has direct Beeper Desktop API access.
 - Set `VIBEZ_DB_PATH=/data/vibez.db` and mount the same Railway Volume path in services that read/write SQLite.
 - Set `VIBEZ_PGVECTOR_URL` to Railway Postgres `DATABASE_URL`.
 - Keep `VIBEZ_PGVECTOR_INDEX_ON_SYNC=true` so new messages are indexed automatically.
@@ -208,10 +227,28 @@ Example commands:
   - Start: `cd dashboard && npm run start`
 - Sync worker:
   - Start: `cd backend && python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\" && .venv/bin/python scripts/run_sync.py`
+- Sync scheduled job (twice daily):
+  - Start command: `cd backend && python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\" && .venv/bin/python scripts/run_sync_once.py`
+  - Schedule: `0 */12 * * *`
+  - Optional: set `VIBEZ_SYNC_ONCE_RUN_SYNTHESIS=true` to refresh briefing artifacts after each scheduled sync.
 - Synthesis schedule:
   - Command: `cd backend && .venv/bin/python scripts/run_synthesis.py`
 
 Use Railway scheduled executions for synthesis (for example every 12 hours).
+
+Deploy helper (modeled after Meridian):
+
+```bash
+bash ./scripts/deploy.sh --check-only
+bash ./scripts/deploy.sh --method auto
+```
+
+Useful options:
+
+- `--method railway` to require `railway up`.
+- `--method git` to force `git push` deployment.
+- `--services dashboard,sync,synthesis` to target service set.
+- `--app-url https://your-domain` to run post-deploy health check.
 
 ## Optional: Google Groups Ingestion
 

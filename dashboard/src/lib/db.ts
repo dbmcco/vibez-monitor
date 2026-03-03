@@ -42,16 +42,36 @@ function parseJsonStringArray(raw: string | null | undefined): string[] {
 
 function loadExcludedGroups(): string[] {
   const raw = process.env.VIBEZ_EXCLUDED_GROUPS;
-  if (raw === undefined) return [...DEFAULT_EXCLUDED_GROUPS];
-  return raw
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
+  const base =
+    raw === undefined
+      ? [...DEFAULT_EXCLUDED_GROUPS]
+      : raw
+          .split(",")
+          .map((name) => name.trim())
+          .filter((name) => name.length > 0);
+  if (!isPublicModeEnabled()) return base;
+
+  const publicRaw = process.env.VIBEZ_PUBLIC_EXCLUDED_GROUPS;
+  const publicList =
+    publicRaw && publicRaw.trim().length > 0
+      ? publicRaw
+          .split(",")
+          .map((name) => name.trim())
+          .filter((name) => name.length > 0)
+      : ["goodsense grocers"];
+
+  return Array.from(new Set([...base, ...publicList]));
 }
 
 function isPublicModeEnabled(): boolean {
   const raw = process.env.VIBEZ_PUBLIC_MODE || process.env.NEXT_PUBLIC_VIBEZ_PUBLIC_MODE;
   return typeof raw === "string" && ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+function normalizeExclusionList(values: string[]): string[] {
+  return values
+    .map((name) => name.trim().toLowerCase())
+    .filter((name) => name.length > 0);
 }
 
 function loadRoomScope(db: Database.Database): RoomScope {
@@ -71,7 +91,7 @@ function loadRoomScope(db: Database.Database): RoomScope {
 
   const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));
   const activeGroupNames = Array.from(new Set([...beeperActiveGroupNames, ...googleGroupKeys]));
-  const excludedGroups = loadExcludedGroups();
+  const excludedGroups = normalizeExclusionList(loadExcludedGroups());
 
   if (activeGroupIds.length > 0 || activeGroupNames.length > 0) {
     return { mode: "active_groups", activeGroupIds, activeGroupNames, excludedGroups };
@@ -111,7 +131,7 @@ function buildRoomScopeWhere(alias: string, scope: RoomScope): {
   }
   if (scope.excludedGroups.length > 0) {
     return {
-      clause: `${alias}.room_name NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      clause: `LOWER(${alias}.room_name) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
       params: scope.excludedGroups,
     };
   }

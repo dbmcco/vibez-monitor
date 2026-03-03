@@ -29,7 +29,8 @@ export async function GET(request: NextRequest) {
       maxMessages: Number.isFinite(maxMessages) ? maxMessages : undefined,
     });
     return NextResponse.json({ spaces });
-  } catch {
+  } catch (error) {
+    console.error("GET /api/spaces failed", error);
     return NextResponse.json({ spaces: null }, { status: 500 });
   }
 }
