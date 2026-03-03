@@ -1,5 +1,9 @@
 import json
-from vibez.classifier import build_classify_prompt, parse_classification
+from vibez.classifier import (
+    build_classify_prompt,
+    parse_classification,
+    strip_contribution_intel,
+)
 
 
 def test_build_classify_prompt():
@@ -82,3 +86,20 @@ def test_parse_classification_with_markdown_fences():
     result = parse_classification(raw)
     assert result["relevance_score"] == 7
     assert result["alert_level"] == "digest"
+
+
+def test_strip_contribution_intel_zeros_personalized_fields():
+    classification = {
+        "relevance_score": 8,
+        "topics": ["tools"],
+        "entities": ["repo"],
+        "contribution_flag": True,
+        "contribution_themes": ["context-management"],
+        "contribution_hint": "Share your framework",
+        "alert_level": "hot",
+    }
+    sanitized = strip_contribution_intel(classification)
+    assert sanitized["contribution_flag"] is False
+    assert sanitized["contribution_themes"] == []
+    assert sanitized["contribution_hint"] == ""
+    assert sanitized["relevance_score"] == 8

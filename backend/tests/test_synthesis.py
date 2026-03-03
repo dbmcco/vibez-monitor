@@ -5,6 +5,7 @@ from vibez.synthesis import (
     get_day_messages,
     make_pithy_report,
     parse_synthesis_report,
+    strip_contribution_sections,
 )
 
 
@@ -152,3 +153,20 @@ def test_make_pithy_report_trims_and_limits_items():
     assert len(pithy["contributions"][0]["why"]) <= 143
     assert len(pithy["contributions"][0]["action"]) <= 113
     assert len(pithy["contributions"][0]["draft_message"]) <= 323
+
+
+def test_strip_contribution_sections_removes_personalized_actions():
+    report = {
+        "briefing": [
+            {
+                "title": "Thread",
+                "participants": ["Alex"],
+                "insights": "Summary",
+                "how_to_add_value": "Reply with your framework",
+            }
+        ],
+        "contributions": [{"theme": "x", "action": "do y"}],
+    }
+    sanitized = strip_contribution_sections(report)
+    assert sanitized["contributions"] == []
+    assert "how_to_add_value" not in sanitized["briefing"][0]

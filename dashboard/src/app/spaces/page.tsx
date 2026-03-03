@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { StatusPanel } from "@/components/StatusPanel";
+import { isPublicMode } from "@/lib/runtime";
 
 type DayRange = 14 | 30 | 90 | "all";
 type TriageMode = "focus" | "balanced" | "explore";
@@ -100,6 +101,7 @@ function modeLabel(mode: TriageMode): string {
 }
 
 export default function SpacesPage() {
+  const publicMode = isPublicMode();
   const [days, setDays] = useState<DayRange>(30);
   const [selectedSpace, setSelectedSpace] = useState<string>("");
   const [mode, setMode] = useState<TriageMode>("focus");
@@ -221,9 +223,11 @@ export default function SpacesPage() {
               }`}
             >
               <div className="font-semibold">{modeLabel(candidate)}</div>
-              <div className="mt-1 text-xs text-slate-400">
-                {candidate === "focus"
-                  ? "Action-heavy queue with high relevance, hot alerts, and contribution signal."
+                <div className="mt-1 text-xs text-slate-400">
+                  {candidate === "focus"
+                  ? publicMode
+                    ? "Action-heavy queue with high relevance and recency signal."
+                    : "Action-heavy queue with high relevance, hot alerts, and contribution signal."
                   : candidate === "balanced"
                     ? "Mixed feed balancing relevance and recency."
                     : "Chronological scan for broad situational awareness."}
@@ -311,8 +315,10 @@ export default function SpacesPage() {
           <div className="vibe-title mt-1 text-2xl">{spaces.triage.high_signal_messages}</div>
         </div>
         <div className="vibe-panel rounded-xl p-4">
-          <div className="text-xs text-slate-400">Contribution</div>
-          <div className="vibe-title mt-1 text-2xl">{spaces.triage.contribution_messages}</div>
+          <div className="text-xs text-slate-400">{publicMode ? "Actionable" : "Contribution"}</div>
+          <div className="vibe-title mt-1 text-2xl">
+            {publicMode ? spaces.triage.high_signal_messages : spaces.triage.contribution_messages}
+          </div>
         </div>
         <div className="vibe-panel rounded-xl p-4">
           <div className="text-xs text-slate-400">Hot Alerts</div>
@@ -418,7 +424,9 @@ export default function SpacesPage() {
                   <div className="font-medium text-slate-200">{person.sender_name}</div>
                   <div className="mt-1 text-xs text-slate-400">
                     {person.messages} msgs · avg rel {person.avg_relevance}
-                    {person.contributions > 0 ? ` · ${person.contributions} contribution` : ""}
+                    {!publicMode && person.contributions > 0
+                      ? ` · ${person.contributions} contribution`
+                      : ""}
                     {person.hot_alerts > 0 ? ` · ${person.hot_alerts} hot` : ""}
                   </div>
                 </div>
@@ -458,7 +466,7 @@ export default function SpacesPage() {
                       rel {message.relevance_score}
                     </span>
                   ) : null}
-                  {(message.contribution_flag || 0) > 0 ? (
+                  {!publicMode && (message.contribution_flag || 0) > 0 ? (
                     <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-emerald-300">
                       contribution
                     </span>

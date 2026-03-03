@@ -3,8 +3,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { isPublicMode } from "@/lib/runtime";
 
-const links = [
+const ALL_LINKS = [
   { href: "/chat", label: "Chat" },
   { href: "/briefing", label: "Briefing" },
   { href: "/contribute", label: "Contribute" },
@@ -29,9 +30,16 @@ const PAGE_INTENT: Record<string, string> = {
 };
 
 export function Nav() {
+  const publicMode = isPublicMode();
+  const links = publicMode ? ALL_LINKS.filter((link) => link.href !== "/contribute") : ALL_LINKS;
   const pathname = usePathname();
-  const activeLabel = links.find((link) => link.href === pathname)?.label ?? "Chat";
-  const activeIntent = PAGE_INTENT[pathname] ?? PAGE_INTENT["/"];
+  const activeLabel =
+    links.find((link) => link.href === pathname)?.label ??
+    (pathname === "/contribute" ? "Contribute" : "Chat");
+  const activeIntent =
+    publicMode && pathname === "/contribute"
+      ? "Shared deployment mode disables personal contribution workflows."
+      : PAGE_INTENT[pathname] ?? PAGE_INTENT["/"];
   return (
     <nav className="sticky top-0 z-40 border-b border-slate-700/50 bg-slate-950/75 px-4 py-4 backdrop-blur-xl sm:px-6">
       <div className="mx-auto max-w-6xl">

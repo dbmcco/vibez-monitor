@@ -7,10 +7,22 @@ import {
   getReport,
   getVibezRadarSnapshot,
 } from "@/lib/db";
+import { isPublicMode } from "@/lib/runtime";
 import { computeSemanticAnalytics } from "@/lib/semantic";
+
+function sanitizeReportContributions<T extends { contributions: string | null } | null>(
+  report: T,
+): T {
+  if (!report) return report;
+  return {
+    ...report,
+    contributions: null,
+  } as T;
+}
 
 export async function GET(request: NextRequest) {
   try {
+    const publicMode = isPublicMode();
     const date = request.nextUrl.searchParams.get("date");
     const report = date ? getReport(date) : getLatestReport();
     const previous_report = report ? getPreviousReport(report.report_date) : null;
@@ -26,8 +38,10 @@ export async function GET(request: NextRequest) {
           })
         : null;
     return NextResponse.json({
-      report,
-      previous_report,
+      report: publicMode ? sanitizeReportContributions(report) : report,
+      previous_report: publicMode
+        ? sanitizeReportContributions(previous_report)
+        : previous_report,
       recent_update,
       radar,
       semantic_briefing,

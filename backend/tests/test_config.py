@@ -82,3 +82,17 @@ def test_config_google_groups_enabled_when_imap_and_list_ids_are_set(tmp_path):
 
     assert cfg.google_groups_enabled is True
     assert cfg.google_groups_list_ids == ("made-of-meat", "other-group")
+
+
+def test_config_public_mode_disables_contribution_intel_by_default(tmp_path):
+    env = {
+        "ANTHROPIC_API_KEY": "sk-test-key",
+        "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
+        "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
+        "VIBEZ_PUBLIC_MODE": "true",
+    }
+    with patch.dict(os.environ, env, clear=False):
+        cfg = Config.from_env()
+
+    assert cfg.public_mode is True
+    assert cfg.contribution_intel_enabled is False

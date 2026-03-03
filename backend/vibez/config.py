@@ -20,6 +20,12 @@ def _parse_csv(raw: str | None) -> tuple[str, ...]:
         return ()
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
+
+def _parse_bool(raw: str | None, default: bool = False) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 def read_beeper_token(beeper_db_path: str | Path) -> str:
     """Read the Matrix access token from Beeper's local database."""
     conn = sqlite3.connect(str(beeper_db_path))
@@ -62,6 +68,8 @@ class Config:
     subject_name: str = DEFAULT_SUBJECT_NAME
     self_aliases: tuple[str, ...] = field(default_factory=get_self_aliases)
     dossier_path: Path = field(default_factory=get_dossier_path)
+    public_mode: bool = False
+    contribution_intel_enabled: bool = True
     log_dir: Path = field(
         default_factory=lambda: Path.home() / "Library/Logs/vibez-monitor"
     )
@@ -96,6 +104,11 @@ class Config:
         self_aliases = get_self_aliases(
             subject_name=subject_name,
             raw_aliases=os.environ.get("VIBEZ_SELF_ALIASES"),
+        )
+        public_mode = _parse_bool(os.environ.get("VIBEZ_PUBLIC_MODE"), False)
+        contribution_intel_enabled = _parse_bool(
+            os.environ.get("VIBEZ_CONTRIBUTION_INTEL_ENABLED"),
+            not public_mode,
         )
 
         return cls(
@@ -144,6 +157,8 @@ class Config:
             subject_name=subject_name,
             self_aliases=self_aliases,
             dossier_path=get_dossier_path(os.environ.get("VIBEZ_DOSSIER_PATH")),
+            public_mode=public_mode,
+            contribution_intel_enabled=contribution_intel_enabled,
             log_dir=Path(
                 os.environ.get(
                     "LOG_DIR", str(Path.home() / "Library/Logs/vibez-monitor")

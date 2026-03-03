@@ -49,6 +49,11 @@ function loadExcludedGroups(): string[] {
     .filter((name) => name.length > 0);
 }
 
+function isPublicModeEnabled(): boolean {
+  const raw = process.env.VIBEZ_PUBLIC_MODE || process.env.NEXT_PUBLIC_VIBEZ_PUBLIC_MODE;
+  return typeof raw === "string" && ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
 function loadRoomScope(db: Database.Database): RoomScope {
   const beeperActiveIdsRow = db
     .prepare("SELECT value FROM sync_state WHERE key = ?")
@@ -3185,6 +3190,7 @@ export function getSpacesDashboard(
   selectedSpace: string | null = null,
   options: SpacesDashboardOptions = {},
 ): SpacesDashboard {
+  const publicMode = isPublicModeEnabled();
   const resolvedWindow = resolveWindowDays(windowDays);
   const triageMode: SpaceTriageMode =
     options.mode && options.mode in SPACE_TRIAGE_DEFAULTS ? options.mode : "focus";
@@ -3354,7 +3360,7 @@ export function getSpacesDashboard(
         const ageHours = Math.max(0, (nowTs - timestamp) / 3_600_000);
         const relevance = typed.relevance_score ?? 0;
         const recencyBonus = Math.max(0, 1.5 - ageHours / 24);
-        const contributionBonus = (typed.contribution_flag || 0) > 0 ? 2 : 0;
+        const contributionBonus = !publicMode && (typed.contribution_flag || 0) > 0 ? 2 : 0;
         const alertBonus =
           typed.alert_level === "hot" ? 2.5 : typed.alert_level === "digest" ? 1 : 0;
         const queryBonus =
@@ -3388,7 +3394,9 @@ export function getSpacesDashboard(
           (item.contribution_flag || 0) > 0 ||
           item.alert_level === "hot",
       ).length;
-      triageContributions = ranked.filter((item) => (item.contribution_flag || 0) > 0).length;
+      triageContributions = publicMode
+        ? 0
+        : ranked.filter((item) => (item.contribution_flag || 0) > 0).length;
       triageHotAlerts = ranked.filter((item) => item.alert_level === "hot").length;
       const relevanceRows = ranked.filter((item) => item.relevance_score !== null);
       triageAvgRelevance =
@@ -3437,7 +3445,7 @@ export function getSpacesDashboard(
         person.relevanceTotal += item.relevance_score;
         person.relevanceRows += 1;
       }
-      if ((item.contribution_flag || 0) > 0) person.contributions += 1;
+      if (!publicMode && (item.contribution_flag || 0) > 0) person.contributions += 1;
       if (item.alert_level === "hot") person.hotAlerts += 1;
       peopleAcc.set(item.sender_name, person);
 

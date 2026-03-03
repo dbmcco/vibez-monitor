@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "crypto";
 import { getContributionDashboard, getCurrentRoomScope } from "@/lib/db";
 import { getSubjectName, getSubjectPossessive } from "@/lib/profile";
+import { isPublicMode } from "@/lib/runtime";
 import { scoreSemanticNeighborhood } from "@/lib/semantic";
 
 function parsePositiveInt(value: string | null, fallback: number): number {
@@ -398,6 +399,32 @@ function mergeSmartIntel(
 
 export async function GET(request: NextRequest) {
   try {
+    if (isPublicMode()) {
+      return NextResponse.json({
+        generated_at: new Date().toISOString(),
+        lookback_days: 45,
+        totals: {
+          messages: 0,
+          opportunities: 0,
+          act_now: 0,
+          high_leverage: 0,
+          aging_risk: 0,
+          blocked: 0,
+        },
+        axis_summary: [],
+        need_summary: [],
+        recurring_themes: [],
+        opportunities: [],
+        sections: [],
+        smart_model: {
+          enabled: false,
+          summary: "Public mode enabled; contribution ranking is disabled.",
+          coverage: 0,
+          model: "",
+        },
+        contributions: [],
+      });
+    }
     const days = parsePositiveInt(request.nextUrl.searchParams.get("days"), 45);
     const limit = parsePositiveInt(request.nextUrl.searchParams.get("limit"), 600);
     const smart = parseBoolean(request.nextUrl.searchParams.get("smart"), true);

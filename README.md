@@ -83,6 +83,28 @@ Built for personal intelligence workflows, but structured so anyone can run it w
 - `.env`, `vibez.db`, generated logs, and local artifacts should stay out of git.
 - This repo is source-public friendly; runtime data remains user-private.
 
+## Shared/Public Hosting Mode
+
+If you want to host this for a group without personal "how you should contribute" guidance:
+
+1. Start with a fresh database (do not upload your local `vibez.db`).
+2. Set public-mode env vars in the hosted environment:
+
+```bash
+VIBEZ_PUBLIC_MODE=true
+NEXT_PUBLIC_VIBEZ_PUBLIC_MODE=true
+VIBEZ_CONTRIBUTION_INTEL_ENABLED=false
+VIBEZ_SUBJECT_NAME=Community
+VIBEZ_SELF_ALIASES=
+```
+
+What this changes:
+
+- Hides the `Contribute` workflow from navigation and disables `/api/contributions`.
+- Removes contribution sections from Briefing API responses.
+- Disables contribution-intel persistence in backend classification/synthesis.
+- Keeps Chat, Briefing, Stats, and Groups focused on shared signal instead of personal action prompts.
+
 ## Repo Layout
 
 - `backend/`: ingestion, classification, synthesis, profile logic, tests
@@ -161,6 +183,35 @@ Where pgvector materially improves output:
 - Briefing: stronger arc detection, semantic evidence clustering, and drift risk checks.
 - Contribute: improved opportunity density around semantically related contribution patterns.
 - Stats: semantic coverage/orphan monitoring and arc trend diagnostics.
+
+## Railway Deployment (Web + Worker + Railway Postgres)
+
+Recommended topology:
+
+1. `dashboard` web service (serves `http://...` UI + API routes).
+2. `sync` worker service (runs `backend/scripts/run_sync.py` continuously).
+3. `synthesis` scheduled job (runs `backend/scripts/run_synthesis.py` on schedule).
+4. Railway Postgres for pgvector embeddings.
+5. A Railway Volume for `vibez.db` (SQLite remains the primary OLTP store).
+
+Key notes:
+
+- Beeper Desktop API is local-only; cloud deployments should use Google Groups ingestion.
+- Set `VIBEZ_DB_PATH=/data/vibez.db` and mount the same Railway Volume path in services that read/write SQLite.
+- Set `VIBEZ_PGVECTOR_URL` to Railway Postgres `DATABASE_URL`.
+- Keep `VIBEZ_PGVECTOR_INDEX_ON_SYNC=true` so new messages are indexed automatically.
+
+Example commands:
+
+- Dashboard service:
+  - Build: `cd dashboard && npm ci && npm run build`
+  - Start: `cd dashboard && npm run start`
+- Sync worker:
+  - Start: `cd backend && python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\" && .venv/bin/python scripts/run_sync.py`
+- Synthesis schedule:
+  - Command: `cd backend && .venv/bin/python scripts/run_synthesis.py`
+
+Use Railway scheduled executions for synthesis (for example every 12 hours).
 
 ## Optional: Google Groups Ingestion
 

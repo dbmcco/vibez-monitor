@@ -162,6 +162,14 @@ def save_classification(db_path: Path, message_id: str, classification: dict[str
     conn.close()
 
 
+def strip_contribution_intel(classification: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(classification)
+    sanitized["contribution_flag"] = False
+    sanitized["contribution_themes"] = []
+    sanitized["contribution_hint"] = ""
+    return sanitized
+
+
 def write_hot_alert(db_path: Path, message: dict, classification: dict) -> None:
     """Write a hot alert to a JSON file the dashboard can watch."""
     alerts_path = db_path.parent / "hot_alerts.json"
@@ -225,6 +233,8 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
             )
             raw_text = response.content[0].text
             classification = parse_classification(raw_text)
+            if not config.contribution_intel_enabled:
+                classification = strip_contribution_intel(classification)
 
             save_classification(config.db_path, msg["id"], classification)
             publish_event(

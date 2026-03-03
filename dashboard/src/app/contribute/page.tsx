@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ContributionCard } from "@/components/ContributionCard";
 import { StatusPanel } from "@/components/StatusPanel";
+import { isPublicMode } from "@/lib/runtime";
 
 type ContributionNeedType =
   | "decision"
@@ -341,6 +342,7 @@ function OpportunityMatrix({
 }
 
 export default function ContributePage() {
+  const publicMode = isPublicMode();
   const [dashboard, setDashboard] = useState<ContributionDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(45);
@@ -361,6 +363,9 @@ export default function ContributePage() {
   });
 
   useEffect(() => {
+    if (publicMode) {
+      return;
+    }
     fetch(`/api/contributions?days=${days}&limit=900`)
       .then((response) => response.json())
       .then((data: ContributionDashboard) => {
@@ -371,7 +376,7 @@ export default function ContributePage() {
         setDashboard(null);
         setLoading(false);
       });
-  }, [days]);
+  }, [days, publicMode]);
 
   function applyFocusPreset(preset: FocusPreset) {
     setFocusPreset(preset);
@@ -465,6 +470,15 @@ export default function ContributePage() {
     () => summarizeNeeds(sortedOpportunities),
     [sortedOpportunities],
   );
+
+  if (publicMode) {
+    return (
+      <StatusPanel
+        title="Contribution view disabled"
+        detail="This shared deployment runs in public mode, so personalized contribution ranking is turned off."
+      />
+    );
+  }
 
   const sectionCount = (key: ContributionSection["key"]): number =>
     sections.find((section) => section.key === key)?.items.length || 0;

@@ -369,6 +369,21 @@ def make_pithy_report(report: dict[str, Any]) -> dict[str, Any]:
     return pithy
 
 
+def strip_contribution_sections(report: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(report)
+    sanitized["contributions"] = []
+    briefing = []
+    for item in sanitized.get("briefing", []):
+        if not isinstance(item, dict):
+            briefing.append(item)
+            continue
+        row = dict(item)
+        row.pop("how_to_add_value", None)
+        briefing.append(row)
+    sanitized["briefing"] = briefing
+    return sanitized
+
+
 def parse_synthesis_report(raw: str) -> dict[str, Any]:
     """Parse synthesis output JSON with safe defaults."""
     defaults: dict[str, Any] = {
@@ -604,6 +619,8 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
     )
     raw_text = response.content[0].text
     report = make_pithy_report(parse_synthesis_report(raw_text))
+    if not config.contribution_intel_enabled:
+        report = strip_contribution_sections(report)
 
     briefing_md = render_briefing_markdown(
         report,
