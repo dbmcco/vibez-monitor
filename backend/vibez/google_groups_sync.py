@@ -15,7 +15,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email import policy
 from email.header import decode_header, make_header
 from email.message import Message
@@ -269,6 +269,41 @@ def _imap_mailbox_arg(mailbox: str) -> str:
     return f'"{escaped}"'
 
 
+def _parse_uid_list(raw: bytes | str | None) -> list[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", errors="ignore")
+    return [int(token) for token in raw.split() if token.isdigit()]
+
+
+def _search_uids(client: imaplib.IMAP4_SSL, *criteria: str) -> list[int]:
+    status, data = client.uid("SEARCH", None, *criteria)
+    if status != "OK":
+        return []
+    raw = data[0] if data and data[0] else b""
+    return _parse_uid_list(raw)
+
+
+def _search_bootstrap_candidate_uids(
+    client: imaplib.IMAP4_SSL,
+    group_keys: set[str],
+    since_date: str,
+) -> list[int]:
+    candidates: set[int] = set()
+    for group_key in sorted(group_keys):
+        list_id_hint = f"{group_key}.{_GOOGLE_GROUPS_DOMAIN}"
+        address = f"{group_key}@{_GOOGLE_GROUPS_DOMAIN}"
+        for query in (
+            ("SINCE", since_date, "HEADER", "List-Id", list_id_hint),
+            ("SINCE", since_date, "HEADER", "X-Google-Loop", address),
+            ("SINCE", since_date, "TO", address),
+            ("SINCE", since_date, "CC", address),
+        ):
+            candidates.update(_search_uids(client, *query))
+    return sorted(candidates)
+
+
 def poll_once(
     db_path: Path,
     host: str,
@@ -277,6 +312,8 @@ def poll_once(
     password: str,
     mailbox: str,
     group_keys: set[str],
+    bootstrap_days: int = 14,
+    bootstrap_max_uids: int = 2000,
 ) -> list[dict[str, Any]]:
     """Poll IMAP mailbox once and return newly parsed Google Groups messages."""
     uid_cursor = _load_uid_cursor(db_path, mailbox)
@@ -287,33 +324,58 @@ def poll_once(
         if status != "OK":
             raise RuntimeError(f"Could not select mailbox: {mailbox}")
 
-        # First run: establish cursor at latest UID, don't backfill old mail.
+        cursor_to_save = uid_cursor or 0
+        uids: list[int] = []
+
+        # First run: optionally bootstrap recent messages before advancing cursor.
         if uid_cursor is None:
-            status, data = client.uid("SEARCH", None, "ALL")
-            if status != "OK":
+            all_uids = _search_uids(client, "ALL")
+            if not all_uids:
                 return []
-            raw = data[0] if data and data[0] else b""
-            uids = [int(token) for token in raw.split() if token.isdigit()]
-            if uids:
-                _save_uid_cursor(db_path, mailbox, max(uids))
+            latest_uid = max(all_uids)
+            if bootstrap_days <= 0:
+                _save_uid_cursor(db_path, mailbox, latest_uid)
                 logger.info(
                     "Initialized Google Groups cursor at UID %s (mailbox=%s)",
-                    max(uids),
+                    latest_uid,
                     mailbox,
                 )
-            return []
+                return []
 
-        # Under UID SEARCH, the UID criterion must be explicit.
-        status, data = client.uid("SEARCH", None, "UID", f"{uid_cursor + 1}:*")
-        if status != "OK":
-            return []
-        raw = data[0] if data and data[0] else b""
-        uids = [int(token) for token in raw.split() if token.isdigit()]
+            since_date = (datetime.now(tz=timezone.utc) - timedelta(days=bootstrap_days)).strftime(
+                "%d-%b-%Y"
+            )
+            uids = _search_bootstrap_candidate_uids(client, group_keys, since_date)
+            if not uids:
+                logger.info(
+                    "Google Groups bootstrap: no group-specific candidates found, falling back to mailbox SINCE search"
+                )
+                uids = _search_uids(client, "SINCE", since_date)
+            if bootstrap_max_uids > 0 and len(uids) > bootstrap_max_uids:
+                logger.info(
+                    "Google Groups bootstrap candidates capped from %d to %d UIDs",
+                    len(uids),
+                    bootstrap_max_uids,
+                )
+                uids = uids[-bootstrap_max_uids:]
+            cursor_to_save = latest_uid
+            logger.info(
+                "Google Groups bootstrap scan (mailbox=%s, since=%s, candidates=%d)",
+                mailbox,
+                since_date,
+                len(uids),
+            )
+        else:
+            # Under UID SEARCH, the UID criterion must be explicit.
+            uids = _search_uids(client, "UID", f"{uid_cursor + 1}:*")
+
         if not uids:
+            if uid_cursor is None and cursor_to_save > 0:
+                _save_uid_cursor(db_path, mailbox, cursor_to_save)
             return []
 
         parsed_messages: list[dict[str, Any]] = []
-        max_uid = uid_cursor
+        max_uid = uid_cursor or 0
         for uid in uids:
             max_uid = max(max_uid, uid)
             status, fetch_data = client.uid("FETCH", str(uid), "(RFC822)")
@@ -330,7 +392,7 @@ def poll_once(
             if parsed:
                 parsed_messages.append(parsed)
 
-        _save_uid_cursor(db_path, mailbox, max_uid)
+        _save_uid_cursor(db_path, mailbox, max(max_uid, cursor_to_save))
         return parsed_messages
 
 
@@ -343,6 +405,8 @@ async def sync_loop(
     mailbox: str,
     group_keys: set[str],
     poll_interval: int = 60,
+    bootstrap_days: int = 14,
+    bootstrap_max_uids: int = 2000,
     on_messages=None,
 ) -> None:
     """Continuously sync Google Groups messages from IMAP into sqlite."""
@@ -366,6 +430,8 @@ async def sync_loop(
                 password=password,
                 mailbox=mailbox,
                 group_keys=group_keys,
+                bootstrap_days=bootstrap_days,
+                bootstrap_max_uids=bootstrap_max_uids,
             )
             if new_messages:
                 saved = _save_messages(db_path, new_messages)

@@ -100,3 +100,72 @@ def test_poll_once_uses_uid_search_with_explicit_uid_criterion(tmp_db, monkeypat
 
     assert rows == []
     assert seen["uid_calls"] == [("SEARCH", (None, "UID", "43:*"))]
+
+
+def test_poll_once_bootstraps_recent_messages_when_cursor_missing(tmp_db, monkeypatch):
+    init_db(tmp_db)
+
+    msg = EmailMessage()
+    msg["From"] = "Example User <user@example.com>"
+    msg["To"] = "made-of-meat@googlegroups.com"
+    msg["Date"] = "Thu, 27 Feb 2026 10:00:00 +0000"
+    msg["Message-ID"] = "<bootstrap@example.com>"
+    msg.set_content("hello from bootstrap")
+    payload = msg.as_bytes()
+
+    seen: dict[str, list[tuple[str, tuple[object, ...]]]] = {"uid_calls": []}
+
+    class FakeIMAP:
+        def __init__(self, host, port):
+            self.host = host
+            self.port = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def login(self, user, password):
+            return "OK", []
+
+        def select(self, mailbox, readonly=True):
+            return "OK", []
+
+        def uid(self, command, *args):
+            seen["uid_calls"].append((command, args))
+            if command == "SEARCH" and args == (None, "ALL"):
+                return "OK", [b"100 101 102 103"]
+            if command == "SEARCH" and len(args) == 3 and args[1] == "SINCE":
+                return "OK", [b"102 103"]
+            if command == "FETCH" and args[0] in {"102", "103"}:
+                return "OK", [(None, payload)]
+            return "OK", [b""]
+
+    monkeypatch.setattr(google_groups_sync.imaplib, "IMAP4_SSL", FakeIMAP)
+
+    rows = poll_once(
+        db_path=tmp_db,
+        host="imap.gmail.com",
+        port=993,
+        user="b@mcco.us",
+        password="app-pass",
+        mailbox="INBOX",
+        group_keys={"made-of-meat"},
+        bootstrap_days=14,
+        bootstrap_max_uids=10,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["room_id"] == "googlegroup:made-of-meat"
+
+    conn = get_connection(tmp_db)
+    cursor_row = conn.execute(
+        "SELECT value FROM sync_state WHERE key = ?",
+        ("google_groups_uid_cursor:INBOX",),
+    ).fetchone()
+    conn.close()
+    assert cursor_row == ("103",)
+    assert seen["uid_calls"][0] == ("SEARCH", (None, "ALL"))
+    assert seen["uid_calls"][1][0] == "SEARCH"
+    assert seen["uid_calls"][1][1][1] == "SINCE"

@@ -266,13 +266,15 @@ GOOGLE_GROUPS_IMAP_PASSWORD=your-app-password
 GOOGLE_GROUPS_IMAP_MAILBOX=INBOX
 GOOGLE_GROUPS_LIST_IDS=made-of-meat
 GOOGLE_GROUPS_POLL_INTERVAL=60
+GOOGLE_GROUPS_BOOTSTRAP_DAYS=14
+GOOGLE_GROUPS_BOOTSTRAP_MAX_UIDS=2000
 ```
 
 Notes:
 
 - `GOOGLE_GROUPS_LIST_IDS` accepts comma-separated values and supports either group slug (`made-of-meat`) or full Google Groups address/list-id form.
 - `run_sync.py` now supports multi-source ingestion; it can run Beeper + Google Groups together.
-- First run initializes an IMAP UID cursor to current mailbox head (no historical backfill by default), then ingests new posts incrementally.
+- On first run, the sync bootstraps recent posts from the last `GOOGLE_GROUPS_BOOTSTRAP_DAYS` days (capped by `GOOGLE_GROUPS_BOOTSTRAP_MAX_UIDS`) and then continues incrementally by UID cursor.
 
 ## Profile Personalization
 

@@ -152,9 +152,11 @@ async def main() -> None:
 
     if google_enabled:
         logger.info(
-            "Google Groups one-shot sync: mailbox=%s groups=%s",
+            "Google Groups one-shot sync: mailbox=%s groups=%s bootstrap_days=%d bootstrap_cap=%d",
             config.google_groups_imap_mailbox,
             ", ".join(sorted(google_groups)),
+            config.google_groups_bootstrap_days,
+            config.google_groups_bootstrap_max_uids,
         )
         save_google_active_groups(config.db_path, google_groups)
         parsed_messages = google_poll_once(
@@ -165,6 +167,8 @@ async def main() -> None:
             password=config.google_groups_imap_password,
             mailbox=config.google_groups_imap_mailbox,
             group_keys=google_groups,
+            bootstrap_days=config.google_groups_bootstrap_days,
+            bootstrap_max_uids=config.google_groups_bootstrap_max_uids,
         )
         saved = save_google_messages(config.db_path, parsed_messages)
         if saved:

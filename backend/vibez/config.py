@@ -56,6 +56,8 @@ class Config:
     google_groups_imap_mailbox: str = "INBOX"
     google_groups_list_ids: tuple[str, ...] = field(default_factory=tuple)
     google_groups_poll_interval: int = 60
+    google_groups_bootstrap_days: int = 14
+    google_groups_bootstrap_max_uids: int = 2000
     pgvector_url: str = ""
     pgvector_table: str = "vibez_message_embeddings"
     pgvector_dimensions: int = 256
@@ -139,6 +141,14 @@ class Config:
             ),
             google_groups_poll_interval=int(
                 os.environ.get("GOOGLE_GROUPS_POLL_INTERVAL", "60")
+            ),
+            google_groups_bootstrap_days=max(
+                0,
+                int(os.environ.get("GOOGLE_GROUPS_BOOTSTRAP_DAYS", "14")),
+            ),
+            google_groups_bootstrap_max_uids=max(
+                0,
+                int(os.environ.get("GOOGLE_GROUPS_BOOTSTRAP_MAX_UIDS", "2000")),
             ),
             pgvector_url=os.environ.get("VIBEZ_PGVECTOR_URL", ""),
             pgvector_table=os.environ.get(

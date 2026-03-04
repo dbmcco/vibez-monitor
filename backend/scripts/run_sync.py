@@ -50,12 +50,14 @@ async def main():
         logger.info("Beeper sync disabled (BEEPER_API_TOKEN missing)")
     if google_enabled:
         logger.info(
-            "Google Groups IMAP: %s:%d mailbox=%s (poll=%ds) groups=%s",
+            "Google Groups IMAP: %s:%d mailbox=%s (poll=%ds) groups=%s bootstrap_days=%d bootstrap_cap=%d",
             config.google_groups_imap_host,
             config.google_groups_imap_port,
             config.google_groups_imap_mailbox,
             config.google_groups_poll_interval,
             ", ".join(sorted(google_groups)),
+            config.google_groups_bootstrap_days,
+            config.google_groups_bootstrap_max_uids,
         )
     elif config.google_groups_list_ids:
         logger.warning(
@@ -134,6 +136,8 @@ async def main():
                         mailbox=config.google_groups_imap_mailbox,
                         group_keys=google_groups,
                         poll_interval=config.google_groups_poll_interval,
+                        bootstrap_days=config.google_groups_bootstrap_days,
+                        bootstrap_max_uids=config.google_groups_bootstrap_max_uids,
                         on_messages=on_messages,
                     ),
                 )

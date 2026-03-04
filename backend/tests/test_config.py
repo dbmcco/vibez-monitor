@@ -29,6 +29,8 @@ def test_config_defaults(tmp_path):
         cfg = Config.from_env()
     assert cfg.matrix_homeserver == "https://matrix.beeper.com"
     assert cfg.sync_timeout_ms == 30000
+    assert cfg.google_groups_bootstrap_days == 14
+    assert cfg.google_groups_bootstrap_max_uids == 2000
     assert cfg.classifier_model == "claude-sonnet-4-6"
     assert cfg.synthesis_model == "claude-sonnet-4-6"
     assert cfg.subject_name == "User"
