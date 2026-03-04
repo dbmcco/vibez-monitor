@@ -276,6 +276,43 @@ Notes:
 - `run_sync.py` now supports multi-source ingestion; it can run Beeper + Google Groups together.
 - On first run, the sync bootstraps recent posts from the last `GOOGLE_GROUPS_BOOTSTRAP_DAYS` days (capped by `GOOGLE_GROUPS_BOOTSTRAP_MAX_UIDS`) and then continues incrementally by UID cursor.
 
+## Local -> Railway Sync (Beeper + Google Groups)
+
+Use this when Railway is your shared/public app, but Beeper API access is local-only on your machine.
+
+Required local `.env`:
+
+```bash
+VIBEZ_REMOTE_URL=https://dashboard-production-8686.up.railway.app
+VIBEZ_ACCESS_CODE=your-access-code
+VIBEZ_PUSH_API_KEY=your-ingest-key
+```
+
+Required Railway env (dashboard service):
+
+```bash
+VIBEZ_PUSH_API_KEY=your-ingest-key
+```
+
+Run a normal push (new data, last 2 days):
+
+```bash
+./scripts/local_sync_to_railway.sh
+```
+
+Run a one-time historical backfill (about 1 year) then push:
+
+```bash
+./scripts/local_sync_to_railway.sh --backfill-year
+```
+
+What this does:
+
+- Runs local one-shot sync (Beeper + Google Groups).
+- Pushes local messages/classifications into Railway in batches.
+- Refreshes Railway pgvector index + synthesis after push.
+- Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
+
 ## Profile Personalization
 
 This repo is intentionally user-specific at runtime but user-agnostic in source.
@@ -295,6 +332,9 @@ Replace placeholders before loading:
 
 - `__VIBEZ_ROOT__`
 - `__LOG_DIR__`
+
+For cloud sharing from local Beeper, load `com.vibez-monitor.push-railway.plist` to run
+`scripts/local_sync_to_railway.sh` at 4:30 AM and 4:30 PM local time.
 
 See [launchd/README.md](launchd/README.md) for a complete setup command sequence.
 

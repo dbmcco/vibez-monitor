@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -16,6 +17,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vibez.db import get_connection, init_db
@@ -151,11 +154,16 @@ def import_messages(db_path: Path, rows: list[dict], dry_run: bool = False) -> i
 
 def main():
     parser = argparse.ArgumentParser(description="Backfill from Beeper Desktop API")
-    parser.add_argument("--token", required=True, help="Beeper Desktop API bearer token")
+    parser.add_argument("--token", help="Beeper Desktop API bearer token")
     parser.add_argument("--since", default="2025-01-29", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true", help="Don't write to DB")
     parser.add_argument("--db", default=None, help="Path to vibez.db")
     args = parser.parse_args()
+
+    load_dotenv()
+    token = (args.token or os.environ.get("BEEPER_API_TOKEN", "")).strip()
+    if not token:
+        parser.error("Beeper token missing. Pass --token or set BEEPER_API_TOKEN.")
 
     db_path = Path(args.db) if args.db else Path(__file__).resolve().parent.parent.parent / "vibez.db"
     since_ts = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
@@ -164,7 +172,7 @@ def main():
         init_db(db_path)
 
     print(f"Fetching WhatsApp messages since {args.since} from Beeper Desktop API...")
-    groups = get_whatsapp_groups(args.token)
+    groups = get_whatsapp_groups(token)
     print(f"Found {len(groups)} WhatsApp groups")
 
     total_fetched = 0
@@ -175,7 +183,7 @@ def main():
         title = group["title"]
         print(f"\n  {title}...")
 
-        messages = fetch_messages_since(args.token, chat_id, since_ts)
+        messages = fetch_messages_since(token, chat_id, since_ts)
         rows = [r for m in messages if (r := msg_to_row(m, title)) is not None]
         print(f"    {len(messages)} API messages -> {len(rows)} text rows")
         total_fetched += len(messages)
