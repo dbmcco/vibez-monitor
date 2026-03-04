@@ -1,7 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useState } from "react";
 
 function normalizeNextPath(raw: string | null): string {
   const value = (raw || "").trim();
@@ -11,15 +10,39 @@ function normalizeNextPath(raw: string | null): string {
 }
 
 export default function AccessPage() {
-  const router = useRouter();
   const nextPath =
-    typeof window !== "undefined"
-      ? normalizeNextPath(new URLSearchParams(window.location.search).get("next"))
-      : "/";
+    typeof window === "undefined"
+      ? "/"
+      : normalizeNextPath(new URLSearchParams(window.location.search).get("next"));
 
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function checkExistingAccess() {
+      try {
+        const response = await fetch("/api/access/check", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!cancelled && response.ok) {
+          window.location.replace(nextPath);
+        }
+      } catch {
+        // Ignore transient network errors on access boot check.
+      }
+    }
+
+    void checkExistingAccess();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [nextPath]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,8 +60,7 @@ export default function AccessPage() {
         setSubmitting(false);
         return;
       }
-      router.replace(nextPath);
-      router.refresh();
+      window.location.assign(nextPath);
     } catch {
       setError("Could not verify access code.");
       setSubmitting(false);
