@@ -191,7 +191,11 @@ async def main() -> None:
         from vibez.synthesis import run_daily_synthesis
 
         report = await run_daily_synthesis(config)
-        logger.info("Synthesis refreshed for date=%s", report.report_date)
+        if isinstance(report, dict):
+            report_date = report.get("report_date", "unknown")
+        else:
+            report_date = getattr(report, "report_date", "unknown")
+        logger.info("Synthesis refreshed for date=%s", report_date)
 
     logger.info("One-shot sync job complete")
 
