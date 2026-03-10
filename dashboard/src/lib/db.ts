@@ -3542,3 +3542,139 @@ export function getSpacesDashboard(
     recent_messages,
   };
 }
+
+export interface LinkRow {
+  id: number;
+  url: string;
+  url_hash: string;
+  title: string | null;
+  category: string | null;
+  relevance: string | null;
+  shared_by: string | null;
+  source_group: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  mention_count: number;
+  value_score: number;
+  report_date: string | null;
+}
+
+export function getLinks(opts: {
+  category?: string;
+  days?: number;
+  limit?: number;
+}): LinkRow[] {
+  const db = getDb();
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.category) {
+    where.push("category = ?");
+    params.push(opts.category);
+  }
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    where.push("last_seen >= ?");
+    params.push(cutoff);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const limit = Math.min(Math.max(1, opts.limit || 50), 200);
+  params.push(limit);
+  const rows = db
+    .prepare(
+      `SELECT id, url, url_hash, title, category, relevance, shared_by,
+              source_group, first_seen, last_seen, mention_count, value_score,
+              report_date
+       FROM links ${whereSql}
+       ORDER BY value_score DESC, last_seen DESC
+       LIMIT ?`
+    )
+    .all(...params) as LinkRow[];
+  db.close();
+  return rows;
+}
+
+export function searchLinksFts(
+  query: string,
+  opts: { category?: string; days?: number; limit?: number }
+): LinkRow[] {
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) return getLinks(opts);
+
+  const db = getDb();
+
+  // Check if FTS table exists (DB is readonly — can't create it here)
+  const ftsExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='links_fts'")
+    .get();
+
+  if (ftsExists) {
+    const ftsQuery = terms.map((t) => `"${t}"`).join(" OR ");
+    const where: string[] = [];
+    const params: unknown[] = [ftsQuery];
+    if (opts.category) {
+      where.push("l.category = ?");
+      params.push(opts.category);
+    }
+    if (opts.days) {
+      const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+      where.push("l.last_seen >= ?");
+      params.push(cutoff);
+    }
+    const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
+    const limit = Math.min(Math.max(1, opts.limit || 50), 200);
+    params.push(limit);
+
+    const rows = db
+      .prepare(
+        `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
+                l.shared_by, l.source_group, l.first_seen, l.last_seen,
+                l.mention_count, l.value_score, l.report_date
+         FROM links_fts f
+         JOIN links l ON f.rowid = l.id
+         WHERE links_fts MATCH ?
+         ${extraWhere}
+         ORDER BY rank, l.value_score DESC
+         LIMIT ?`
+      )
+      .all(...params) as LinkRow[];
+    db.close();
+    return rows;
+  }
+
+  // Fallback: LIKE-based search when FTS table hasn't been built yet
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const likeClauses = terms.map(() =>
+    "(title LIKE ? OR relevance LIKE ? OR category LIKE ? OR url LIKE ?)"
+  );
+  where.push(`(${likeClauses.join(" OR ")})`);
+  for (const t of terms) {
+    const p = `%${t}%`;
+    params.push(p, p, p, p);
+  }
+  if (opts.category) {
+    where.push("category = ?");
+    params.push(opts.category);
+  }
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    where.push("last_seen >= ?");
+    params.push(cutoff);
+  }
+  const whereSql = `WHERE ${where.join(" AND ")}`;
+  const limit = Math.min(Math.max(1, opts.limit || 50), 200);
+  params.push(limit);
+
+  const rows = db
+    .prepare(
+      `SELECT id, url, url_hash, title, category, relevance, shared_by,
+              source_group, first_seen, last_seen, mention_count, value_score,
+              report_date
+       FROM links ${whereSql}
+       ORDER BY value_score DESC, last_seen DESC
+       LIMIT ?`
+    )
+    .all(...params) as LinkRow[];
+  db.close();
+  return rows;
+}
