@@ -66,9 +66,49 @@ def upsert_links(
                  now, now, score, report_date),
             )
             inserted += 1
+        # Sync FTS index for this row
+        _sync_fts_row(conn, h)
     conn.commit()
     conn.close()
     return inserted
+
+
+def _ensure_fts(conn):
+    """Create FTS5 virtual table for link search if not exists."""
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS links_fts USING fts5(
+            title, relevance, category, url
+        )
+    """)
+    # Rebuild if empty
+    count = conn.execute("SELECT count(*) FROM links_fts").fetchone()[0]
+    if count == 0:
+        conn.execute("""
+            INSERT INTO links_fts(rowid, title, relevance, category, url)
+            SELECT id, coalesce(title,''), coalesce(relevance,''),
+                   coalesce(category,''), coalesce(url,'')
+            FROM links
+        """)
+        conn.commit()
+
+
+def _sync_fts_row(conn, url_hash: str):
+    """Sync a single link row into FTS index by url_hash."""
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS links_fts USING fts5(
+            title, relevance, category, url
+        )
+    """)
+    row = conn.execute(
+        "SELECT id, coalesce(title,''), coalesce(relevance,''), coalesce(category,''), coalesce(url,'') "
+        "FROM links WHERE url_hash = ?", (url_hash,)
+    ).fetchone()
+    if row:
+        link_id = row[0]
+        conn.execute("DELETE FROM links_fts WHERE rowid = ?", (link_id,))
+        conn.execute(
+            "INSERT INTO links_fts(rowid, title, relevance, category, url) VALUES (?, ?, ?, ?, ?)",
+            (link_id, row[1], row[2], row[3], row[4]))
 
 
 def get_links(
@@ -98,6 +138,61 @@ def get_links(
             ORDER BY value_score DESC, last_seen DESC
             LIMIT ?""",
         params,
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "url": r[1], "url_hash": r[2], "title": r[3],
+            "category": r[4], "relevance": r[5], "shared_by": r[6],
+            "source_group": r[7], "first_seen": r[8], "last_seen": r[9],
+            "mention_count": r[10], "value_score": r[11], "report_date": r[12],
+        }
+        for r in rows
+    ]
+
+
+def search_links_fts(
+    db_path: Path,
+    query: str,
+    *,
+    category: str | None = None,
+    days: int | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Search links using FTS5 full-text search."""
+    conn = get_connection(db_path)
+    _ensure_fts(conn)
+    q = query.strip()
+    if not q:
+        conn.close()
+        return get_links(db_path, category=category, days=days, limit=limit)
+
+    # FTS5 query — quote terms for safety
+    fts_query = " OR ".join(f'"{term}"' for term in q.split() if term)
+
+    where: list[str] = []
+    params: list[Any] = []
+    if category:
+        where.append("l.category = ?")
+        params.append(category)
+    if days is not None:
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        where.append("l.last_seen >= ?")
+        params.append(cutoff)
+    extra_where = f"AND {' AND '.join(where)}" if where else ""
+    params.append(min(max(1, limit), 200))
+
+    rows = conn.execute(
+        f"""SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
+                   l.shared_by, l.source_group, l.first_seen, l.last_seen,
+                   l.mention_count, l.value_score, l.report_date
+            FROM links_fts f
+            JOIN links l ON f.rowid = l.id
+            WHERE links_fts MATCH ?
+            {extra_where}
+            ORDER BY rank, l.value_score DESC
+            LIMIT ?""",
+        (fts_query, *params),
     ).fetchall()
     conn.close()
     return [
