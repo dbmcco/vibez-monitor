@@ -1,5 +1,5 @@
 // ABOUTME: Links page with NLP search, source/sharer filtering, sort, and browse.
-// ABOUTME: 2,700+ links from chat — discoverable via search, source, person, or sort.
+// ABOUTME: Table-style layout for 2,700+ links with one-line descriptions.
 
 "use client";
 
@@ -23,7 +23,6 @@ interface LinkStats {
   total: number;
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
-  categories: { name: string; count: number }[];
 }
 
 const SOURCES = [
@@ -39,18 +38,18 @@ const SOURCES = [
 ] as const;
 
 const SORTS = [
-  { key: "value", label: "Top" },
-  { key: "shared", label: "Most shared" },
+  { key: "trending", label: "Trending" },
   { key: "recent", label: "Recent" },
+  { key: "shared", label: "Most shared" },
   { key: "oldest", label: "Oldest" },
 ] as const;
 
 const TIME_RANGES = [
   { key: "7", label: "Week" },
-  { key: "14", label: "2 weeks" },
+  { key: "14", label: "2w" },
   { key: "30", label: "Month" },
-  { key: "90", label: "3 months" },
-  { key: "", label: "All time" },
+  { key: "90", label: "3mo" },
+  { key: "", label: "All" },
 ] as const;
 
 function hostname(url: string): string {
@@ -61,36 +60,73 @@ function hostname(url: string): string {
   }
 }
 
-function categoryColor(cat: string | null): string {
+function categoryBadge(cat: string | null): { color: string; label: string } | null {
   switch (cat) {
-    case "tool": return "border-emerald-400/50 text-emerald-300";
-    case "repo": return "border-violet-400/50 text-violet-300";
-    case "article": return "border-amber-400/50 text-amber-300";
-    case "discussion": return "border-sky-400/50 text-sky-300";
-    default: return "";
+    case "tool": return { color: "text-emerald-400", label: "tool" };
+    case "repo": return { color: "text-violet-400", label: "repo" };
+    case "article": return { color: "text-amber-400", label: "article" };
+    case "discussion": return { color: "text-sky-400", label: "disc" };
+    default: return null;
   }
 }
 
-function cleanRelevance(text: string): string {
-  // Strip sender topic fingerprints
-  let clean = text.replace(/\s*\[[\w\s,+\-.'()]+ topics:.*?\]\s*/g, "").trim();
-  // Strip repeated URL segments
-  clean = clean.replace(/https?:\/\/\S+/g, "").trim();
-  // Collapse repeated pipe separators
-  clean = clean.replace(/(\s*\|\s*)+/g, " — ").trim();
-  // Remove leading/trailing dashes
-  clean = clean.replace(/^[\s—-]+|[\s—-]+$/g, "").trim();
-  return clean;
+function extractDescription(link: Link): string {
+  // Synthesis-extracted links have good titles that ARE the description
+  const title = link.title || "";
+  const domain = hostname(link.url);
+
+  // If title is a real description (not just a domain), use it
+  if (title && title !== domain && title.length > domain.length + 5) {
+    return title;
+  }
+
+  // Otherwise, try to extract a one-liner from relevance
+  if (link.relevance) {
+    let text = link.relevance;
+    // Strip topic fingerprints
+    text = text.replace(/\s*\[[\w\s,+\-.'()]+\s+topics:.*?\]\s*/g, "");
+    // Strip URLs
+    text = text.replace(/https?:\/\/\S+/g, "");
+    // Split on pipe separators and take first meaningful chunk
+    const chunks = text.split(/\s*\|\s*/).filter((c) => c.trim().length > 10);
+    if (chunks.length > 0) {
+      let desc = chunks[0].trim();
+      // Cap at ~120 chars on a sentence boundary if possible
+      if (desc.length > 120) {
+        const cut = desc.lastIndexOf(".", 120);
+        desc = cut > 40 ? desc.slice(0, cut + 1) : desc.slice(0, 120) + "...";
+      }
+      return desc;
+    }
+  }
+
+  return "";
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays === 0) return "today";
+  if (diffDays === 1) return "yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function firstName(name: string): string {
+  return name.split(",")[0].split(" ")[0];
 }
 
 function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
-      className={`rounded-full border px-2.5 py-0.5 text-[11px] transition ${
+      className={`rounded-full border px-2 py-0.5 text-[11px] transition ${
         active
           ? "border-cyan-400/60 bg-cyan-900/30 text-cyan-200"
-          : "border-slate-700/60 bg-slate-900/30 text-slate-400 hover:border-slate-500"
+          : "border-slate-700/50 text-slate-500 hover:border-slate-500 hover:text-slate-400"
       }`}
     >
       {children}
@@ -103,7 +139,7 @@ export default function LinksPage() {
   const [stats, setStats] = useState<LinkStats | null>(null);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("all");
-  const [sort, setSort] = useState("value");
+  const [sort, setSort] = useState("trending");
   const [days, setDays] = useState("");
   const [sharedBy, setSharedBy] = useState("");
   const [loading, setLoading] = useState(false);
@@ -118,7 +154,7 @@ export default function LinksPage() {
       if (d) params.set("days", d);
       if (sharer) params.set("shared_by", sharer);
       params.set("sort", srt);
-      params.set("limit", "80");
+      params.set("limit", "100");
       const res = await fetch(`/api/links?${params}`);
       const data = await res.json();
       setLinks(data.links || []);
@@ -138,7 +174,7 @@ export default function LinksPage() {
   }, []);
 
   useEffect(() => {
-    fetchLinks("", "all", "value", "", "");
+    fetchLinks("", "all", "trending", "", "");
     fetchStats();
   }, [fetchLinks, fetchStats]);
 
@@ -162,18 +198,17 @@ export default function LinksPage() {
     fetchLinks(query, s, sr, d, sh);
   }
 
-  const topSharers = stats?.sharers.slice(0, 10) || [];
+  const topSharers = (stats?.sharers || [])
+    .filter((s) => s.name !== "whatsappbot" && !s.name.startsWith("+"))
+    .slice(0, 10);
 
   return (
     <div className="fade-up space-y-4">
-      <header className="space-y-1">
-        <div className="flex items-baseline justify-between">
-          <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">Links</h1>
-          {stats && (
-            <span className="text-xs text-slate-500">{stats.total.toLocaleString()} links indexed</span>
-          )}
+      <header className="flex items-baseline justify-between">
+        <div>
+          <h1 className="vibe-title text-2xl text-slate-100">Links</h1>
+          <p className="vibe-subtitle text-sm">Browse or search {stats ? stats.total.toLocaleString() : ""} shared links.</p>
         </div>
-        <p className="vibe-subtitle text-sm">Browse shared links or search by describing what you remember.</p>
       </header>
 
       {/* Search */}
@@ -186,35 +221,31 @@ export default function LinksPage() {
         aria-label="Search links"
       />
 
-      {/* Filter bar */}
-      <div className="space-y-2">
-        {/* Source pills */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">Source</span>
-          {SOURCES.map((s) => (
-            <Pill key={s.key} active={source === s.key} onClick={() => applyFilter(s.key)}>
-              {s.label}
-              {stats && s.key !== "all" && (
-                <span className="ml-1 opacity-60">
-                  {stats.sources.find((x) => x.name === s.key)?.count || 0}
-                </span>
-              )}
-            </Pill>
-          ))}
+      {/* Filters - compact single row groups */}
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">Source</span>
+          {SOURCES.map((s) => {
+            const count = stats?.sources.find((x) => x.name === s.key)?.count;
+            return (
+              <Pill key={s.key} active={source === s.key} onClick={() => applyFilter(s.key)}>
+                {s.label}{count ? <span className="ml-0.5 opacity-50">{count}</span> : null}
+              </Pill>
+            );
+          })}
         </div>
 
-        {/* Sort + Time range */}
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-1.5">
-            <span className="mr-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">Sort</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1">
+            <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">Sort</span>
             {SORTS.map((s) => (
               <Pill key={s.key} active={sort === s.key} onClick={() => applyFilter(undefined, s.key)}>
                 {s.label}
               </Pill>
             ))}
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="mr-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">Time</span>
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-slate-600">Time</span>
             {TIME_RANGES.map((t) => (
               <Pill key={t.key} active={days === t.key} onClick={() => applyFilter(undefined, undefined, t.key)}>
                 {t.label}
@@ -223,98 +254,93 @@ export default function LinksPage() {
           </div>
         </div>
 
-        {/* Shared-by pills */}
-        {topSharers.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">From</span>
-            <Pill active={sharedBy === ""} onClick={() => applyFilter(undefined, undefined, undefined, "")}>
-              Anyone
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">From</span>
+          <Pill active={sharedBy === ""} onClick={() => applyFilter(undefined, undefined, undefined, "")}>
+            Anyone
+          </Pill>
+          {topSharers.map((s) => (
+            <Pill
+              key={s.name}
+              active={sharedBy === s.name}
+              onClick={() => applyFilter(undefined, undefined, undefined, s.name)}
+            >
+              {firstName(s.name)}<span className="ml-0.5 opacity-50">{s.count}</span>
             </Pill>
-            {topSharers.map((s) => (
-              <Pill
-                key={s.name}
-                active={sharedBy === s.name}
-                onClick={() => applyFilter(undefined, undefined, undefined, s.name)}
-              >
-                {s.name.split(" ")[0]}
-                <span className="ml-1 opacity-60">{s.count}</span>
-              </Pill>
-            ))}
-          </div>
-        )}
+          ))}
+        </div>
       </div>
 
       {/* Results */}
-      {loading && <p className="text-sm text-slate-400">Loading...</p>}
+      {loading && <p className="text-sm text-slate-500">Loading...</p>}
 
       {!loading && links.length === 0 && (
-        <div className="vibe-panel rounded-xl p-6 text-center">
-          <p className="text-sm text-slate-400">
-            {query ? `No links found for "${query}"` : "No links match these filters"}
-          </p>
+        <p className="py-8 text-center text-sm text-slate-500">
+          {query ? `No links match "${query}"` : "No links match these filters."}
+        </p>
+      )}
+
+      {/* Table */}
+      {!loading && links.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-slate-800/60">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-slate-800/60 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                <th className="px-3 py-2">Link</th>
+                <th className="hidden px-3 py-2 sm:table-cell">From</th>
+                <th className="px-3 py-2 text-right">When</th>
+                <th className="px-3 py-2 text-right">Shares</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/40">
+              {links.map((link) => {
+                const domain = hostname(link.url);
+                const desc = extractDescription(link);
+                const badge = categoryBadge(link.category);
+                const sharer = link.shared_by ? firstName(link.shared_by) : "";
+
+                return (
+                  <tr key={link.id} className="group transition hover:bg-slate-800/20">
+                    <td className="px-3 py-2">
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="truncate font-medium text-slate-200 group-hover:text-cyan-300">
+                            {domain}
+                          </span>
+                          {badge && (
+                            <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span>
+                          )}
+                        </div>
+                        {desc && (
+                          <p className="mt-0.5 line-clamp-1 text-xs text-slate-400">{desc}</p>
+                        )}
+                      </a>
+                    </td>
+                    <td className="hidden px-3 py-2 text-xs text-slate-500 sm:table-cell">
+                      {sharer}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-slate-500">
+                      {formatDate(link.last_seen)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-xs text-slate-500">
+                      {link.mention_count > 1 ? `${link.mention_count}x` : ""}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
-      <div className="space-y-1.5">
-        {links.map((link) => {
-          const domain = hostname(link.url);
-          const displayTitle = link.title && link.title !== domain ? link.title : null;
-          const relevanceClean = link.relevance ? cleanRelevance(link.relevance) : null;
-          // Only show relevance if it's meaningful (not just the URL repeated)
-          const showRelevance = relevanceClean && relevanceClean.length > 20
-            && !relevanceClean.startsWith("http")
-            && relevanceClean !== domain;
-
-          return (
-            <a
-              key={link.id}
-              href={link.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="vibe-panel group block rounded-lg px-4 py-2.5 transition hover:border-cyan-400/40"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-100 group-hover:text-cyan-200">
-                    {displayTitle || domain}
-                  </p>
-                  {displayTitle && (
-                    <p className="mt-0.5 text-[11px] text-slate-500">{domain}</p>
-                  )}
-                  {showRelevance && (
-                    <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-400">
-                      {relevanceClean}
-                    </p>
-                  )}
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-slate-500">
-                    {link.shared_by && <span>by {link.shared_by}</span>}
-                    {link.source_group && <span>in {link.source_group}</span>}
-                    {link.last_seen && (
-                      <span>{new Date(link.last_seen).toLocaleDateString()}</span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  {link.category && (
-                    <span className={`rounded border px-1.5 py-0.5 text-[10px] capitalize ${categoryColor(link.category)}`}>
-                      {link.category}
-                    </span>
-                  )}
-                  {link.mention_count > 1 && (
-                    <span className="text-[10px] text-slate-500">
-                      {link.mention_count}x shared
-                    </span>
-                  )}
-                </div>
-              </div>
-            </a>
-          );
-        })}
-      </div>
-
       {!loading && links.length > 0 && (
-        <p className="text-center text-xs text-slate-600">
-          Showing {links.length} of {stats?.total.toLocaleString() || "?"} links
+        <p className="text-center text-[11px] text-slate-600">
+          {links.length} of {stats?.total.toLocaleString() || "?"} links
         </p>
       )}
     </div>

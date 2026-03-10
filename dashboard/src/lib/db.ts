@@ -3585,6 +3585,7 @@ function sourceFromUrl(url: string): string {
 }
 
 const SORT_MAP: Record<string, string> = {
+  trending: "CAST(mention_count AS REAL) / MAX(1, julianday('now') - julianday(last_seen) + 1) DESC, last_seen DESC",
   value: "value_score DESC, last_seen DESC",
   recent: "last_seen DESC",
   shared: "mention_count DESC, value_score DESC",
