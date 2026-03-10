@@ -18,6 +18,17 @@ from vibez.db import get_connection
 # Match http/https URLs in message text
 _URL_RE = re.compile(r'https?://[^\s<>\"\')]+', re.IGNORECASE)
 
+# Rooms that are NOT part of the vibez/AGI ecosystem — exclude from link extraction
+EXCLUDED_ROOMS = {
+    "BBC News",
+    "Bloomberg News",
+    "GoodSense Grocers",
+    "Lightforge Development",
+    "Plum",
+    "MTB Rides",
+    "TechRadar",
+}
+
 
 def _url_hash(url: str) -> str:
     normalized = url.strip().rstrip("/").lower()
@@ -188,6 +199,11 @@ def upsert_message_links(
     if not messages:
         return 0
 
+    # Filter to vibez ecosystem rooms only
+    messages = [m for m in messages if m.get("room_name", "") not in EXCLUDED_ROOMS]
+    if not messages:
+        return 0
+
     # Collect per-URL data: senders, message snippets, timestamps
     url_data: dict[str, dict] = {}
     for msg in messages:
@@ -238,7 +254,9 @@ def upsert_message_links(
             (h,),
         ).fetchone()
 
-        now = datetime.now().isoformat()
+        # Use actual message timestamps, not wall clock
+        latest_iso = datetime.utcfromtimestamp(data["latest_ts"] / 1000).isoformat() if data["latest_ts"] else datetime.now().isoformat()
+        earliest_iso = datetime.utcfromtimestamp(data["earliest_ts"] / 1000).isoformat() if data["earliest_ts"] else latest_iso
 
         if existing:
             new_count = (existing[1] or 1) + data["count"]
@@ -248,12 +266,12 @@ def upsert_message_links(
             if not existing[4]:
                 conn.execute(
                     "UPDATE links SET mention_count=?, last_seen=?, value_score=?, relevance=? WHERE id=?",
-                    (new_count, now, score, context, existing[0]),
+                    (new_count, latest_iso, score, context, existing[0]),
                 )
             else:
                 conn.execute(
                     "UPDATE links SET mention_count=?, last_seen=?, value_score=? WHERE id=?",
-                    (new_count, now, score, existing[0]),
+                    (new_count, latest_iso, score, existing[0]),
                 )
         else:
             score = compute_value_score(data["count"], 0)
@@ -264,7 +282,7 @@ def upsert_message_links(
                    VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, '')""",
                 (url, h, domain, context, senders,
                  ", ".join(sorted(data["rooms"])),
-                 now, now, data["count"], score),
+                 earliest_iso, latest_iso, data["count"], score),
             )
             inserted += 1
         _sync_fts_row(conn, h)

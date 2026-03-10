@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vibez.db import get_connection
-from vibez.links import upsert_message_links
+from vibez.links import upsert_message_links, EXCLUDED_ROOMS
 
 
 def enrich_link_context(db_path: Path) -> int:
@@ -124,10 +124,13 @@ def main(db_path_str: str) -> None:
     # Count before
     before = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
 
-    # Fetch all messages with bodies containing URLs
+    # Fetch messages with URLs from vibez ecosystem rooms only
+    placeholders = ",".join("?" for _ in EXCLUDED_ROOMS)
     rows = conn.execute(
         "SELECT id, body, sender_name, timestamp, room_name FROM messages "
-        "WHERE body LIKE '%http%' ORDER BY timestamp ASC"
+        f"WHERE body LIKE '%http%' AND room_name NOT IN ({placeholders}) "
+        "ORDER BY timestamp ASC",
+        tuple(EXCLUDED_ROOMS),
     ).fetchall()
     conn.close()
 
