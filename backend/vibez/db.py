@@ -58,6 +58,27 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    url_hash TEXT NOT NULL,
+    title TEXT,
+    category TEXT,
+    relevance TEXT,
+    shared_by TEXT,
+    source_group TEXT,
+    first_seen DATETIME,
+    last_seen DATETIME,
+    mention_count INTEGER DEFAULT 1,
+    value_score REAL DEFAULT 0,
+    report_date DATE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_links_url_hash ON links (url_hash);
+CREATE INDEX IF NOT EXISTS idx_links_category ON links (category);
+CREATE INDEX IF NOT EXISTS idx_links_value_score ON links (value_score);
+CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen);
 """
 
 DEFAULT_VALUE_CONFIG = {
@@ -107,6 +128,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
         changed = True
     if "conversation_arcs" not in report_cols:
         conn.execute("ALTER TABLE daily_reports ADD COLUMN conversation_arcs TEXT")
+        changed = True
+
+    # Check for links table and create if missing (for existing DBs)
+    existing_tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "links" not in existing_tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                url_hash TEXT NOT NULL,
+                title TEXT,
+                category TEXT,
+                relevance TEXT,
+                shared_by TEXT,
+                source_group TEXT,
+                first_seen DATETIME,
+                last_seen DATETIME,
+                mention_count INTEGER DEFAULT 1,
+                value_score REAL DEFAULT 0,
+                report_date DATE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_links_url_hash ON links (url_hash);
+            CREATE INDEX IF NOT EXISTS idx_links_category ON links (category);
+            CREATE INDEX IF NOT EXISTS idx_links_value_score ON links (value_score);
+            CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen);
+        """)
         changed = True
 
     if changed:
