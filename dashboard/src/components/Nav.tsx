@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 const ALL_LINKS = [
   { href: "/chat", label: "Chat" },
   { href: "/briefing", label: "Briefing" },
+  { href: "/links", label: "Links" },
   { href: "/stats", label: "Stats" },
   { href: "/spaces", label: "Groups" },
   { href: "/settings", label: "Settings" },
@@ -24,6 +25,7 @@ const PAGE_INTENT: Record<string, string> = {
     "Google Groups monitor: track ingestion health and drill into each group stream.",
   "/chat":
     "Rapid synthesis: ask focused questions and get grounded answers from message history.",
+  "/links": "Semantic link search: find shared resources by describing what you remember.",
   "/settings": "System controls: tune data scope, models, and analysis behavior.",
 };
 
