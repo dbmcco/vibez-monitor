@@ -1,0 +1,50 @@
+[executor]
+type = "claude"
+command = ".workgraph/executors/session-driver-run.sh"
+args = []
+timeout = 1800
+
+[executor.env]
+WG_TASK_ID = "{{task_id}}"
+
+[executor.prompt_template]
+template = """
+# Task Assignment
+**Task ID**: `{{task_id}}`
+**Title**: {{task_title}}
+**Description**: {{task_description}}
+
+## Required Protocol
+1. Run pre-check: ./.workgraph/drifts check --task {{task_id}} --write-log
+2. Implement the task following TDD (RED->GREEN->REFACTOR)
+3. Run post-check: ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+4. Mark complete: wg done {{task_id}}
+
+## Coredrift Protocol
+- Treat the `wg-contract` block (in the task description) as binding.
+- At start and just before completion, run:
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- If you need to change scope, update touch globs:
+  ./.workgraph/coredrift contract set-touch --task {{task_id}} <globs...>
+- If `hardening_in_core` is flagged, avoid adding guardrails in the core task; do/complete the `harden:` follow-up task instead.
+
+## Superpowers Protocol
+- If Superpowers-style skills are available in this environment, use:
+  /brainstorming before code
+  /test-driven-development for behavior changes
+  /verification-before-completion before `wg done`
+- If not available, follow the same phases explicitly.
+
+## Model-Mediated Protocol
+- Separate pipes vs decisions (facts/execution vs judgment).
+- If a Model-Mediated Architecture skill is available, apply it (model decides; code executes).
+- Log key decisions/deviations in `wg log`, and prefer follow-up tasks over bloating the current task.
+
+## archdrift Protocol
+- If this task includes an `archdrift` block (in the description), run:
+  ./.workgraph/archdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (auto/all strategy can include archdrift):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.archdrift/`.
+
+"""

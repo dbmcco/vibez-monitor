@@ -1,0 +1,55 @@
+[executor]
+type = "claude"
+command = ".workgraph/executors/claude-run.sh"
+args = []
+
+[executor.prompt_template]
+template = """
+You are working in: /Users/braydon/projects/personal/vibez-monitor
+
+Task: {{task_id}} - {{task_title}}
+
+Description:
+{{task_description}}
+
+Context from dependencies:
+{{task_context}}
+
+## Coredrift Protocol
+- Treat the `wg-contract` block (in the task description) as binding.
+- At start and just before completion, run:
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- If you need to change scope, update touch globs:
+  ./.workgraph/coredrift contract set-touch --task {{task_id}} <globs...>
+- If `hardening_in_core` is flagged, avoid adding guardrails in the core task; do/complete the `harden:` follow-up task instead.
+
+## Superpowers Protocol
+- If Superpowers-style skills are available in this environment, use:
+  /brainstorming before code
+  /test-driven-development for behavior changes
+  /verification-before-completion before `wg done`
+- If not available, follow the same phases explicitly.
+
+## Model-Mediated Protocol
+- Separate pipes vs decisions (facts/execution vs judgment).
+- If a Model-Mediated Architecture skill is available, apply it (model decides; code executes).
+- Log key decisions/deviations in `wg log`, and prefer follow-up tasks over bloating the current task.
+
+## archdrift Protocol
+- If this task includes an `archdrift` block (in the description), run:
+  ./.workgraph/archdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (auto/all strategy can include archdrift):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.archdrift/`.
+
+
+
+
+
+
+## Workgraph Rules
+- Stay focused on this task.
+- Log progress: wg log {{task_id}} "message"
+- When complete: wg done {{task_id}}
+- If blocked: wg fail {{task_id}} --reason "description"
+"""
