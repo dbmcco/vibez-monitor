@@ -1,0 +1,19 @@
+schema = 1
+mode = "redirect"
+order = ["coredrift", "specdrift", "datadrift", "archdrift", "depsdrift", "uxdrift", "therapydrift", "yagnidrift", "redrift"]
+
+[recursion]
+cooldown_seconds = 1800
+max_auto_actions_per_hour = 2
+require_new_evidence = true
+max_auto_depth = 2
+
+[attractor]
+target = "production-ready"
+
+[attractor.breakers]
+max_passes = 3
+max_tasks_per_cycle = 30
+max_dispatches_per_cycle = 10
+plateau_threshold = 2
+pass_timeout_seconds = 1800
