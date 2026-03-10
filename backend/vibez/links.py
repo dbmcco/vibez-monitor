@@ -7,11 +7,16 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from vibez.db import get_connection
+
+# Match http/https URLs in message text
+_URL_RE = re.compile(r'https?://[^\s<>\"\')]+', re.IGNORECASE)
 
 
 def _url_hash(url: str) -> str:
@@ -149,6 +154,123 @@ def get_links(
         }
         for r in rows
     ]
+
+
+def extract_urls(text: str) -> list[str]:
+    """Extract URLs from message text, stripping trailing punctuation."""
+    urls = _URL_RE.findall(text)
+    cleaned = []
+    for url in urls:
+        url = url.rstrip(".,;:!?)>]}")
+        if len(url) > 10:
+            cleaned.append(url)
+    return cleaned
+
+
+def _domain_from_url(url: str) -> str:
+    try:
+        host = urlparse(url).netloc
+        return host.removeprefix("www.")
+    except Exception:
+        return ""
+
+
+def upsert_message_links(
+    db_path: Path,
+    messages: list[dict],
+) -> int:
+    """Extract URLs from raw messages and upsert into links table.
+
+    Each message dict needs: body, sender_name, timestamp, room_name.
+    Only creates new rows for URLs not already tracked. For existing URLs,
+    bumps mention_count and updates last_seen.
+    """
+    if not messages:
+        return 0
+
+    # Collect per-URL data: senders, message snippets, timestamps
+    url_data: dict[str, dict] = {}
+    for msg in messages:
+        body = msg.get("body", "")
+        urls = extract_urls(body)
+        if not urls:
+            continue
+        sender = msg.get("sender_name", "")
+        ts = msg.get("timestamp", 0)
+        room = msg.get("room_name", "")
+        for url in urls:
+            h = _url_hash(url)
+            if h not in url_data:
+                url_data[h] = {
+                    "url": url,
+                    "senders": set(),
+                    "snippets": [],
+                    "rooms": set(),
+                    "count": 0,
+                    "earliest_ts": ts,
+                    "latest_ts": ts,
+                }
+            entry = url_data[h]
+            entry["count"] += 1
+            entry["senders"].add(sender)
+            entry["rooms"].add(room)
+            if ts < entry["earliest_ts"]:
+                entry["earliest_ts"] = ts
+            if ts > entry["latest_ts"]:
+                entry["latest_ts"] = ts
+            # Keep message context for FTS (truncate long bodies)
+            snippet = body[:300].strip()
+            if snippet and snippet not in entry["snippets"]:
+                entry["snippets"].append(snippet)
+
+    if not url_data:
+        return 0
+
+    conn = get_connection(db_path)
+    inserted = 0
+    for h, data in url_data.items():
+        url = data["url"]
+        domain = _domain_from_url(url)
+        context = " | ".join(data["snippets"][:3])
+        senders = ", ".join(sorted(data["senders"]))
+        existing = conn.execute(
+            "SELECT id, mention_count, first_seen, title, relevance FROM links WHERE url_hash = ?",
+            (h,),
+        ).fetchone()
+
+        now = datetime.now().isoformat()
+
+        if existing:
+            new_count = (existing[1] or 1) + data["count"]
+            days_ago = (datetime.now() - datetime.fromisoformat(existing[2])).days if existing[2] else 0
+            score = compute_value_score(new_count, days_ago)
+            # If existing row has no relevance (empty), enrich with message context
+            if not existing[4]:
+                conn.execute(
+                    "UPDATE links SET mention_count=?, last_seen=?, value_score=?, relevance=? WHERE id=?",
+                    (new_count, now, score, context, existing[0]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE links SET mention_count=?, last_seen=?, value_score=? WHERE id=?",
+                    (new_count, now, score, existing[0]),
+                )
+        else:
+            score = compute_value_score(data["count"], 0)
+            conn.execute(
+                """INSERT INTO links (url, url_hash, title, category, relevance,
+                   shared_by, source_group, first_seen, last_seen, mention_count,
+                   value_score, report_date)
+                   VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, '')""",
+                (url, h, domain, context, senders,
+                 ", ".join(sorted(data["rooms"])),
+                 now, now, data["count"], score),
+            )
+            inserted += 1
+        _sync_fts_row(conn, h)
+    conn.commit()
+    conn.close()
+    return inserted
 
 
 def search_links_fts(

@@ -3559,10 +3559,89 @@ export interface LinkRow {
   report_date: string | null;
 }
 
+export interface LinkStats {
+  total: number;
+  sources: { name: string; count: number }[];
+  sharers: { name: string; count: number }[];
+  categories: { name: string; count: number }[];
+}
+
+function sourceFromUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    if (host.includes("github.com")) return "github";
+    if (host.includes("x.com") || host.includes("twitter.com")) return "x";
+    if (host.includes("youtube.com") || host.includes("youtu.be")) return "youtube";
+    if (host.includes("substack.com")) return "substack";
+    if (host.includes("medium.com")) return "medium";
+    if (host.includes("arxiv.org")) return "arxiv";
+    if (host.includes("reddit.com")) return "reddit";
+    if (host.includes("news.ycombinator.com")) return "hackernews";
+    if (host.includes("linkedin.com")) return "linkedin";
+    if (host.includes("notion.so")) return "notion";
+    if (host.includes("docs.google.com")) return "gdocs";
+    return "other";
+  } catch { return "other"; }
+}
+
+const SORT_MAP: Record<string, string> = {
+  value: "value_score DESC, last_seen DESC",
+  recent: "last_seen DESC",
+  shared: "mention_count DESC, value_score DESC",
+  oldest: "first_seen ASC",
+};
+
+export function getLinkStats(opts: { days?: number }): LinkStats {
+  const db = getDb();
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    where.push("last_seen >= ?");
+    params.push(cutoff);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const total = (db.prepare(`SELECT COUNT(*) as c FROM links ${whereSql}`).get(...params) as { c: number }).c;
+
+  const catRows = db.prepare(
+    `SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`
+  ).all(...params) as { category: string; cnt: number }[];
+
+  const sharerRows = db.prepare(
+    `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql} AND shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`.replace("AND shared_by", where.length ? "AND shared_by" : "WHERE shared_by")
+  ).all(...params) as { shared_by: string; cnt: number }[];
+
+  // For sources, we need to compute from URLs — do it in JS
+  const urlRows = db.prepare(
+    `SELECT url FROM links ${whereSql}`
+  ).all(...params) as { url: string }[];
+
+  const sourceCounts: Record<string, number> = {};
+  for (const r of urlRows) {
+    const s = sourceFromUrl(r.url);
+    sourceCounts[s] = (sourceCounts[s] || 0) + 1;
+  }
+  const sources = Object.entries(sourceCounts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  db.close();
+  return {
+    total,
+    sources,
+    sharers: sharerRows.map(r => ({ name: r.shared_by, count: r.cnt })),
+    categories: catRows.map(r => ({ name: r.category || "uncategorized", count: r.cnt })),
+  };
+}
+
 export function getLinks(opts: {
   category?: string;
   days?: number;
   limit?: number;
+  sort?: string;
+  source?: string;
+  sharedBy?: string;
 }): LinkRow[] {
   const db = getDb();
   const where: string[] = [];
@@ -3576,7 +3655,32 @@ export function getLinks(opts: {
     where.push("last_seen >= ?");
     params.push(cutoff);
   }
+  if (opts.source && opts.source !== "all") {
+    const patterns: Record<string, string> = {
+      github: "%github.com%",
+      x: "%x.com%",
+      youtube: "%youtu%",
+      substack: "%substack.com%",
+      medium: "%medium.com%",
+      arxiv: "%arxiv.org%",
+      reddit: "%reddit.com%",
+      hackernews: "%news.ycombinator.com%",
+      linkedin: "%linkedin.com%",
+      notion: "%notion.so%",
+      gdocs: "%docs.google.com%",
+    };
+    const pat = patterns[opts.source];
+    if (pat) {
+      where.push("url LIKE ?");
+      params.push(pat);
+    }
+  }
+  if (opts.sharedBy) {
+    where.push("shared_by LIKE ?");
+    params.push(`%${opts.sharedBy}%`);
+  }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const orderBy = SORT_MAP[opts.sort || "value"] || SORT_MAP.value;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
   const rows = db
@@ -3585,7 +3689,7 @@ export function getLinks(opts: {
               source_group, first_seen, last_seen, mention_count, value_score,
               report_date
        FROM links ${whereSql}
-       ORDER BY value_score DESC, last_seen DESC
+       ORDER BY ${orderBy}
        LIMIT ?`
     )
     .all(...params) as LinkRow[];
@@ -3595,7 +3699,7 @@ export function getLinks(opts: {
 
 export function searchLinksFts(
   query: string,
-  opts: { category?: string; days?: number; limit?: number }
+  opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string }
 ): LinkRow[] {
   const terms = query.trim().split(/\s+/).filter(Boolean);
   if (!terms.length) return getLinks(opts);
@@ -3620,6 +3724,16 @@ export function searchLinksFts(
       where.push("l.last_seen >= ?");
       params.push(cutoff);
     }
+    if (opts.source && opts.source !== "all") {
+      const patterns: Record<string, string> = {
+        github: "%github.com%", x: "%x.com%", youtube: "%youtu%",
+        substack: "%substack.com%", medium: "%medium.com%", arxiv: "%arxiv.org%",
+        reddit: "%reddit.com%", hackernews: "%news.ycombinator.com%",
+        linkedin: "%linkedin.com%", notion: "%notion.so%", gdocs: "%docs.google.com%",
+      };
+      if (patterns[opts.source]) { where.push("l.url LIKE ?"); params.push(patterns[opts.source]); }
+    }
+    if (opts.sharedBy) { where.push("l.shared_by LIKE ?"); params.push(`%${opts.sharedBy}%`); }
     const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
     const limit = Math.min(Math.max(1, opts.limit || 50), 200);
     params.push(limit);

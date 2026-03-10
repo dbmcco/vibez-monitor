@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from vibez.db import get_connection, init_db
+from vibez.links import upsert_message_links
 from vibez.paia_events_adapter import publish_event
 
 logger = logging.getLogger("vibez.sync")
@@ -244,6 +245,11 @@ def save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
             logger.exception("Failed to insert message %s", msg["id"])
     conn.commit()
     conn.close()
+    # Extract and upsert any URLs found in the new messages
+    try:
+        upsert_message_links(db_path, messages)
+    except Exception:
+        logger.exception("Failed to extract links from messages")
     return count
 
 
