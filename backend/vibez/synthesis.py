@@ -11,6 +11,7 @@ from typing import Any
 import anthropic
 
 from vibez.config import Config
+from vibez.links import upsert_links
 from vibez.db import get_connection, init_db
 from vibez.dossier import load_dossier, format_dossier_for_synthesis
 from vibez.paia_events_adapter import publish_event
@@ -465,6 +466,11 @@ def save_daily_report(db_path: Path, report_date: str, report: dict[str, Any], b
     )
     conn.commit()
     conn.close()
+
+    # Ingest extracted links into dedicated links table
+    report_links = report.get("links", [])
+    if report_links:
+        upsert_links(db_path, report_links, report_date=report_date)
 
 
 def render_briefing_markdown(
