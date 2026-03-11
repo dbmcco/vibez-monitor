@@ -211,6 +211,10 @@ function splitSentences(text: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeComparisonText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
 function parseGuidanceSummary(text: string | null | undefined): GuidanceSummary {
   const cleaned = cleanGuidanceCopy(text);
   if (!cleaned) {
@@ -620,6 +624,14 @@ export default function WisdomPage() {
     : selectedTopicSummaryParts.takeaway || cleanGuidanceCopy(selectedTopicSummary) || selectedTopic?.name || "";
   const analysisTargetSummary = cleanGuidanceCopy(selectedAnalysisItem?.summary || selectedTopicSummary);
   const analysisTargetType = selectedAnalysisItem?.knowledge_type || "topic";
+  const selectedAnalysisDetail = selectedAnalysisItem
+    ? selectedAnalysisGuidance?.why || analysisTargetSummary
+    : selectedTopicSummaryParts.why || analysisTargetSummary;
+  const showAnalysisDetail =
+    selectedAnalysisDetail.length > 0 &&
+    normalizeComparisonText(selectedAnalysisDetail) !== normalizeComparisonText(analysisTargetTitle);
+  const keyGuidanceGridClass =
+    selectedTopicValueItems.length > 1 ? "grid gap-3 md:grid-cols-2" : "grid gap-3";
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
@@ -1079,12 +1091,19 @@ export default function WisdomPage() {
               ) : null}
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="space-y-4">
                 {selectedTopicValueItems.length > 0 ? (
                   <div className="space-y-3">
-                    <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
+                      {selectedTopicValueItems.length > 1 ? (
+                        <p className="text-xs text-slate-500">
+                          Click a card to focus the analysis panel.
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className={keyGuidanceGridClass}>
                       {selectedTopicValueItems.map((item) => (
                         <GuidanceCard
                           key={item.id}
@@ -1107,7 +1126,10 @@ export default function WisdomPage() {
                   <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
                     {selectedAnalysisItem ? "Selected Guidance" : "Topic Takeaway"}
                   </p>
-                  <p className="mt-2 text-sm text-slate-300">{analysisTargetTitle}</p>
+                  <p className="mt-2 text-base font-medium leading-6 text-slate-100">{analysisTargetTitle}</p>
+                  {showAnalysisDetail ? (
+                    <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAnalysisDetail}</p>
+                  ) : null}
                   {selectedTopicValueItems.length > 0 ? (
                     <p className="mt-2 text-xs text-slate-500">
                       {selectedAnalysisItem
@@ -1131,49 +1153,51 @@ export default function WisdomPage() {
                     }}
                   />
                 </div>
-
-                <div className="vibe-panel rounded-xl p-4">
-                  <h3 className="vibe-title text-lg text-slate-100">Related Topics</h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Recommendations are based on shared contributors across topics.
-                  </p>
-                  <div className="mt-3 space-y-2">
-                    {recommendations.length > 0 ? (
-                      recommendations.map((rec) => (
-                        <button
-                          type="button"
-                          key={rec.id}
-                          onClick={() => openTopic(rec.topic_slug)}
-                          className="w-full rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm text-slate-100">{rec.topic_name}</span>
-                            <span className="text-[11px] text-slate-500">{Math.round(rec.strength * 100)}%</span>
-                          </div>
-                          {rec.reason ? <p className="mt-1 text-xs text-slate-400">{rec.reason}</p> : null}
-                        </button>
-                      ))
-                    ) : (
-                      <p className="text-sm text-slate-500">No related topics yet for this cluster.</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="vibe-panel rounded-xl p-4">
-                  <h3 className="vibe-title text-lg text-slate-100">Top Contributors</h3>
-                  <div className="mt-3 space-y-2">
-                    {(stats?.top_contributors || []).slice(0, 6).map((entry) => (
-                      <div key={entry.name} className="flex items-center justify-between text-sm">
-                        <span className="text-slate-300">{entry.name}</span>
-                        <span className="text-slate-500">{entry.count}</span>
-                      </div>
-                    ))}
-                    {!stats?.top_contributors?.length ? (
-                      <p className="text-sm text-slate-500">Contributor counts will appear after extraction runs.</p>
-                    ) : null}
-                  </div>
-                </div>
               </aside>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="vibe-panel rounded-xl p-4">
+                <h3 className="vibe-title text-lg text-slate-100">Related Topics</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Recommendations are based on shared contributors across topics.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {recommendations.length > 0 ? (
+                    recommendations.map((rec) => (
+                      <button
+                        type="button"
+                        key={rec.id}
+                        onClick={() => openTopic(rec.topic_slug)}
+                        className="w-full rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm text-slate-100">{rec.topic_name}</span>
+                          <span className="text-[11px] text-slate-500">{Math.round(rec.strength * 100)}%</span>
+                        </div>
+                        {rec.reason ? <p className="mt-1 text-xs text-slate-400">{rec.reason}</p> : null}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-500">No related topics yet for this cluster.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="vibe-panel rounded-xl p-4">
+                <h3 className="vibe-title text-lg text-slate-100">Top Contributors</h3>
+                <div className="mt-3 space-y-2">
+                  {(stats?.top_contributors || []).slice(0, 6).map((entry) => (
+                    <div key={entry.name} className="flex items-center justify-between text-sm">
+                      <span className="text-slate-300">{entry.name}</span>
+                      <span className="text-slate-500">{entry.count}</span>
+                    </div>
+                  ))}
+                  {!stats?.top_contributors?.length ? (
+                    <p className="text-sm text-slate-500">Contributor counts will appear after extraction runs.</p>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
         </section>
