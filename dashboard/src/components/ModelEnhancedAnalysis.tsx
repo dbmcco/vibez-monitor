@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "vibez-wisdom-enhanced-analysis-v1";
@@ -80,6 +81,12 @@ export function ModelEnhancedAnalysis({
     }
   }
 
+  function onGenerateClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    void generateAnalysis();
+  }
+
   return (
     <div className="mt-3 border-t border-slate-800/60 pt-3">
       <div className="flex items-center justify-between gap-3">
@@ -88,7 +95,7 @@ export function ModelEnhancedAnalysis({
         </h4>
         <button
           type="button"
-          onClick={generateAnalysis}
+          onClick={onGenerateClick}
           disabled={loading}
           className="rounded-full border border-slate-700/60 px-2.5 py-1 text-[11px] text-cyan-300 transition hover:border-cyan-300/50 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
         >
@@ -97,6 +104,11 @@ export function ModelEnhancedAnalysis({
       </div>
       {analysis ? (
         <p className={`mt-2 text-slate-300 ${compact ? "line-clamp-4 text-xs" : "text-sm"}`}>{analysis}</p>
+      ) : null}
+      {!analysis && !error ? (
+        <p className={`mt-2 text-slate-500 ${compact ? "text-[11px]" : "text-xs"}`}>
+          Generate a model pass that explains applicability, tradeoffs, and edge cases.
+        </p>
       ) : null}
       {!analysis && error ? <p className="mt-2 text-xs text-rose-300">{error}</p> : null}
     </div>

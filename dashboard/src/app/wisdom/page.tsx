@@ -850,10 +850,18 @@ export default function WisdomPage() {
                 const topicSummaryParts = parseGuidanceSummary(topic.summary);
                 const topicValueItems = pickValueItems(meta?.items || [], 1);
                 const primaryValueItem = topicValueItems[0];
+                const additionalValueItem = pickValueItems(meta?.items || [], 2).find(
+                  (item) => item.id !== primaryValueItem?.id,
+                );
+                const additionalGuidance = additionalValueItem ? guidanceFromItem(additionalValueItem) : null;
                 const fallbackTakeaway =
                   topicSummaryParts.takeaway ||
                   cleanGuidanceCopy(topic.summary) ||
                   "Summary pending for this topic.";
+                const fallbackAdditionalGuidance =
+                  topicSummaryParts.why ||
+                  topicSummaryParts.watchout ||
+                  "No additional extracted guidance yet for this topic.";
 
                 return (
                   <article
@@ -922,6 +930,28 @@ export default function WisdomPage() {
                           />
                         </div>
                       )}
+                    </div>
+
+                    <div className="mt-3 border-t border-slate-800/60 pt-3">
+                      <h3 className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Additional Extracted Guidance
+                      </h3>
+                      <div className="mt-2 rounded-xl border border-slate-800/60 bg-slate-950/35 px-3 py-2">
+                        {additionalValueItem ? (
+                          <>
+                            <p className="text-xs font-medium text-slate-200">
+                              {additionalGuidance?.takeaway || additionalValueItem.title}
+                            </p>
+                            {additionalGuidance?.why ? (
+                              <p className="mt-1 line-clamp-2 text-[11px] text-slate-500">
+                                {additionalGuidance.why}
+                              </p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-slate-500">{fallbackAdditionalGuidance}</p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
