@@ -584,6 +584,7 @@ export default function WisdomPage() {
   const selectedTopicValueItems = pickValueItems(rankedTopicItems, 4);
   const selectedTopicValueItemIds = new Set(selectedTopicValueItems.map((item) => item.id));
   const additionalTopicItems = rankedTopicItems.filter((item) => !selectedTopicValueItemIds.has(item.id));
+  const detailItems = selectedTopicValueItems.length > 0 ? additionalTopicItems : rankedTopicItems;
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
@@ -1043,6 +1044,7 @@ export default function WisdomPage() {
                   </p>
                 ) : null}
                 <ModelEnhancedAnalysis
+                  autoGenerate
                   cacheKey={`${selectedTopic.slug}:topic-detail`}
                   payload={{
                     topicName: selectedTopic.name,
@@ -1078,52 +1080,58 @@ export default function WisdomPage() {
                 <h3 className="vibe-title text-lg text-slate-100">
                   {selectedTopicValueItems.length > 0 ? "Additional Extracted Guidance" : "All Extracted Guidance"}
                 </h3>
-                {(selectedTopicValueItems.length > 0 ? additionalTopicItems : rankedTopicItems).map((item) => {
-                  const contributors = parseJsonArray(item.contributors);
-                  const sourceLinks = parseJsonArray(item.source_links);
-                  const sourceMessages = parseJsonArray(item.source_messages);
-                  const guidance = guidanceFromItem(item);
-                  return (
-                    <article key={item.id} className="vibe-panel rounded-xl p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="rounded-full border border-slate-700/60 px-2 py-0.5 text-[11px]">
-                            <TypeLabel type={item.knowledge_type} />
-                          </span>
-                          <span className="text-xs text-slate-500">
-                            {Math.round(item.confidence * 100)}% confidence
-                          </span>
+                {detailItems.length > 0 ? (
+                  detailItems.map((item) => {
+                    const contributors = parseJsonArray(item.contributors);
+                    const sourceLinks = parseJsonArray(item.source_links);
+                    const sourceMessages = parseJsonArray(item.source_messages);
+                    const guidance = guidanceFromItem(item);
+                    return (
+                      <article key={item.id} className="vibe-panel rounded-xl p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full border border-slate-700/60 px-2 py-0.5 text-[11px]">
+                              <TypeLabel type={item.knowledge_type} />
+                            </span>
+                            <span className="text-xs text-slate-500">
+                              {Math.round(item.confidence * 100)}% confidence
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {sourceMessages.length} messages · {sourceLinks.length} links
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-500">
-                          {sourceMessages.length} messages · {sourceLinks.length} links
-                        </div>
-                      </div>
-                      <h3 className="vibe-title mt-3 text-lg text-slate-100">{guidance.takeaway || item.title}</h3>
-                      {guidance.why ? <p className="mt-2 text-sm text-slate-400">{guidance.why}</p> : null}
-                      {!guidance.why && item.summary ? (
-                        <p className="mt-2 text-sm text-slate-400">{cleanGuidanceCopy(item.summary)}</p>
-                      ) : null}
-                      {guidance.watchout ? (
-                        <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
-                      ) : null}
-                      <ModelEnhancedAnalysis
-                        cacheKey={`${selectedTopic.slug}:${item.id}:detail`}
-                        payload={{
-                          topicName: selectedTopic.name,
-                          topicSummary: cleanGuidanceCopy(selectedTopicSummary),
-                          knowledgeType: item.knowledge_type,
-                          title: guidance.takeaway || item.title,
-                          summary: cleanGuidanceCopy(item.summary),
-                        }}
-                      />
-                      {contributors.length > 0 ? (
-                        <p className="mt-3 text-xs text-slate-500">
-                          Contributors: {contributors.slice(0, 8).join(", ")}
-                        </p>
-                      ) : null}
-                    </article>
-                  );
-                })}
+                        <h3 className="vibe-title mt-3 text-lg text-slate-100">{guidance.takeaway || item.title}</h3>
+                        {guidance.why ? <p className="mt-2 text-sm text-slate-400">{guidance.why}</p> : null}
+                        {!guidance.why && item.summary ? (
+                          <p className="mt-2 text-sm text-slate-400">{cleanGuidanceCopy(item.summary)}</p>
+                        ) : null}
+                        {guidance.watchout ? (
+                          <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
+                        ) : null}
+                        <ModelEnhancedAnalysis
+                          cacheKey={`${selectedTopic.slug}:${item.id}:detail`}
+                          payload={{
+                            topicName: selectedTopic.name,
+                            topicSummary: cleanGuidanceCopy(selectedTopicSummary),
+                            knowledgeType: item.knowledge_type,
+                            title: guidance.takeaway || item.title,
+                            summary: cleanGuidanceCopy(item.summary),
+                          }}
+                        />
+                        {contributors.length > 0 ? (
+                          <p className="mt-3 text-xs text-slate-500">
+                            Contributors: {contributors.slice(0, 8).join(", ")}
+                          </p>
+                        ) : null}
+                      </article>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-xl border border-slate-800/60 bg-slate-950/35 px-4 py-3 text-sm text-slate-500">
+                    No additional extracted guidance yet for this topic.
+                  </div>
+                )}
               </div>
             </div>
 

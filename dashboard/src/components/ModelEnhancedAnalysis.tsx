@@ -1,7 +1,7 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "vibez-wisdom-enhanced-analysis-v1";
 
@@ -40,21 +40,26 @@ export function ModelEnhancedAnalysis({
   cacheKey,
   payload,
   compact = false,
+  autoGenerate = false,
 }: {
   cacheKey: string;
   payload: AnalysisPayload;
   compact?: boolean;
+  autoGenerate?: boolean;
 }) {
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [autoRequested, setAutoRequested] = useState(false);
 
   useEffect(() => {
     const cached = loadCache()[cacheKey];
-    if (cached) setAnalysis(cached);
+    setAnalysis(cached || "");
+    setError("");
+    setAutoRequested(Boolean(cached));
   }, [cacheKey]);
 
-  async function generateAnalysis() {
+  const generateAnalysis = useCallback(async () => {
     if (loading) return;
     setLoading(true);
     setError("");
@@ -79,7 +84,13 @@ export function ModelEnhancedAnalysis({
     } finally {
       setLoading(false);
     }
-  }
+  }, [cacheKey, loading, payload]);
+
+  useEffect(() => {
+    if (!autoGenerate || analysis || loading || autoRequested) return;
+    setAutoRequested(true);
+    void generateAnalysis();
+  }, [analysis, autoGenerate, autoRequested, generateAnalysis, loading]);
 
   function onGenerateClick(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -105,7 +116,12 @@ export function ModelEnhancedAnalysis({
       {analysis ? (
         <p className={`mt-2 text-slate-300 ${compact ? "line-clamp-4 text-xs" : "text-sm"}`}>{analysis}</p>
       ) : null}
-      {!analysis && !error ? (
+      {!analysis && loading ? (
+        <p className={`mt-2 text-slate-500 ${compact ? "text-[11px]" : "text-xs"}`}>
+          Generating a model pass that explains applicability, tradeoffs, and edge cases.
+        </p>
+      ) : null}
+      {!analysis && !error && !loading ? (
         <p className={`mt-2 text-slate-500 ${compact ? "text-[11px]" : "text-xs"}`}>
           Generate a model pass that explains applicability, tradeoffs, and edge cases.
         </p>
