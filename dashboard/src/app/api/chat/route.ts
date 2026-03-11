@@ -3,6 +3,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { searchMessages, getLatestBriefingMd } from "@/lib/db";
 import fs from "fs";
 import { getDossierPath, getSubjectName, getSubjectPossessive } from "@/lib/profile";
+import {
+  enforceApiUsageGuard,
+  getClientIp,
+  recordApiUsageError,
+  recordApiUsageSuccess,
+} from "@/lib/api-usage";
 
 function buildSystemPrompt(subjectName: string, subjectPossessive: string): string {
   return `You are ${subjectPossessive} chat analyst for the Vibez WhatsApp ecosystem.
@@ -18,6 +24,11 @@ When the user asks follow-ups, use the conversation context provided.`;
 interface ChatHistoryItem {
   role: "user" | "assistant";
   content: string;
+}
+
+interface ChatContextPayload {
+  page?: string;
+  pageLabel?: string;
 }
 
 function sanitizeHistory(input: unknown): ChatHistoryItem[] {
@@ -59,7 +70,8 @@ function loadDossierContext(subjectName: string, subjectPossessive: string): str
 
 export async function POST(request: NextRequest) {
   try {
-    const { question, lookbackDays = 7, history } = await request.json();
+    const routeKey = "/api/chat";
+    const { question, lookbackDays = 7, history, context } = await request.json();
     const subjectName = getSubjectName();
     const subjectPossessive = getSubjectPossessive(subjectName);
     const systemPrompt = buildSystemPrompt(subjectName, subjectPossessive);
@@ -72,6 +84,12 @@ export async function POST(request: NextRequest) {
     }
 
     const chatHistory = sanitizeHistory(history);
+    const chatContext = (context || undefined) as ChatContextPayload | undefined;
+    const contextPrefix = chatContext?.pageLabel
+      ? `The user is currently viewing the "${chatContext.pageLabel}" page of the vibez dashboard${
+          chatContext.page ? ` (${chatContext.page})` : ""
+        }. Use that page context when it helps prioritize the answer.\n\n`
+      : "";
 
     // Search for relevant messages
     const messages = await searchMessages({ query: question, lookbackDays });
@@ -111,7 +129,7 @@ export async function POST(request: NextRequest) {
         "\n\n";
     }
 
-    const prompt = `${dossierContext ? dossierContext + "\n\n" : ""}${
+    const prompt = `${contextPrefix}${dossierContext ? dossierContext + "\n\n" : ""}${
       briefing ? "Latest briefing:\n" + briefing.slice(0, 1500) + "\n\n" : ""
     }${historyBlock}Relevant messages (${messages.length} found):
 ${msgBlock}
@@ -128,13 +146,43 @@ Answer based on the messages above. Be specific — cite who said what, which gr
       );
     }
 
+    const model = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
+    const clientIp = getClientIp(request);
+    const guard = enforceApiUsageGuard({ route: routeKey, model, clientIp });
+    if (!guard.allowed) {
+      return NextResponse.json(
+        {
+          error: guard.message || "AI request blocked by usage guard.",
+          lockout: {
+            reason: guard.reason,
+            state: guard.state,
+          },
+        },
+        { status: guard.statusCode },
+      );
+    }
+
     const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model: process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6",
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: "user", content: prompt }],
-    });
+    const response = await (async () => {
+      try {
+        const result = await client.messages.create({
+          model,
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: [{ role: "user", content: prompt }],
+        });
+        recordApiUsageSuccess({ route: routeKey, model, clientIp, usage: result.usage });
+        return result;
+      } catch (error) {
+        recordApiUsageError({
+          route: routeKey,
+          model,
+          clientIp,
+          reason: error instanceof Error ? error.message : "anthropic_request_failed",
+        });
+        throw error;
+      }
+    })();
 
     const answer =
       response.content[0].type === "text" ? response.content[0].text : "";

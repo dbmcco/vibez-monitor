@@ -442,7 +442,12 @@ export async function GET(request: NextRequest) {
     if (smart) {
       try {
         smartPayload = await withTimeout(
-          generateSmartIntel(modelName, days, limit, dashboard.opportunities),
+          generateSmartIntel(
+            modelName,
+            days,
+            limit,
+            dashboard.opportunities,
+          ),
           12000,
         );
       } catch (error) {

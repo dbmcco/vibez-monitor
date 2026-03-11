@@ -14,6 +14,9 @@ def test_init_db_creates_tables(tmp_db):
     assert "daily_reports" in tables
     assert "value_config" in tables
     assert "sync_state" in tables
+    assert "wisdom_topics" in tables
+    assert "wisdom_items" in tables
+    assert "wisdom_recommendations" in tables
 
 
 def test_init_db_is_idempotent(tmp_db):
@@ -78,3 +81,66 @@ def test_daily_report_extended_columns_present(tmp_db):
     }
     assert "daily_memo" in cols
     assert "conversation_arcs" in cols
+
+
+def test_init_db_migrates_existing_db_with_missing_wisdom_tables(tmp_db):
+    conn = sqlite3.connect(tmp_db)
+    conn.executescript(
+        """
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            room_id TEXT NOT NULL,
+            room_name TEXT NOT NULL,
+            sender_id TEXT NOT NULL,
+            sender_name TEXT NOT NULL,
+            body TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            raw_event TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE classifications (
+            message_id TEXT PRIMARY KEY REFERENCES messages(id),
+            relevance_score INTEGER NOT NULL DEFAULT 0,
+            topics TEXT NOT NULL DEFAULT '[]',
+            entities TEXT NOT NULL DEFAULT '[]',
+            contribution_flag BOOLEAN NOT NULL DEFAULT 0,
+            contribution_hint TEXT,
+            alert_level TEXT NOT NULL DEFAULT 'none',
+            classified_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE daily_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date DATE UNIQUE NOT NULL,
+            briefing_md TEXT,
+            briefing_json TEXT,
+            contributions TEXT,
+            trends TEXT,
+            stats TEXT,
+            generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE value_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE sync_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(tmp_db)
+
+    conn = get_connection(tmp_db)
+    tables = {
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert "wisdom_topics" in tables
+    assert "wisdom_items" in tables
+    assert "wisdom_recommendations" in tables

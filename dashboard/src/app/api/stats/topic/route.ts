@@ -77,6 +77,7 @@ async function generateTopicInsights(drilldown: TopicDrilldown): Promise<TopicIn
   if (!apiKey) return null;
   const subjectName = getSubjectName();
   const subjectPossessive = getSubjectPossessive(subjectName);
+  const model = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
 
   const client = new Anthropic({ apiKey });
   const topUsers = drilldown.top_users
@@ -126,7 +127,7 @@ Return valid JSON only with keys:
 }`;
 
   const response = await client.messages.create({
-    model: process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6",
+    model,
     max_tokens: 900,
     system: buildTopicSystemPrompt(subjectName, subjectPossessive),
     messages: [{ role: "user", content: prompt }],

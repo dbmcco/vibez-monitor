@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const ALL_LINKS = [
-  { href: "/chat", label: "Chat" },
+  { href: "/wisdom", label: "Wisdom" },
   { href: "/briefing", label: "Briefing" },
   { href: "/links", label: "Links" },
   { href: "/stats", label: "Stats" },
@@ -23,6 +23,8 @@ const PAGE_INTENT: Record<string, string> = {
     "Pattern analysis: trends by user, channel, and topic with drilldown detail.",
   "/spaces":
     "Google Groups monitor: track ingestion health and drill into each group stream.",
+  "/wisdom":
+    "Collective knowledge: topics, patterns, and recommendations distilled from group conversations.",
   "/chat":
     "Rapid synthesis: ask focused questions and get grounded answers from message history.",
   "/links": "Semantic link search: find shared resources by describing what you remember.",
@@ -34,7 +36,7 @@ export function Nav() {
   const pathname = usePathname();
   const activeLabel =
     links.find((link) => link.href === pathname)?.label ??
-    (pathname === "/contribute" ? "Contribute" : "Chat");
+    (pathname === "/contribute" ? "Contribute" : pathname === "/chat" ? "Chat" : "Briefing");
   const activeIntent = PAGE_INTENT[pathname] ?? PAGE_INTENT["/"];
   return (
     <nav className="sticky top-0 z-40 border-b border-slate-700/50 bg-slate-950/75 px-4 py-4 backdrop-blur-xl sm:px-6">

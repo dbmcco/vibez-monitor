@@ -3793,3 +3793,184 @@ export function searchLinksFts(
   db.close();
   return rows;
 }
+
+export interface WisdomTopic {
+  id: number;
+  name: string;
+  slug: string;
+  summary: string | null;
+  message_count: number;
+  contributor_count: number;
+  last_active: string | null;
+}
+
+export interface WisdomItem {
+  id: number;
+  topic_id: number;
+  knowledge_type: string;
+  title: string;
+  summary: string | null;
+  source_links: string;
+  source_messages: string;
+  contributors: string;
+  confidence: number;
+}
+
+export interface WisdomItemWithTopic extends WisdomItem {
+  topic_name: string;
+  topic_slug: string;
+}
+
+export interface WisdomTopicDetail extends WisdomTopic {
+  items: WisdomItem[];
+}
+
+export interface WisdomRecommendation {
+  id: number;
+  from_topic_id: number;
+  to_topic_id: number;
+  strength: number;
+  reason: string | null;
+  topic_name: string;
+  topic_slug: string;
+}
+
+export interface WisdomStats {
+  total_topics: number;
+  total_items: number;
+  type_counts: { type: string; count: number }[];
+  top_contributors: { name: string; count: number }[];
+}
+
+function getTopWisdomContributors(rows: { contributors: string }[]): { name: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    for (const contributor of new Set(parseJsonStringArray(row.contributors))) {
+      counts.set(contributor, (counts.get(contributor) || 0) + 1);
+    }
+  }
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, 15);
+}
+
+export function getWisdomTopics(): WisdomTopic[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT id, name, slug, summary, message_count, contributor_count, last_active
+       FROM wisdom_topics
+       ORDER BY message_count DESC, contributor_count DESC, name ASC`
+    )
+    .all() as WisdomTopic[];
+  db.close();
+  return rows;
+}
+
+export function getWisdomItemsByType(knowledgeType?: string): Record<string, WisdomItemWithTopic[]> {
+  const db = getDb();
+  const normalizedType = knowledgeType?.trim();
+  const where = normalizedType ? "WHERE wi.knowledge_type = ?" : "";
+  const params = normalizedType ? [normalizedType] : [];
+  const rows = db
+    .prepare(
+      `SELECT wi.*, wt.name AS topic_name, wt.slug AS topic_slug
+       FROM wisdom_items wi
+       JOIN wisdom_topics wt ON wi.topic_id = wt.id
+       ${where}
+       ORDER BY wi.confidence DESC, wi.id DESC`
+    )
+    .all(...params) as WisdomItemWithTopic[];
+  db.close();
+
+  const grouped: Record<string, WisdomItemWithTopic[]> = {};
+  for (const row of rows) {
+    if (!grouped[row.knowledge_type]) grouped[row.knowledge_type] = [];
+    grouped[row.knowledge_type].push(row);
+  }
+  return grouped;
+}
+
+export function getWisdomItemsByTopic(topicSlug?: string): WisdomTopicDetail | WisdomTopic[] | null {
+  const db = getDb();
+  const normalizedSlug = topicSlug?.trim();
+  if (!normalizedSlug) {
+    const topics = db
+      .prepare(
+        `SELECT id, name, slug, summary, message_count, contributor_count, last_active
+         FROM wisdom_topics
+         ORDER BY message_count DESC, contributor_count DESC, name ASC`
+      )
+      .all() as WisdomTopic[];
+    db.close();
+    return topics;
+  }
+
+  const topic = db
+    .prepare(
+      `SELECT id, name, slug, summary, message_count, contributor_count, last_active
+       FROM wisdom_topics
+       WHERE slug = ?`
+    )
+    .get(normalizedSlug) as WisdomTopic | undefined;
+  if (!topic) {
+    db.close();
+    return null;
+  }
+
+  const items = db
+    .prepare(
+      `SELECT id, topic_id, knowledge_type, title, summary, source_links, source_messages, contributors, confidence
+       FROM wisdom_items
+       WHERE topic_id = ?
+       ORDER BY confidence DESC, id DESC`
+    )
+    .all(topic.id) as WisdomItem[];
+  db.close();
+  return { ...topic, items };
+}
+
+export function getWisdomRecommendations(topicId: number): WisdomRecommendation[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT wr.id, wr.from_topic_id, wr.to_topic_id, wr.strength, wr.reason,
+              wt.name AS topic_name, wt.slug AS topic_slug
+       FROM wisdom_recommendations wr
+       JOIN wisdom_topics wt ON wt.id = CASE
+         WHEN wr.from_topic_id = ? THEN wr.to_topic_id
+         ELSE wr.from_topic_id
+       END
+       WHERE wr.from_topic_id = ? OR wr.to_topic_id = ?
+       ORDER BY wr.strength DESC, wt.name ASC`
+    )
+    .all(topicId, topicId, topicId) as WisdomRecommendation[];
+  db.close();
+  return rows;
+}
+
+export function getWisdomStats(): WisdomStats {
+  const db = getDb();
+  const total_topics = (db.prepare("SELECT COUNT(*) AS c FROM wisdom_topics").get() as { c: number }).c;
+  const total_items = (db.prepare("SELECT COUNT(*) AS c FROM wisdom_items").get() as { c: number }).c;
+  const type_counts = db
+    .prepare(
+      `SELECT knowledge_type AS type, COUNT(*) AS count
+       FROM wisdom_items
+       GROUP BY knowledge_type
+       ORDER BY count DESC, type ASC`
+    )
+    .all() as { type: string; count: number }[];
+  const contributorRows = db
+    .prepare("SELECT contributors FROM wisdom_items WHERE contributors IS NOT NULL AND contributors <> ''")
+    .all() as { contributors: string }[];
+  db.close();
+
+  return {
+    total_topics,
+    total_items,
+    type_counts,
+    top_contributors: getTopWisdomContributors(contributorRows),
+  };
+}

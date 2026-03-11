@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
+import { ChatRail } from "@/components/ChatRail";
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -40,9 +41,10 @@ export default function RootLayout({
     >
       <body className="text-slate-100 antialiased">
         <Nav />
-        <main className="vibe-shell mx-auto max-w-6xl px-4 py-8 sm:px-6">
-          {children}
-        </main>
+        <div className="chat-rail-shell">
+          <main className="vibe-shell mx-auto max-w-6xl px-4 py-8 sm:px-6">{children}</main>
+        </div>
+        <ChatRail />
       </body>
     </html>
   );

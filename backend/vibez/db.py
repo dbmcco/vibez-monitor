@@ -79,6 +79,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_links_url_hash ON links (url_hash);
 CREATE INDEX IF NOT EXISTS idx_links_category ON links (category);
 CREATE INDEX IF NOT EXISTS idx_links_value_score ON links (value_score);
 CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen);
+
+CREATE TABLE IF NOT EXISTS wisdom_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    summary TEXT,
+    message_count INTEGER DEFAULT 0,
+    contributor_count INTEGER DEFAULT 0,
+    last_active DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wisdom_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id INTEGER NOT NULL REFERENCES wisdom_topics(id),
+    knowledge_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT,
+    source_links TEXT DEFAULT '[]',
+    source_messages TEXT DEFAULT '[]',
+    contributors TEXT DEFAULT '[]',
+    confidence REAL DEFAULT 0.5,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wisdom_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_topic_id INTEGER NOT NULL REFERENCES wisdom_topics(id),
+    to_topic_id INTEGER NOT NULL REFERENCES wisdom_topics(id),
+    strength REAL DEFAULT 0.0,
+    reason TEXT
+);
 """
 
 DEFAULT_VALUE_CONFIG = {
@@ -102,6 +136,42 @@ DEFAULT_VALUE_CONFIG = {
     ],
     "alert_threshold": 7,
 }
+
+WISDOM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS wisdom_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    summary TEXT,
+    message_count INTEGER DEFAULT 0,
+    contributor_count INTEGER DEFAULT 0,
+    last_active DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wisdom_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id INTEGER NOT NULL REFERENCES wisdom_topics(id),
+    knowledge_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT,
+    source_links TEXT DEFAULT '[]',
+    source_messages TEXT DEFAULT '[]',
+    contributors TEXT DEFAULT '[]',
+    confidence REAL DEFAULT 0.5,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wisdom_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_topic_id INTEGER NOT NULL REFERENCES wisdom_topics(id),
+    to_topic_id INTEGER NOT NULL REFERENCES wisdom_topics(id),
+    strength REAL DEFAULT 0.0,
+    reason TEXT
+);
+"""
 
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
@@ -156,6 +226,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_links_value_score ON links (value_score);
             CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen);
         """)
+        changed = True
+
+    if (
+        "wisdom_topics" not in existing_tables
+        or "wisdom_items" not in existing_tables
+        or "wisdom_recommendations" not in existing_tables
+    ):
+        conn.executescript(WISDOM_SCHEMA)
         changed = True
 
     if changed:

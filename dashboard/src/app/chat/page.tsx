@@ -15,6 +15,30 @@ interface ChatHistoryItem {
   content: string;
 }
 
+interface ChatLockoutPayload {
+  reason?: string;
+  message?: string;
+  state?: {
+    day_key?: string;
+  };
+}
+
+function formatChatError(error: string, lockout?: ChatLockoutPayload): string {
+  if (!lockout) return `Error: ${error}`;
+  if (lockout.reason === "manual_lock") {
+    return `Chat is temporarily paused by the host.\n\n${error}`;
+  }
+  if (
+    lockout.reason === "daily_budget_reached" ||
+    lockout.reason === "daily_request_limit_reached" ||
+    lockout.reason === "ip_request_limit_reached"
+  ) {
+    const dayKey = lockout.state?.day_key || "today";
+    return `Chat usage limit reached for ${dayKey}.\n\n${error}\n\nLimits reset daily at 00:00 UTC.`;
+  }
+  return `Chat is temporarily unavailable.\n\n${error}`;
+}
+
 const STARTER_PROMPTS = [
   "What changed most in AGI this week?",
   "Which topics are heating up and who is driving them?",
@@ -26,6 +50,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [lockoutBanner, setLockoutBanner] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,11 +76,15 @@ export default function ChatPage() {
       });
       const data = await res.json();
       if (data.error) {
+        const lockout = (data.lockout || undefined) as ChatLockoutPayload | undefined;
+        const message = formatChatError(String(data.error), lockout);
+        setLockoutBanner(lockout ? message : null);
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: `Error: ${data.error}` },
+          { role: "assistant", content: message },
         ]);
       } else {
+        setLockoutBanner(null);
         setMessages((prev) => [
           ...prev,
           {
@@ -70,6 +99,7 @@ export default function ChatPage() {
         ...prev,
         { role: "assistant", content: "Failed to reach the chat agent." },
       ]);
+      setLockoutBanner("Chat service is temporarily unreachable. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -94,6 +124,12 @@ export default function ChatPage() {
           Query the collected conversation stream and get focused synthesis.
         </p>
       </header>
+
+      {lockoutBanner && (
+        <div className="rounded-lg border border-amber-400/35 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          {lockoutBanner}
+        </div>
+      )}
 
       <div className="vibe-panel flex-1 overflow-y-auto rounded-xl p-4 sm:p-5">
         {messages.length === 0 && (
