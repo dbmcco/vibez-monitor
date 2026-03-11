@@ -5,8 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const ALL_LINKS = [
-  { href: "/wisdom", label: "Wisdom" },
   { href: "/briefing", label: "Briefing" },
+  { href: "/wisdom", label: "Wisdom" },
   { href: "/links", label: "Links" },
   { href: "/stats", label: "Stats" },
   { href: "/spaces", label: "Groups" },
@@ -14,7 +14,7 @@ const ALL_LINKS = [
 ];
 
 const PAGE_INTENT: Record<string, string> = {
-  "/": "Rapid synthesis: ask focused questions and get grounded answers from message history.",
+  "/": "Executive signal first: what changed, why it matters, and where to pay attention.",
   "/briefing":
     "Executive signal first: what changed, why it matters, and where to pay attention.",
   "/contribute":
@@ -46,7 +46,7 @@ export function Nav() {
       <div className="mx-auto max-w-6xl">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center justify-between gap-3">
-            <Link href="/" className="group inline-flex items-center gap-2">
+            <Link href="/briefing" className="group inline-flex items-center gap-2">
               <Image
                 src="/icons/favicon-32x32.png"
                 alt="Vibez logo"
