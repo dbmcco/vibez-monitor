@@ -34,10 +34,13 @@ const PAGE_INTENT: Record<string, string> = {
 export function Nav() {
   const links = ALL_LINKS;
   const pathname = usePathname();
+  const isWisdom = pathname === "/wisdom";
   const activeLabel =
     links.find((link) => link.href === pathname)?.label ??
     (pathname === "/contribute" ? "Contribute" : pathname === "/chat" ? "Chat" : "Briefing");
-  const activeIntent = PAGE_INTENT[pathname] ?? PAGE_INTENT["/"];
+  const activeIntent = isWisdom
+    ? "Collective knowledge distilled into topic cards and drill-down guidance."
+    : PAGE_INTENT[pathname] ?? PAGE_INTENT["/"];
   return (
     <nav className="sticky top-0 z-40 border-b border-slate-700/50 bg-slate-950/75 px-4 py-4 backdrop-blur-xl sm:px-6">
       <div className="mx-auto max-w-6xl">
@@ -78,7 +81,11 @@ export function Nav() {
             Focus: {activeLabel}
           </span>
         </div>
-        <div className="mt-2 rounded border border-slate-700/60 bg-slate-900/45 px-3 py-2 text-xs text-slate-300">
+        <div
+          className={`mt-2 rounded border border-slate-700/60 bg-slate-900/45 px-3 py-2 text-xs text-slate-300 ${
+            isWisdom ? "hidden sm:block" : ""
+          }`}
+        >
           <span className="mr-2 text-slate-500">Intent:</span>
           {activeIntent}
         </div>

@@ -211,10 +211,6 @@ function splitSentences(text: string): string[] {
     .filter(Boolean);
 }
 
-function normalizeComparisonText(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
 function parseGuidanceSummary(text: string | null | undefined): GuidanceSummary {
   const cleaned = cleanGuidanceCopy(text);
   if (!cleaned) {
@@ -346,24 +342,6 @@ function Pill({
 function TypeLabel({ type }: { type: string }) {
   const meta = KNOWLEDGE_TYPE_META[type];
   return <span className={meta?.color || "text-slate-300"}>{meta?.label || type}</span>;
-}
-
-function MetricCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-}) {
-  return (
-    <div className="vibe-panel rounded-xl p-4">
-      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</div>
-      <div className="vibe-title mt-2 text-2xl text-slate-100">{value}</div>
-      <p className="mt-1 text-xs text-slate-400">{detail}</p>
-    </div>
-  );
 }
 
 function GuidanceCard({
@@ -513,6 +491,7 @@ export default function WisdomPage() {
       });
       const items = Array.isArray(detail.items) ? detail.items : [];
       setTopicItems(items);
+      setSelectedAnalysisItemId(pickValueItems(items, 4)[0]?.id ?? null);
 
       const recRes = await fetch(`/api/wisdom?recommendations=${detail.id}`);
       const recData = await recRes.json();
@@ -560,11 +539,17 @@ export default function WisdomPage() {
     setSelectedAnalysisItemId(null);
     setError("");
     updateTopicParam(null);
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
   }
 
   function openTopic(slug: string) {
     setView("by-topic");
     updateTopicParam(slug);
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
     void loadTopicDetail(slug);
   }
 
@@ -624,12 +609,6 @@ export default function WisdomPage() {
     : selectedTopicSummaryParts.takeaway || cleanGuidanceCopy(selectedTopicSummary) || selectedTopic?.name || "";
   const analysisTargetSummary = cleanGuidanceCopy(selectedAnalysisItem?.summary || selectedTopicSummary);
   const analysisTargetType = selectedAnalysisItem?.knowledge_type || "topic";
-  const selectedAnalysisDetail = selectedAnalysisItem
-    ? selectedAnalysisGuidance?.why || analysisTargetSummary
-    : selectedTopicSummaryParts.why || analysisTargetSummary;
-  const showAnalysisDetail =
-    selectedAnalysisDetail.length > 0 &&
-    normalizeComparisonText(selectedAnalysisDetail) !== normalizeComparisonText(analysisTargetTitle);
   const keyGuidanceGridClass =
     selectedTopicValueItems.length > 1 ? "grid gap-3 md:grid-cols-2" : "grid gap-3";
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
@@ -659,9 +638,9 @@ export default function WisdomPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">Wisdom</h1>
-            <p className="vibe-subtitle max-w-3xl">
-              Collective knowledge extracted from group conversations. Open a topic card to see the
-              group&apos;s shared take, then pivot by type when you want a different cut.
+            <p className="vibe-subtitle max-w-2xl">
+              Topic cards distilled from group conversations. Browse the strongest takeaways here,
+              then open a topic when you want deeper analysis.
             </p>
           </div>
           <div className="hidden rounded-full border border-slate-700/60 bg-slate-900/70 px-3 py-1 text-xs text-slate-400 sm:block">
@@ -672,115 +651,95 @@ export default function WisdomPage() {
         </div>
       </header>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          label="Topics"
-          value={stats?.total_topics.toLocaleString() || "0"}
-          detail="Distinct knowledge clusters synthesized from chat history."
-        />
-        <MetricCard
-          label="Insights"
-          value={stats?.total_items.toLocaleString() || "0"}
-          detail="Extracted claims, patterns, and recommendations across topics."
-        />
-        <MetricCard
-          label="Top Type"
-          value={topType ? KNOWLEDGE_TYPE_META[topType.type]?.label || topType.type : "None"}
-          detail={topType ? `${topType.count} items in the strongest category right now.` : "No extracted type signal yet."}
-        />
-        <MetricCard
-          label="Top Contributor"
-          value={topContributor?.name || "None"}
-          detail={
-            topContributor
-              ? `${topContributor.count} knowledge items reference this contributor.`
-              : "Contributor counts will populate after extraction runs."
-          }
-        />
-      </section>
+      {!selectedTopic ? (
+        <>
+          <section className="vibe-panel rounded-xl px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-300">
+              <span>
+                <span className="font-semibold text-slate-100">{stats?.total_topics.toLocaleString() || "0"}</span>{" "}
+                topics
+              </span>
+              <span>
+                <span className="font-semibold text-slate-100">{stats?.total_items.toLocaleString() || "0"}</span>{" "}
+                insights
+              </span>
+              <span className="hidden sm:inline">
+                Top type:{" "}
+                <span className="text-slate-100">
+                  {topType ? KNOWLEDGE_TYPE_META[topType.type]?.label || topType.type : "None"}
+                </span>
+              </span>
+              <span className="hidden sm:inline">
+                Top contributor: <span className="text-slate-100">{topContributor?.name || "None"}</span>
+              </span>
+            </div>
+          </section>
 
-      <section className="vibe-panel rounded-xl p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Pill
-              active={view === "by-topic"}
-              onClick={() => {
-                setSelectedType(null);
-                resetTopicSelection("by-topic");
-              }}
-            >
-              By Topic
-            </Pill>
-            <Pill
-              active={view === "by-type"}
-              onClick={() => {
-                setSelectedType(null);
-                resetTopicSelection("by-type");
-              }}
-            >
-              By Type
-            </Pill>
-          </div>
-          {selectedType && view === "by-type" ? (
-            <button
-              type="button"
-              onClick={() => setSelectedType(null)}
-              className="text-xs text-cyan-300 transition hover:text-cyan-200"
-            >
-              Clear type filter
-            </button>
-          ) : (
-            <div className="text-xs text-slate-500">{starredTopicCount} starred topics</div>
-          )}
-        </div>
-      </section>
+          <section className="vibe-panel rounded-xl p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Pill
+                  active={view === "by-topic"}
+                  onClick={() => {
+                    setSelectedType(null);
+                    resetTopicSelection("by-topic");
+                  }}
+                >
+                  By Topic
+                </Pill>
+                <Pill
+                  active={view === "by-type"}
+                  onClick={() => {
+                    setSelectedType(null);
+                    resetTopicSelection("by-type");
+                  }}
+                >
+                  By Type
+                </Pill>
+              </div>
+              <div className="text-xs text-slate-500">
+                {selectedType && view === "by-type" ? "Filtered by type" : `${starredTopicCount} starred topics`}
+              </div>
+            </div>
+            {view === "by-topic" ? (
+              <div className="mt-3 space-y-3">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <Pill active={topicFilter === "all"} onClick={() => setTopicFilter("all")}>
+                    All
+                  </Pill>
+                  {(stats?.type_counts || []).map((entry) => (
+                    <Pill
+                      key={entry.type}
+                      active={topicFilter === entry.type}
+                      onClick={() => setTopicFilter(entry.type)}
+                    >
+                      {KNOWLEDGE_TYPE_META[entry.type]?.label || entry.type}
+                      <span className="ml-0.5 opacity-50"> {topicCountsByType[entry.type] || 0}</span>
+                    </Pill>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {TOPIC_SORTS.map((entry) => (
+                    <Pill key={entry.key} active={topicSort === entry.key} onClick={() => setTopicSort(entry.key)}>
+                      {entry.label}
+                    </Pill>
+                  ))}
+                  <Pill active={!starredOnly} onClick={() => setStarredOnly(false)}>
+                    All
+                  </Pill>
+                  <Pill active={starredOnly} onClick={() => setStarredOnly(true)}>
+                    Starred
+                    <span className="ml-0.5 opacity-50"> {starredTopicCount}</span>
+                  </Pill>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </>
+      ) : null}
 
       {error ? <StatusPanel title="Partial load warning" detail={error} /> : null}
-
-      {view === "by-topic" && !selectedTopic ? (
-        <section className="vibe-panel rounded-xl p-4">
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-1">
-              <span className="w-16 text-[10px] font-medium uppercase tracking-wider text-slate-600">Category</span>
-              <Pill active={topicFilter === "all"} onClick={() => setTopicFilter("all")}>
-                All
-              </Pill>
-              {(stats?.type_counts || []).map((entry) => (
-                <Pill
-                  key={entry.type}
-                  active={topicFilter === entry.type}
-                  onClick={() => setTopicFilter(entry.type)}
-                >
-                  {KNOWLEDGE_TYPE_META[entry.type]?.label || entry.type}
-                  <span className="ml-0.5 opacity-50"> {topicCountsByType[entry.type] || 0}</span>
-                </Pill>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex flex-wrap items-center gap-1">
-                <span className="w-16 text-[10px] font-medium uppercase tracking-wider text-slate-600">Sort</span>
-                {TOPIC_SORTS.map((entry) => (
-                  <Pill key={entry.key} active={topicSort === entry.key} onClick={() => setTopicSort(entry.key)}>
-                    {entry.label}
-                  </Pill>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-1">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-600">Saved</span>
-                <Pill active={!starredOnly} onClick={() => setStarredOnly(false)}>
-                  All
-                </Pill>
-                <Pill active={starredOnly} onClick={() => setStarredOnly(true)}>
-                  Starred
-                  <span className="ml-0.5 opacity-50"> {starredTopicCount}</span>
-                </Pill>
-              </div>
-            </div>
-          </div>
-        </section>
-      ) : null}
 
       {view === "by-type" && !selectedTopic ? (
         <section className="space-y-4">
@@ -898,18 +857,14 @@ export default function WisdomPage() {
                 const topicSummaryParts = parseGuidanceSummary(topic.summary);
                 const topicValueItems = pickValueItems(meta?.items || [], 1);
                 const primaryValueItem = topicValueItems[0];
-                const additionalValueItem = pickValueItems(meta?.items || [], 2).find(
-                  (item) => item.id !== primaryValueItem?.id,
-                );
-                const additionalGuidance = additionalValueItem ? guidanceFromItem(additionalValueItem) : null;
+                const primaryGuidance = primaryValueItem ? guidanceFromItem(primaryValueItem) : null;
                 const fallbackTakeaway =
                   topicSummaryParts.takeaway ||
                   cleanGuidanceCopy(topic.summary) ||
                   "Summary pending for this topic.";
-                const fallbackAdditionalGuidance =
-                  topicSummaryParts.why ||
-                  topicSummaryParts.watchout ||
-                  "No additional extracted guidance yet for this topic.";
+                const supportLine =
+                  primaryGuidance?.why || topicSummaryParts.why || topicSummaryParts.watchout || "";
+                const primaryType = primaryValueItem?.knowledge_type || meta?.types[0] || "";
 
                 return (
                   <article
@@ -923,7 +878,7 @@ export default function WisdomPage() {
                         openTopic(topic.slug);
                       }
                     }}
-                    className="vibe-panel cursor-pointer rounded-xl p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-500/70"
+                    className="vibe-panel group cursor-pointer rounded-xl p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-500/70 sm:p-5"
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div>
@@ -950,68 +905,40 @@ export default function WisdomPage() {
                       </div>
                     </div>
 
-                    <div className="mt-3 space-y-2">
-                      {primaryValueItem ? (
-                        <GuidanceCard
-                          item={primaryValueItem}
-                          topicName={topic.name}
-                          topicSlug={topic.slug}
-                          topicSummary={topic.summary || ""}
-                          compact
-                        />
-                      ) : (
-                        <div>
-                          <p className="line-clamp-2 text-sm text-slate-300">{fallbackTakeaway}</p>
-                          {topicSummaryParts.why ? (
-                            <p className="mt-2 line-clamp-2 text-xs text-slate-500">{topicSummaryParts.why}</p>
-                          ) : null}
-                          <ModelEnhancedAnalysis
-                            compact
-                            cacheKey={`${topic.slug}:topic-summary`}
-                            payload={{
-                              topicName: topic.name,
-                              topicSummary: cleanGuidanceCopy(topic.summary),
-                              knowledgeType: "topic",
-                              title: fallbackTakeaway,
-                              summary: cleanGuidanceCopy(topic.summary),
-                            }}
-                          />
-                        </div>
-                      )}
+                    <div className="mt-4">
+                      <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Primary Guidance
+                      </p>
+                      <p className="mt-2 text-base font-medium leading-6 text-slate-100">
+                        {primaryGuidance?.takeaway || fallbackTakeaway}
+                      </p>
+                      {supportLine ? (
+                        <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{supportLine}</p>
+                      ) : null}
                     </div>
 
-                    <div className="mt-3 border-t border-slate-800/60 pt-3">
-                      <h3 className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Additional Extracted Guidance
-                      </h3>
-                      <div className="mt-2 rounded-xl border border-slate-800/60 bg-slate-950/35 px-3 py-2">
-                        {additionalValueItem ? (
-                          <>
-                            <p className="text-xs font-medium text-slate-200">
-                              {additionalGuidance?.takeaway || additionalValueItem.title}
-                            </p>
-                            {additionalGuidance?.why ? (
-                              <p className="mt-1 line-clamp-2 text-[11px] text-slate-500">
-                                {additionalGuidance.why}
-                              </p>
-                            ) : null}
-                          </>
-                        ) : (
-                          <p className="text-[11px] text-slate-500">{fallbackAdditionalGuidance}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
-                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">impact {impactScore}</span>
-                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
-                        {(meta?.itemCount || 0).toLocaleString()} items
-                      </span>
-                      {(meta?.types || []).slice(0, 3).map((type) => (
-                        <span key={type} className="rounded-full border border-slate-800/60 px-2 py-0.5">
-                          <TypeLabel type={type} />
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap gap-2 text-[11px] text-slate-500">
+                        {primaryType ? (
+                          <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                            <TypeLabel type={primaryType} />
+                          </span>
+                        ) : null}
+                        <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                          impact {impactScore}
                         </span>
-                      ))}
+                        <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                          {(meta?.itemCount || 0).toLocaleString()} insights
+                        </span>
+                      </div>
+                      <span className="text-xs font-medium text-cyan-300 transition group-hover:text-cyan-200">
+                        Open topic →
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                        {topic.last_active ? `active ${formatDate(topic.last_active)}` : "recent"}
+                      </span>
                     </div>
                   </article>
                 );
@@ -1091,7 +1018,7 @@ export default function WisdomPage() {
               ) : null}
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
               <div className="space-y-4">
                 {selectedTopicValueItems.length > 0 ? (
                   <div className="space-y-3">
@@ -1123,20 +1050,29 @@ export default function WisdomPage() {
 
               <aside className="space-y-4">
                 <div className="vibe-panel rounded-xl p-4">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                    {selectedAnalysisItem ? "Selected Guidance" : "Topic Takeaway"}
-                  </p>
-                  <p className="mt-2 text-base font-medium leading-6 text-slate-100">{analysisTargetTitle}</p>
-                  {showAnalysisDetail ? (
-                    <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAnalysisDetail}</p>
-                  ) : null}
-                  {selectedTopicValueItems.length > 0 ? (
-                    <p className="mt-2 text-xs text-slate-500">
-                      {selectedAnalysisItem
-                        ? "Generating for the highlighted Key Guidance card."
-                        : "Click a Key Guidance card to generate a model enhancement for that specific recommendation."}
+                  <div className="rounded-xl border border-slate-800/70 bg-slate-950/45 p-3">
+                    <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                      {selectedAnalysisItem ? "Selected Guidance" : "Topic Takeaway"}
                     </p>
-                  ) : null}
+                    <p className="mt-2 text-base font-medium leading-6 text-slate-100">{analysisTargetTitle}</p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      <span className="rounded-full border border-slate-800/70 px-2 py-0.5">
+                        {selectedAnalysisItem ? "Analyzing key guidance" : "Analyzing topic takeaway"}
+                      </span>
+                      {analysisTargetType !== "topic" ? (
+                        <span className="rounded-full border border-slate-800/70 px-2 py-0.5">
+                          <TypeLabel type={analysisTargetType} />
+                        </span>
+                      ) : null}
+                    </div>
+                    {selectedTopicValueItems.length > 0 ? (
+                      <p className="mt-3 text-xs leading-5 text-slate-500">
+                        {selectedAnalysisItem
+                          ? "Use Generate to expand the selected recommendation into a sharper set of tradeoffs and application notes."
+                          : "Select a Key Guidance card or generate an analysis for the topic-level takeaway."}
+                      </p>
+                    ) : null}
+                  </div>
                   <ModelEnhancedAnalysis
                     standalone
                     cacheKey={

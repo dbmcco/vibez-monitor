@@ -99,7 +99,8 @@ export function ChatRail() {
 
   const currentThread = threads[pathname] || EMPTY_THREAD;
   const pageLabel = pageLabelFor(pathname);
-  const showRail = mounted && pathname !== "/chat";
+  const suppressRail = pathname === "/wisdom";
+  const showRail = mounted && pathname !== "/chat" && !suppressRail;
 
   useEffect(() => {
     const state = loadState();
