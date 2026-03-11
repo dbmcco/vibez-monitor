@@ -1,9 +1,11 @@
 // ABOUTME: Links page with NLP search, source/sharer filtering, sort, and browse.
-// ABOUTME: Table-style layout for 2,700+ links with one-line descriptions.
+// ABOUTME: Responsive browse view with mobile cards, category filters, and local starring.
 
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { StarButton } from "@/components/StarButton";
+import { linkStarKey, useStars } from "@/lib/stars";
 
 interface Link {
   id: number;
@@ -23,6 +25,16 @@ interface LinkStats {
   total: number;
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
+  categories: { name: string; count: number }[];
+}
+
+interface LinkFilters {
+  query: string;
+  source: string;
+  category: string;
+  sort: string;
+  days: string;
+  sharedBy: string;
 }
 
 const SOURCES = [
@@ -52,6 +64,15 @@ const TIME_RANGES = [
   { key: "", label: "All" },
 ] as const;
 
+const INITIAL_FILTERS: LinkFilters = {
+  query: "",
+  source: "all",
+  category: "all",
+  sort: "trending",
+  days: "",
+  sharedBy: "",
+};
+
 function hostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -62,39 +83,37 @@ function hostname(url: string): string {
 
 function categoryBadge(cat: string | null): { color: string; label: string } | null {
   switch (cat) {
-    case "tool": return { color: "text-emerald-400", label: "tool" };
-    case "repo": return { color: "text-violet-400", label: "repo" };
-    case "article": return { color: "text-amber-400", label: "article" };
-    case "discussion": return { color: "text-sky-400", label: "disc" };
-    default: return null;
+    case "tool":
+      return { color: "text-emerald-400", label: "tool" };
+    case "repo":
+      return { color: "text-violet-400", label: "repo" };
+    case "article":
+      return { color: "text-amber-400", label: "article" };
+    case "discussion":
+      return { color: "text-sky-400", label: "disc" };
+    default:
+      return null;
   }
 }
 
 function extractDescription(link: Link): string {
-  // Synthesis-extracted links have good titles that ARE the description
   const title = link.title || "";
   const domain = hostname(link.url);
 
-  // If title is a real description (not just a domain), use it
   if (title && title !== domain && title.length > domain.length + 5) {
     return title;
   }
 
-  // Otherwise, try to extract a one-liner from relevance
   if (link.relevance) {
     let text = link.relevance;
-    // Strip topic fingerprints
     text = text.replace(/\s*\[[\w\s,+\-.'()]+\s+topics:.*?\]\s*/g, "");
-    // Strip URLs
     text = text.replace(/https?:\/\/\S+/g, "");
-    // Split on pipe separators and take first meaningful chunk
-    const chunks = text.split(/\s*\|\s*/).filter((c) => c.trim().length > 10);
+    const chunks = text.split(/\s*\|\s*/).filter((chunk) => chunk.trim().length > 10);
     if (chunks.length > 0) {
       let desc = chunks[0].trim();
-      // Cap at ~120 chars on a sentence boundary if possible
       if (desc.length > 120) {
         const cut = desc.lastIndexOf(".", 120);
-        desc = cut > 40 ? desc.slice(0, cut + 1) : desc.slice(0, 120) + "...";
+        desc = cut > 40 ? desc.slice(0, cut + 1) : `${desc.slice(0, 120)}...`;
       }
       return desc;
     }
@@ -119,9 +138,18 @@ function firstName(name: string): string {
   return name.split(",")[0].split(" ")[0];
 }
 
-function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function Pill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`rounded-full border px-2 py-0.5 text-[11px] transition ${
         active
@@ -137,27 +165,31 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
 export default function LinksPage() {
   const [links, setLinks] = useState<Link[]>([]);
   const [stats, setStats] = useState<LinkStats | null>(null);
-  const [query, setQuery] = useState("");
-  const [source, setSource] = useState("all");
-  const [sort, setSort] = useState("trending");
-  const [days, setDays] = useState("");
-  const [sharedBy, setSharedBy] = useState("");
+  const [query, setQuery] = useState(INITIAL_FILTERS.query);
+  const [source, setSource] = useState(INITIAL_FILTERS.source);
+  const [category, setCategory] = useState(INITIAL_FILTERS.category);
+  const [sort, setSort] = useState(INITIAL_FILTERS.sort);
+  const [days, setDays] = useState(INITIAL_FILTERS.days);
+  const [sharedBy, setSharedBy] = useState(INITIAL_FILTERS.sharedBy);
+  const [starredOnly, setStarredOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const { stars, isLinkStarred, toggleLinkStar } = useStars();
 
-  const fetchLinks = useCallback(async (q: string, src: string, srt: string, d: string, sharer: string) => {
+  const fetchLinks = useCallback(async (filters: LinkFilters) => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (q) params.set("q", q);
-      if (src !== "all") params.set("source", src);
-      if (d) params.set("days", d);
-      if (sharer) params.set("shared_by", sharer);
-      params.set("sort", srt);
+      if (filters.query) params.set("q", filters.query);
+      if (filters.source !== "all") params.set("source", filters.source);
+      if (filters.category !== "all") params.set("category", filters.category);
+      if (filters.days) params.set("days", filters.days);
+      if (filters.sharedBy) params.set("shared_by", filters.sharedBy);
+      params.set("sort", filters.sort);
       params.set("limit", "100");
-      const res = await fetch(`/api/links?${params}`);
+      const res = await fetch(`/api/links?${params.toString()}`);
       const data = await res.json();
-      setLinks(data.links || []);
+      setLinks(Array.isArray(data.links) ? data.links : []);
     } catch {
       setLinks([]);
     } finally {
@@ -170,179 +202,310 @@ export default function LinksPage() {
       const res = await fetch("/api/links?stats=1");
       const data = await res.json();
       setStats(data);
-    } catch { /* ignore */ }
+    } catch {
+      // Ignore stats load failures; browse still works with fetched links.
+    }
   }, []);
 
   useEffect(() => {
-    fetchLinks("", "all", "trending", "", "");
-    fetchStats();
+    void fetchLinks(INITIAL_FILTERS);
+    void fetchStats();
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [fetchLinks, fetchStats]);
+
+  function currentFilters(overrides: Partial<LinkFilters> = {}): LinkFilters {
+    return {
+      query,
+      source,
+      category,
+      sort,
+      days,
+      sharedBy,
+      ...overrides,
+    };
+  }
 
   function handleQueryChange(value: string) {
     setQuery(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    const nextFilters = currentFilters({ query: value });
     debounceRef.current = setTimeout(() => {
-      fetchLinks(value, source, sort, days, sharedBy);
+      void fetchLinks(nextFilters);
     }, 350);
   }
 
-  function applyFilter(newSource?: string, newSort?: string, newDays?: string, newSharer?: string) {
-    const s = newSource ?? source;
-    const sr = newSort ?? sort;
-    const d = newDays ?? days;
-    const sh = newSharer ?? sharedBy;
-    if (newSource !== undefined) setSource(s);
-    if (newSort !== undefined) setSort(sr);
-    if (newDays !== undefined) setDays(d);
-    if (newSharer !== undefined) setSharedBy(sh);
-    fetchLinks(query, s, sr, d, sh);
+  function applyFilter(next: Partial<Omit<LinkFilters, "query">>) {
+    const merged = currentFilters(next);
+    if (next.source !== undefined) setSource(merged.source);
+    if (next.category !== undefined) setCategory(merged.category);
+    if (next.sort !== undefined) setSort(merged.sort);
+    if (next.days !== undefined) setDays(merged.days);
+    if (next.sharedBy !== undefined) setSharedBy(merged.sharedBy);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    void fetchLinks(merged);
   }
 
   const topSharers = (stats?.sharers || [])
-    .filter((s) => s.name !== "whatsappbot" && !s.name.startsWith("+"))
+    .filter((entry) => entry.name !== "whatsappbot" && !entry.name.startsWith("+"))
     .slice(0, 10);
+  const topCategories = (stats?.categories || []).slice(0, 8);
+  const visibleLinks = starredOnly
+    ? links.filter((link) => Boolean(stars.links[linkStarKey(link.url)]))
+    : links;
+  const starredCount = Object.keys(stars.links).length;
 
   return (
     <div className="fade-up space-y-4">
-      <header className="flex items-baseline justify-between">
+      <header className="flex items-baseline justify-between gap-3">
         <div>
           <h1 className="vibe-title text-2xl text-slate-100">Links</h1>
-          <p className="vibe-subtitle text-sm">Browse or search {stats ? stats.total.toLocaleString() : ""} shared links.</p>
+          <p className="vibe-subtitle text-sm">
+            Browse or search {stats ? stats.total.toLocaleString() : ""} shared links.
+          </p>
+        </div>
+        <div className="hidden rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400 sm:block">
+          {starredCount} starred
         </div>
       </header>
 
-      {/* Search */}
       <input
         type="text"
         value={query}
-        onChange={(e) => handleQueryChange(e.target.value)}
+        onChange={(event) => handleQueryChange(event.target.value)}
         placeholder="Search: 'trycycle', 'agent sandboxing', 'that repo Dan shared'..."
         className="vibe-input w-full rounded-lg px-4 py-2.5 text-sm"
         aria-label="Search links"
       />
 
-      {/* Filters - compact single row groups */}
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-1">
-          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">Source</span>
-          {SOURCES.map((s) => {
-            const count = stats?.sources.find((x) => x.name === s.key)?.count;
+          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+            Source
+          </span>
+          {SOURCES.map((entry) => {
+            const count = stats?.sources.find((sourceEntry) => sourceEntry.name === entry.key)?.count;
             return (
-              <Pill key={s.key} active={source === s.key} onClick={() => applyFilter(s.key)}>
-                {s.label}{count ? <span className="ml-0.5 opacity-50">{count}</span> : null}
+              <Pill key={entry.key} active={source === entry.key} onClick={() => applyFilter({ source: entry.key })}>
+                {entry.label}
+                {count ? <span className="ml-0.5 opacity-50"> {count}</span> : null}
               </Pill>
             );
           })}
         </div>
 
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+            Type
+          </span>
+          <Pill active={category === "all"} onClick={() => applyFilter({ category: "all" })}>
+            All
+          </Pill>
+          {topCategories.map((entry) => (
+            <Pill
+              key={entry.name}
+              active={category === entry.name}
+              onClick={() => applyFilter({ category: entry.name })}
+            >
+              {entry.name}
+              <span className="ml-0.5 opacity-50"> {entry.count}</span>
+            </Pill>
+          ))}
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1">
-            <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">Sort</span>
-            {SORTS.map((s) => (
-              <Pill key={s.key} active={sort === s.key} onClick={() => applyFilter(undefined, s.key)}>
-                {s.label}
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+              Sort
+            </span>
+            {SORTS.map((entry) => (
+              <Pill key={entry.key} active={sort === entry.key} onClick={() => applyFilter({ sort: entry.key })}>
+                {entry.label}
               </Pill>
             ))}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             <span className="text-[10px] font-medium uppercase tracking-wider text-slate-600">Time</span>
-            {TIME_RANGES.map((t) => (
-              <Pill key={t.key} active={days === t.key} onClick={() => applyFilter(undefined, undefined, t.key)}>
-                {t.label}
+            {TIME_RANGES.map((entry) => (
+              <Pill key={entry.key} active={days === entry.key} onClick={() => applyFilter({ days: entry.key })}>
+                {entry.label}
               </Pill>
             ))}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-1">
-          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">From</span>
-          <Pill active={sharedBy === ""} onClick={() => applyFilter(undefined, undefined, undefined, "")}>
+          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+            From
+          </span>
+          <Pill active={sharedBy === ""} onClick={() => applyFilter({ sharedBy: "" })}>
             Anyone
           </Pill>
-          {topSharers.map((s) => (
+          {topSharers.map((entry) => (
             <Pill
-              key={s.name}
-              active={sharedBy === s.name}
-              onClick={() => applyFilter(undefined, undefined, undefined, s.name)}
+              key={entry.name}
+              active={sharedBy === entry.name}
+              onClick={() => applyFilter({ sharedBy: entry.name })}
             >
-              {firstName(s.name)}<span className="ml-0.5 opacity-50">{s.count}</span>
+              {firstName(entry.name)}
+              <span className="ml-0.5 opacity-50"> {entry.count}</span>
             </Pill>
           ))}
         </div>
+
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+            Saved
+          </span>
+          <Pill active={!starredOnly} onClick={() => setStarredOnly(false)}>
+            All
+          </Pill>
+          <Pill active={starredOnly} onClick={() => setStarredOnly(true)}>
+            Starred
+            <span className="ml-0.5 opacity-50"> {starredCount}</span>
+          </Pill>
+        </div>
       </div>
 
-      {/* Results */}
-      {loading && <p className="text-sm text-slate-500">Loading...</p>}
+      {loading ? <p className="text-sm text-slate-500">Loading...</p> : null}
 
-      {!loading && links.length === 0 && (
+      {!loading && visibleLinks.length === 0 ? (
         <p className="py-8 text-center text-sm text-slate-500">
-          {query ? `No links match "${query}"` : "No links match these filters."}
+          {query
+            ? `No links match "${query}".`
+            : starredOnly
+              ? "No starred links match these filters."
+              : "No links match these filters."}
         </p>
-      )}
+      ) : null}
 
-      {/* Table */}
-      {!loading && links.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-slate-800/60">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-800/60 text-[10px] font-medium uppercase tracking-wider text-slate-500">
-                <th className="px-3 py-2">Link</th>
-                <th className="hidden px-3 py-2 sm:table-cell">From</th>
-                <th className="px-3 py-2 text-right">When</th>
-                <th className="px-3 py-2 text-right">Shares</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/40">
-              {links.map((link) => {
-                const domain = hostname(link.url);
-                const desc = extractDescription(link);
-                const badge = categoryBadge(link.category);
-                const sharer = link.shared_by ? firstName(link.shared_by) : "";
+      {!loading && visibleLinks.length > 0 ? (
+        <div className="space-y-3">
+          <div className="space-y-3 sm:hidden">
+            {visibleLinks.map((link) => {
+              const domain = hostname(link.url);
+              const desc = extractDescription(link);
+              const badge = categoryBadge(link.category);
+              const sharer = link.shared_by ? firstName(link.shared_by) : "";
 
-                return (
-                  <tr key={link.id} className="group transition hover:bg-slate-800/20">
-                    <td className="px-3 py-2">
-                      <a
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="truncate font-medium text-slate-200 group-hover:text-cyan-300">
-                            {domain}
-                          </span>
-                          {badge && (
-                            <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span>
-                          )}
+              return (
+                <article key={link.id} className="vibe-panel rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <a
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block min-w-0 flex-1"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium text-slate-200">{domain}</span>
+                        {badge ? <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span> : null}
+                      </div>
+                      {desc ? <p className="mt-1 text-sm text-slate-400">{desc}</p> : null}
+                    </a>
+                    <StarButton
+                      compact
+                      active={isLinkStarred(link.url)}
+                      label={link.title || domain}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        toggleLinkStar(link.url);
+                      }}
+                    />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                    {sharer ? (
+                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">from {sharer}</span>
+                    ) : null}
+                    {link.last_seen ? (
+                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                        {formatDate(link.last_seen)}
+                      </span>
+                    ) : null}
+                    {link.mention_count > 1 ? (
+                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                        {link.mention_count} mentions
+                      </span>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="hidden overflow-hidden rounded-lg border border-slate-800/60 sm:block">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-800/60 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                  <th className="px-3 py-2">Link</th>
+                  <th className="hidden px-3 py-2 sm:table-cell">From</th>
+                  <th className="px-3 py-2 text-right">When</th>
+                  <th className="px-3 py-2 text-right">Shares</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/40">
+                {visibleLinks.map((link) => {
+                  const domain = hostname(link.url);
+                  const desc = extractDescription(link);
+                  const badge = categoryBadge(link.category);
+                  const sharer = link.shared_by ? firstName(link.shared_by) : "";
+
+                  return (
+                    <tr key={link.id} className="group transition hover:bg-slate-800/20">
+                      <td className="px-3 py-2">
+                        <div className="flex items-start gap-3">
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block min-w-0 flex-1"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="truncate font-medium text-slate-200 group-hover:text-cyan-300">
+                                {domain}
+                              </span>
+                              {badge ? (
+                                <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span>
+                              ) : null}
+                            </div>
+                            {desc ? <p className="mt-0.5 line-clamp-1 text-xs text-slate-400">{desc}</p> : null}
+                          </a>
+                          <StarButton
+                            compact
+                            active={isLinkStarred(link.url)}
+                            label={link.title || domain}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              toggleLinkStar(link.url);
+                            }}
+                          />
                         </div>
-                        {desc && (
-                          <p className="mt-0.5 line-clamp-1 text-xs text-slate-400">{desc}</p>
-                        )}
-                      </a>
-                    </td>
-                    <td className="hidden px-3 py-2 text-xs text-slate-500 sm:table-cell">
-                      {sharer}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-slate-500">
-                      {formatDate(link.last_seen)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-xs text-slate-500">
-                      {link.mention_count > 1 ? `${link.mention_count}x` : ""}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      </td>
+                      <td className="hidden px-3 py-2 text-xs text-slate-500 sm:table-cell">{sharer}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-slate-500">
+                        {formatDate(link.last_seen)}
+                      </td>
+                      <td className="px-3 py-2 text-right text-xs text-slate-500">
+                        {link.mention_count > 1 ? `${link.mention_count}x` : ""}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-      )}
+      ) : null}
 
-      {!loading && links.length > 0 && (
+      {!loading && visibleLinks.length > 0 ? (
         <p className="text-center text-[11px] text-slate-600">
-          {links.length} of {stats?.total.toLocaleString() || "?"} links
+          {visibleLinks.length} of {stats?.total.toLocaleString() || "?"} links
         </p>
-      )}
+      ) : null}
     </div>
   );
 }

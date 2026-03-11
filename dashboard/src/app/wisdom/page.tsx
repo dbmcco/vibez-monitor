@@ -1,10 +1,12 @@
 // ABOUTME: Wisdom page for browsing collective knowledge distilled from chat history.
-// ABOUTME: Supports by-type browsing, topic drill-down, and related-topic recommendations.
+// ABOUTME: Supports topic sorting/filtering, starring, type browsing, and topic drill-down.
 
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { StarButton } from "@/components/StarButton";
 import { StatusPanel } from "@/components/StatusPanel";
+import { useStars } from "@/lib/stars";
 
 interface WisdomTopic {
   id: number;
@@ -47,7 +49,14 @@ interface Recommendation {
   topic_slug: string;
 }
 
+interface TopicBrowseMeta {
+  itemCount: number;
+  maxConfidence: number;
+  types: string[];
+}
+
 type ViewMode = "by-type" | "by-topic";
+type TopicSort = "impact" | "freshness" | "discussion";
 
 const KNOWLEDGE_TYPE_META: Record<string, { label: string; color: string; description: string }> = {
   stack: { label: "Stack", color: "text-emerald-400", description: "Tools, frameworks, libraries" },
@@ -69,6 +78,12 @@ const KNOWLEDGE_TYPE_META: Record<string, { label: string; color: string; descri
   showcase: { label: "Showcase", color: "text-lime-400", description: "Demos and things people built" },
   people: { label: "People & Orgs", color: "text-indigo-400", description: "Who to follow and teams to watch" },
 };
+
+const TOPIC_SORTS: { key: TopicSort; label: string }[] = [
+  { key: "impact", label: "Impact" },
+  { key: "freshness", label: "Freshness" },
+  { key: "discussion", label: "Discussion" },
+];
 
 function formatDate(iso: string | null): string {
   if (!iso) return "";
@@ -95,9 +110,7 @@ function parseJsonArray(raw: string | null | undefined): string[] {
 
 function topicContributors(items: WisdomItem[]): string[] {
   return Array.from(
-    new Set(
-      items.flatMap((item) => parseJsonArray(item.contributors)).filter((value) => value.length > 0),
-    ),
+    new Set(items.flatMap((item) => parseJsonArray(item.contributors)).filter((value) => value.length > 0)),
   );
 }
 
@@ -116,6 +129,62 @@ function bestItemSummary(items: WisdomItem[]): string {
   return "";
 }
 
+function buildTopicBrowseMeta(typeItems: Record<string, WisdomItem[]>): Record<string, TopicBrowseMeta> {
+  const grouped = new Map<string, { itemCount: number; maxConfidence: number; typeSet: Set<string> }>();
+
+  for (const items of Object.values(typeItems)) {
+    for (const item of items) {
+      const slug = item.topic_slug?.trim();
+      if (!slug) continue;
+      const existing = grouped.get(slug) || {
+        itemCount: 0,
+        maxConfidence: 0,
+        typeSet: new Set<string>(),
+      };
+      existing.itemCount += 1;
+      existing.maxConfidence = Math.max(existing.maxConfidence, item.confidence || 0);
+      if (item.knowledge_type) existing.typeSet.add(item.knowledge_type);
+      grouped.set(slug, existing);
+    }
+  }
+
+  return Object.fromEntries(
+    Array.from(grouped.entries()).map(([slug, entry]) => [
+      slug,
+      {
+        itemCount: entry.itemCount,
+        maxConfidence: entry.maxConfidence,
+        types: Array.from(entry.typeSet).sort(),
+      },
+    ]),
+  );
+}
+
+function countTopicsByType(topicMetaBySlug: Record<string, TopicBrowseMeta>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const meta of Object.values(topicMetaBySlug)) {
+    for (const type of meta.types) {
+      counts[type] = (counts[type] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function topicImpactScore(topic: WisdomTopic, meta?: TopicBrowseMeta): number {
+  return (
+    topic.message_count * 2 +
+    topic.contributor_count * 5 +
+    (meta?.itemCount || 0) * 4 +
+    Math.round((meta?.maxConfidence || 0) * 100)
+  );
+}
+
+function dateScore(iso: string | null): number {
+  if (!iso) return 0;
+  const value = new Date(iso).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
 function Pill({
   active,
   onClick,
@@ -127,6 +196,7 @@ function Pill({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`rounded-full border px-2.5 py-0.5 text-[11px] transition ${
         active
@@ -171,8 +241,12 @@ export default function WisdomPage() {
   const [selectedTopic, setSelectedTopic] = useState<WisdomTopic | null>(null);
   const [topicItems, setTopicItems] = useState<WisdomItem[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [topicFilter, setTopicFilter] = useState("all");
+  const [topicSort, setTopicSort] = useState<TopicSort>("impact");
+  const [starredOnly, setStarredOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const { stars, isWisdomTopicStarred, toggleWisdomTopicStar } = useStars();
 
   const loadInitial = useCallback(async () => {
     setLoading(true);
@@ -243,7 +317,7 @@ export default function WisdomPage() {
   }, []);
 
   useEffect(() => {
-    loadInitial();
+    void loadInitial();
   }, [loadInitial]);
 
   useEffect(() => {
@@ -254,21 +328,18 @@ export default function WisdomPage() {
     void loadTopicDetail(topicParam);
   }, [loadTopicDetail]);
 
-  const updateTopicParam = useCallback(
-    (slug: string | null) => {
-      if (typeof window === "undefined") return;
-      const url = new URL(window.location.href);
-      const params = url.searchParams;
-      if (slug) {
-        params.set("topic", slug);
-      } else {
-        params.delete("topic");
-      }
-      const next = params.toString();
-      window.history.replaceState({}, "", next ? `${url.pathname}?${next}` : url.pathname);
-    },
-    [],
-  );
+  const updateTopicParam = useCallback((slug: string | null) => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    if (slug) {
+      params.set("topic", slug);
+    } else {
+      params.delete("topic");
+    }
+    const next = params.toString();
+    window.history.replaceState({}, "", next ? `${url.pathname}?${next}` : url.pathname);
+  }, []);
 
   function resetTopicSelection(nextView?: ViewMode) {
     if (nextView) setView(nextView);
@@ -282,16 +353,55 @@ export default function WisdomPage() {
   function openTopic(slug: string) {
     setView("by-topic");
     updateTopicParam(slug);
+    void loadTopicDetail(slug);
   }
 
+  const topicMetaBySlug = buildTopicBrowseMeta(typeItems);
+  const topicCountsByType = countTopicsByType(topicMetaBySlug);
   const visibleTypeGroups = selectedType
     ? Object.entries(typeItems).filter(([type]) => type === selectedType)
     : Object.entries(typeItems);
+  const filteredTopics = topics
+    .filter((topic) => {
+      const meta = topicMetaBySlug[topic.slug];
+      if (topicFilter !== "all" && !meta?.types.includes(topicFilter)) return false;
+      if (starredOnly && !Boolean(stars.wisdomTopics[topic.slug])) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const metaA = topicMetaBySlug[a.slug];
+      const metaB = topicMetaBySlug[b.slug];
+
+      if (topicSort === "freshness") {
+        return (
+          dateScore(b.last_active) - dateScore(a.last_active) ||
+          b.message_count - a.message_count ||
+          a.name.localeCompare(b.name)
+        );
+      }
+
+      if (topicSort === "discussion") {
+        return (
+          b.message_count - a.message_count ||
+          b.contributor_count - a.contributor_count ||
+          dateScore(b.last_active) - dateScore(a.last_active) ||
+          a.name.localeCompare(b.name)
+        );
+      }
+
+      return (
+        topicImpactScore(b, metaB) - topicImpactScore(a, metaA) ||
+        b.message_count - a.message_count ||
+        dateScore(b.last_active) - dateScore(a.last_active) ||
+        a.name.localeCompare(b.name)
+      );
+    });
   const topType = stats?.type_counts[0];
   const topContributor = stats?.top_contributors[0];
   const selectedTopicContributors = topicContributors(topicItems);
   const selectedTopicTypes = topicTypes(topicItems);
   const selectedTopicSummary = selectedTopic?.summary?.trim() || bestItemSummary(topicItems);
+  const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
     return (
@@ -309,12 +419,7 @@ export default function WisdomPage() {
   }
 
   if (error && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
-    return (
-      <StatusPanel
-        title="Wisdom unavailable"
-        detail={error || "The wisdom API did not return usable data."}
-      />
-    );
+    return <StatusPanel title="Wisdom unavailable" detail={error || "The wisdom API did not return usable data."} />;
   }
 
   return (
@@ -329,7 +434,9 @@ export default function WisdomPage() {
             </p>
           </div>
           <div className="hidden rounded-full border border-slate-700/60 bg-slate-900/70 px-3 py-1 text-xs text-slate-400 sm:block">
-            {stats ? `${stats.total_topics.toLocaleString()} topics · ${stats.total_items.toLocaleString()} items` : "Wisdom"}
+            {stats
+              ? `${stats.total_topics.toLocaleString()} topics · ${stats.total_items.toLocaleString()} items`
+              : "Wisdom"}
           </div>
         </div>
       </header>
@@ -385,17 +492,63 @@ export default function WisdomPage() {
           </div>
           {selectedType && view === "by-type" ? (
             <button
+              type="button"
               onClick={() => setSelectedType(null)}
               className="text-xs text-cyan-300 transition hover:text-cyan-200"
             >
               Clear type filter
             </button>
-          ) : null}
+          ) : (
+            <div className="text-xs text-slate-500">{starredTopicCount} starred topics</div>
+          )}
         </div>
       </section>
 
-      {error ? (
-        <StatusPanel title="Partial load warning" detail={error} />
+      {error ? <StatusPanel title="Partial load warning" detail={error} /> : null}
+
+      {view === "by-topic" && !selectedTopic ? (
+        <section className="vibe-panel rounded-xl p-4">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="w-16 text-[10px] font-medium uppercase tracking-wider text-slate-600">Category</span>
+              <Pill active={topicFilter === "all"} onClick={() => setTopicFilter("all")}>
+                All
+              </Pill>
+              {(stats?.type_counts || []).map((entry) => (
+                <Pill
+                  key={entry.type}
+                  active={topicFilter === entry.type}
+                  onClick={() => setTopicFilter(entry.type)}
+                >
+                  {KNOWLEDGE_TYPE_META[entry.type]?.label || entry.type}
+                  <span className="ml-0.5 opacity-50"> {topicCountsByType[entry.type] || 0}</span>
+                </Pill>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="w-16 text-[10px] font-medium uppercase tracking-wider text-slate-600">Sort</span>
+                {TOPIC_SORTS.map((entry) => (
+                  <Pill key={entry.key} active={topicSort === entry.key} onClick={() => setTopicSort(entry.key)}>
+                    {entry.label}
+                  </Pill>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-600">Saved</span>
+                <Pill active={!starredOnly} onClick={() => setStarredOnly(false)}>
+                  All
+                </Pill>
+                <Pill active={starredOnly} onClick={() => setStarredOnly(true)}>
+                  Starred
+                  <span className="ml-0.5 opacity-50"> {starredTopicCount}</span>
+                </Pill>
+              </div>
+            </div>
+          </div>
+        </section>
       ) : null}
 
       {view === "by-type" && !selectedTopic ? (
@@ -406,6 +559,7 @@ export default function WisdomPage() {
               const sample = (typeItems[type] || []).slice(0, 2);
               return (
                 <button
+                  type="button"
                   key={type}
                   onClick={() => setSelectedType((current) => (current === type ? null : type))}
                   className={`vibe-panel rounded-xl p-4 text-left transition ${
@@ -440,10 +594,7 @@ export default function WisdomPage() {
           </div>
 
           {visibleTypeGroups.length === 0 ? (
-            <StatusPanel
-              title="No wisdom items yet"
-              detail="Run the extraction pipeline to populate the by-type view."
-            />
+            <StatusPanel title="No wisdom items yet" detail="Run the extraction pipeline to populate the by-type view." />
           ) : (
             <div className="space-y-4">
               {visibleTypeGroups.map(([type, items]) => {
@@ -466,6 +617,7 @@ export default function WisdomPage() {
                         const contributors = parseJsonArray(item.contributors);
                         return (
                           <button
+                            type="button"
                             key={item.id}
                             onClick={() => item.topic_slug && openTopic(item.topic_slug)}
                             className="grid w-full gap-2 px-4 py-3 text-left transition hover:bg-slate-900/50 sm:grid-cols-[minmax(0,1fr)_170px_88px]"
@@ -479,16 +631,12 @@ export default function WisdomPage() {
                                   </span>
                                 ) : null}
                               </div>
-                              {item.summary ? (
-                                <p className="mt-1 line-clamp-2 text-xs text-slate-400">{item.summary}</p>
-                              ) : null}
+                              {item.summary ? <p className="mt-1 line-clamp-2 text-xs text-slate-400">{item.summary}</p> : null}
                             </div>
                             <div className="text-xs text-slate-500">
                               {contributors.length > 0 ? contributors.slice(0, 3).join(", ") : "No contributors"}
                             </div>
-                            <div className="text-right text-xs text-slate-500">
-                              {Math.round(item.confidence * 100)}%
-                            </div>
+                            <div className="text-right text-xs text-slate-500">{Math.round(item.confidence * 100)}%</div>
                           </button>
                         );
                       })}
@@ -504,35 +652,72 @@ export default function WisdomPage() {
       {view === "by-topic" && !selectedTopic ? (
         <section className="space-y-3">
           {topics.length === 0 ? (
-            <StatusPanel
-              title="No wisdom topics extracted yet"
-              detail="Run the extraction pipeline to populate the topic browser."
-            />
+            <StatusPanel title="No wisdom topics extracted yet" detail="Run the extraction pipeline to populate the topic browser." />
+          ) : filteredTopics.length === 0 ? (
+            <StatusPanel title="No topics match" detail="Try a different category, sort, or saved filter." />
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
-              {topics.map((topic) => (
-                <button
-                  key={topic.id}
-                  onClick={() => openTopic(topic.slug)}
-                  className="vibe-panel cursor-pointer rounded-xl p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-500/70"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h2 className="vibe-title text-lg text-slate-100">{topic.name}</h2>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {topic.message_count} messages · {topic.contributor_count} contributors
-                        {topic.last_active ? ` · active ${formatDate(topic.last_active)}` : ""}
-                      </p>
+              {filteredTopics.map((topic) => {
+                const meta = topicMetaBySlug[topic.slug];
+                const impactScore = topicImpactScore(topic, meta);
+
+                return (
+                  <article
+                    key={topic.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openTopic(topic.slug)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openTopic(topic.slug);
+                      }
+                    }}
+                    className="vibe-panel cursor-pointer rounded-xl p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-500/70"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h2 className="vibe-title text-lg text-slate-100">{topic.name}</h2>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {topic.message_count} messages · {topic.contributor_count} contributors
+                          {topic.last_active ? ` · active ${formatDate(topic.last_active)}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <StarButton
+                          compact
+                          active={isWisdomTopicStarred(topic.slug)}
+                          label={topic.name}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            toggleWisdomTopicStar(topic.slug);
+                          }}
+                        />
+                        <span className="text-lg leading-none text-slate-500" aria-hidden="true">
+                          ↗
+                        </span>
+                      </div>
                     </div>
-                    <span className="text-lg leading-none text-slate-500" aria-hidden="true">
-                      ↗
-                    </span>
-                  </div>
-                  <p className="mt-3 line-clamp-3 text-sm text-slate-400">
-                    {topic.summary || "Summary pending for this topic."}
-                  </p>
-                </button>
-              ))}
+
+                    <p className="mt-3 line-clamp-3 text-sm text-slate-400">
+                      {topic.summary || "Summary pending for this topic."}
+                    </p>
+
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">impact {impactScore}</span>
+                      <span className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                        {(meta?.itemCount || 0).toLocaleString()} items
+                      </span>
+                      {(meta?.types || []).slice(0, 3).map((type) => (
+                        <span key={type} className="rounded-full border border-slate-800/60 px-2 py-0.5">
+                          <TypeLabel type={type} />
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
@@ -541,6 +726,7 @@ export default function WisdomPage() {
       {selectedTopic ? (
         <section className="space-y-4">
           <button
+            type="button"
             onClick={() => resetTopicSelection("by-topic")}
             className="text-sm text-cyan-300 transition hover:text-cyan-200"
           >
@@ -557,8 +743,18 @@ export default function WisdomPage() {
                       {selectedTopicSummary || "Summary pending for this topic."}
                     </p>
                   </div>
-                  <div className="rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400">
-                    active {formatDate(selectedTopic.last_active) || "recently"}
+                  <div className="flex items-center gap-2">
+                    <StarButton
+                      active={isWisdomTopicStarred(selectedTopic.slug)}
+                      label={selectedTopic.name}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        toggleWisdomTopicStar(selectedTopic.slug);
+                      }}
+                    />
+                    <div className="rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400">
+                      active {formatDate(selectedTopic.last_active) || "recently"}
+                    </div>
                   </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-400">
@@ -624,15 +820,14 @@ export default function WisdomPage() {
                   {recommendations.length > 0 ? (
                     recommendations.map((rec) => (
                       <button
+                        type="button"
                         key={rec.id}
                         onClick={() => openTopic(rec.topic_slug)}
                         className="w-full rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600"
                       >
                         <div className="flex items-center justify-between gap-3">
                           <span className="text-sm text-slate-100">{rec.topic_name}</span>
-                          <span className="text-[11px] text-slate-500">
-                            {Math.round(rec.strength * 100)}%
-                          </span>
+                          <span className="text-[11px] text-slate-500">{Math.round(rec.strength * 100)}%</span>
                         </div>
                         {rec.reason ? <p className="mt-1 text-xs text-slate-400">{rec.reason}</p> : null}
                       </button>
