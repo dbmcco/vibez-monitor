@@ -3,7 +3,7 @@
 import type { MouseEvent } from "react";
 import { useEffect, useState } from "react";
 
-const STORAGE_KEY = "vibez-wisdom-enhanced-analysis-v1";
+const STORAGE_KEY = "vibez-wisdom-enhanced-analysis-v2";
 
 interface AnalysisPayload {
   topicName: string;
@@ -106,16 +106,22 @@ export function ModelEnhancedAnalysis({
         </button>
       </div>
       {analysis ? (
-        <p className={`mt-2 text-slate-300 ${compact ? "line-clamp-4 text-xs" : "text-sm"}`}>{analysis}</p>
+        <p
+          className={`mt-2 whitespace-pre-line text-slate-300 ${
+            compact ? "line-clamp-4 text-xs" : "text-sm leading-6"
+          }`}
+        >
+          {analysis}
+        </p>
       ) : null}
       {!analysis && loading ? (
         <p className={`mt-2 text-slate-500 ${compact ? "text-[11px]" : "text-xs"}`}>
-          Generating a model pass that explains applicability, tradeoffs, and edge cases.
+          Generating a model pass that extracts the value, fit, application path, and sharpest caveat.
         </p>
       ) : null}
       {!analysis && !error && !loading ? (
         <p className={`mt-2 text-slate-500 ${compact ? "text-[11px]" : "text-xs"}`}>
-          Generate a model pass that explains applicability, tradeoffs, and edge cases.
+          Generate a stronger analysis that says what is valuable here, when to use it, how to apply it, and what to watch out for.
         </p>
       ) : null}
       {!analysis && error ? <p className="mt-2 text-xs text-rose-300">{error}</p> : null}

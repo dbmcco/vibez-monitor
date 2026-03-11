@@ -1,5 +1,5 @@
 // ABOUTME: Model-enhanced analysis API for wisdom cards.
-// ABOUTME: Expands a wisdom takeaway with applicability and tradeoff context.
+// ABOUTME: Rewrites a wisdom takeaway into actionable guidance with value, applicability, execution, and caveats.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
@@ -11,7 +11,8 @@ import {
 } from "@/lib/api-usage";
 
 const ROUTE_KEY = "/api/wisdom/enhance";
-const SYSTEM_PROMPT = "Return strict JSON only in the form {\"analysis\":\"...\"}. No markdown.";
+const SYSTEM_PROMPT =
+  "Return strict JSON only in the form {\"analysis\":\"...\"}. Do not wrap the JSON in markdown fences.";
 
 interface EnhancePayload {
   topicName?: unknown;
@@ -58,7 +59,7 @@ function buildPrompt({
   title: string;
   summary: string;
 }): string {
-  return `You are enhancing a card in a knowledge dashboard.
+  return `You are writing the "Model Enhanced Analysis" for a technical knowledge dashboard.
 
 Topic: ${topicName}
 Knowledge type: ${knowledgeType || "unknown"}
@@ -66,14 +67,26 @@ Primary takeaway: ${title}
 Existing explanation: ${summary || "(none)"}
 Topic context: ${topicSummary || "(none)"}
 
-Write a model-enhanced analysis that adds value beyond the existing text.
+Your job is to turn the takeaway into advice a builder can actually use.
+
+Reason silently before writing:
+1. What part of this advice is genuinely valuable or differentiated?
+2. When should a user apply it, and when would it be the wrong move?
+3. What concrete action would let a user benefit from it?
+4. What tradeoff, limit, or failure mode matters most?
 
 Requirements:
-- 2 or 3 concise sentences, max 90 words
-- explain when this guidance applies, why it matters, and the sharpest tradeoff
-- do not repeat the title verbatim
-- do not mention chats, speakers, the community, or that this came from a model
-- be concrete, not motivational
+- Return one plain-text string under "analysis" with exactly 4 labeled lines:
+  Value: ...
+  Use it when: ...
+  How to apply it: ...
+  Watch out: ...
+- Each line should be a single sentence.
+- Total length should stay under 170 words.
+- Focus on applied technical judgment, not summary filler.
+- Do not repeat the title verbatim unless needed for clarity.
+- Do not mention chats, speakers, the community, sources, or that this came from a model.
+- If the claim is too broad, narrow it to the part that is actually useful.
 
 Return JSON only.`;
 }
@@ -98,8 +111,9 @@ export async function POST(request: NextRequest) {
 
     const model =
       process.env.WISDOM_ENHANCE_MODEL ||
+      process.env.SYNTHESIS_MODEL ||
       process.env.CLASSIFIER_MODEL ||
-      "claude-haiku-4-5-20251001";
+      "claude-sonnet-4-6";
     const clientIp = getClientIp(request);
     const guard = enforceApiUsageGuard({ route: ROUTE_KEY, model, clientIp });
     if (!guard.allowed) {
@@ -114,7 +128,7 @@ export async function POST(request: NextRequest) {
       try {
         const result = await client.messages.create({
           model,
-          max_tokens: 220,
+          max_tokens: 320,
           system: SYSTEM_PROMPT,
           messages: [
             {
