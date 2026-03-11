@@ -152,7 +152,7 @@ function MetricCard({
 }
 
 export default function WisdomPage() {
-  const [view, setView] = useState<ViewMode>("by-type");
+  const [view, setView] = useState<ViewMode>("by-topic");
   const [stats, setStats] = useState<WisdomStats | null>(null);
   const [topics, setTopics] = useState<WisdomTopic[]>([]);
   const [typeItems, setTypeItems] = useState<Record<string, WisdomItem[]>>({});
@@ -235,17 +235,42 @@ export default function WisdomPage() {
     loadInitial();
   }, [loadInitial]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const topicParam = new URLSearchParams(window.location.search).get("topic")?.trim() || null;
+    if (!topicParam) return;
+    setView("by-topic");
+    void loadTopicDetail(topicParam);
+  }, [loadTopicDetail]);
+
+  const updateTopicParam = useCallback(
+    (slug: string | null) => {
+      if (typeof window === "undefined") return;
+      const url = new URL(window.location.href);
+      const params = url.searchParams;
+      if (slug) {
+        params.set("topic", slug);
+      } else {
+        params.delete("topic");
+      }
+      const next = params.toString();
+      window.history.replaceState({}, "", next ? `${url.pathname}?${next}` : url.pathname);
+    },
+    [],
+  );
+
   function resetTopicSelection(nextView?: ViewMode) {
     if (nextView) setView(nextView);
     setSelectedTopic(null);
     setTopicItems([]);
     setRecommendations([]);
     setError("");
+    updateTopicParam(null);
   }
 
   function openTopic(slug: string) {
     setView("by-topic");
-    void loadTopicDetail(slug);
+    updateTopicParam(slug);
   }
 
   const visibleTypeGroups = selectedType
@@ -287,8 +312,8 @@ export default function WisdomPage() {
           <div>
             <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">Wisdom</h1>
             <p className="vibe-subtitle max-w-3xl">
-              Collective knowledge extracted from group conversations. Browse by knowledge type or drill
-              into a topic to see the group&apos;s shared take.
+              Collective knowledge extracted from group conversations. Open a topic card to see the
+              group&apos;s shared take, then pivot by type when you want a different cut.
             </p>
           </div>
           <div className="hidden rounded-full border border-slate-700/60 bg-slate-900/70 px-3 py-1 text-xs text-slate-400 sm:block">
@@ -328,15 +353,6 @@ export default function WisdomPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Pill
-              active={view === "by-type"}
-              onClick={() => {
-                setSelectedType(null);
-                resetTopicSelection("by-type");
-              }}
-            >
-              By Type
-            </Pill>
-            <Pill
               active={view === "by-topic"}
               onClick={() => {
                 setSelectedType(null);
@@ -344,6 +360,15 @@ export default function WisdomPage() {
               }}
             >
               By Topic
+            </Pill>
+            <Pill
+              active={view === "by-type"}
+              onClick={() => {
+                setSelectedType(null);
+                resetTopicSelection("by-type");
+              }}
+            >
+              By Type
             </Pill>
           </div>
           {selectedType && view === "by-type" ? (
@@ -487,8 +512,8 @@ export default function WisdomPage() {
                         {topic.last_active ? ` · active ${formatDate(topic.last_active)}` : ""}
                       </p>
                     </div>
-                    <span className="rounded-full border border-slate-700/60 bg-slate-950/70 px-2 py-0.5 text-xs text-slate-300">
-                      open
+                    <span className="rounded-full border border-cyan-400/35 bg-cyan-950/30 px-2 py-0.5 text-[11px] text-cyan-200">
+                      Open details →
                     </span>
                   </div>
                   <p className="mt-3 line-clamp-3 text-sm text-slate-400">
