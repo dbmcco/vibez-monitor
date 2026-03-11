@@ -4,6 +4,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ModelEnhancedAnalysis } from "@/components/ModelEnhancedAnalysis";
 import { StarButton } from "@/components/StarButton";
 import { StatusPanel } from "@/components/StatusPanel";
 import { useStars } from "@/lib/stars";
@@ -107,7 +108,10 @@ const CONVERSATIONAL_LEAD_INS = [
   /^users (reported|found|discussed|noted) that\s+/i,
   /^users (reported|found|discussed|noted)\s+/i,
   /^people kept coming back to\s+/i,
+  /^the community agrees that\s+/i,
+  /^the community recommends? that\s+/i,
   /^the group recommends?\s+/i,
+  /^the group (emphasizes|believes|argues) that\s+/i,
   /^community consensus is that\s+/i,
 ];
 
@@ -360,12 +364,19 @@ function MetricCard({
 
 function GuidanceCard({
   item,
+  topicName,
+  topicSlug,
+  topicSummary,
   compact = false,
 }: {
   item: WisdomItem;
+  topicName: string;
+  topicSlug: string;
+  topicSummary: string;
   compact?: boolean;
 }) {
   const guidance = guidanceFromItem(item);
+  const stableSummary = cleanGuidanceCopy(item.summary);
 
   return (
     <div className="rounded-xl border border-slate-800/70 bg-slate-950/55 p-3">
@@ -384,6 +395,17 @@ function GuidanceCard({
       {!compact && guidance.watchout ? (
         <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
       ) : null}
+      <ModelEnhancedAnalysis
+        compact={compact}
+        cacheKey={`${topicSlug}:${item.id}`}
+        payload={{
+          topicName,
+          topicSummary: cleanGuidanceCopy(topicSummary),
+          knowledgeType: item.knowledge_type,
+          title: guidance.takeaway || item.title,
+          summary: stableSummary,
+        }}
+      />
     </div>
   );
 }
@@ -560,6 +582,8 @@ export default function WisdomPage() {
   const selectedTopicSummary = selectedTopic?.summary?.trim() || bestItemSummary(topicItems);
   const selectedTopicSummaryParts = parseGuidanceSummary(selectedTopicSummary);
   const selectedTopicValueItems = pickValueItems(rankedTopicItems, 4);
+  const selectedTopicValueItemIds = new Set(selectedTopicValueItems.map((item) => item.id));
+  const additionalTopicItems = rankedTopicItems.filter((item) => !selectedTopicValueItemIds.has(item.id));
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
@@ -824,7 +848,12 @@ export default function WisdomPage() {
                 const meta = topicMetaBySlug[topic.slug];
                 const impactScore = topicImpactScore(topic, meta);
                 const topicSummaryParts = parseGuidanceSummary(topic.summary);
-                const topicValueItems = pickValueItems(meta?.items || [], 2);
+                const topicValueItems = pickValueItems(meta?.items || [], 1);
+                const primaryValueItem = topicValueItems[0];
+                const fallbackTakeaway =
+                  topicSummaryParts.takeaway ||
+                  cleanGuidanceCopy(topic.summary) ||
+                  "Summary pending for this topic.";
 
                 return (
                   <article
@@ -866,24 +895,33 @@ export default function WisdomPage() {
                     </div>
 
                     <div className="mt-3 space-y-2">
-                      <div>
-                        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                          Takeaway
-                        </p>
-                        <p className="mt-1 line-clamp-2 text-sm text-slate-300">
-                          {topicSummaryParts.takeaway || cleanGuidanceCopy(topic.summary) || "Summary pending for this topic."}
-                        </p>
-                      </div>
-                      {topicSummaryParts.why ? (
-                        <p className="line-clamp-2 text-xs text-slate-500">{topicSummaryParts.why}</p>
-                      ) : null}
-                      {topicValueItems.length > 0 ? (
-                        <div className="grid gap-2">
-                          {topicValueItems.map((item) => (
-                            <GuidanceCard key={item.id} item={item} compact />
-                          ))}
+                      {primaryValueItem ? (
+                        <GuidanceCard
+                          item={primaryValueItem}
+                          topicName={topic.name}
+                          topicSlug={topic.slug}
+                          topicSummary={topic.summary || ""}
+                          compact
+                        />
+                      ) : (
+                        <div>
+                          <p className="line-clamp-2 text-sm text-slate-300">{fallbackTakeaway}</p>
+                          {topicSummaryParts.why ? (
+                            <p className="mt-2 line-clamp-2 text-xs text-slate-500">{topicSummaryParts.why}</p>
+                          ) : null}
+                          <ModelEnhancedAnalysis
+                            compact
+                            cacheKey={`${topic.slug}:topic-summary`}
+                            payload={{
+                              topicName: topic.name,
+                              topicSummary: cleanGuidanceCopy(topic.summary),
+                              knowledgeType: "topic",
+                              title: fallbackTakeaway,
+                              summary: cleanGuidanceCopy(topic.summary),
+                            }}
+                          />
                         </div>
-                      ) : null}
+                      )}
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
@@ -974,34 +1012,43 @@ export default function WisdomPage() {
                     Contributors: {selectedTopicContributors.slice(0, 8).join(", ")}
                   </p>
                 ) : null}
+                <ModelEnhancedAnalysis
+                  cacheKey={`${selectedTopic.slug}:topic-detail`}
+                  payload={{
+                    topicName: selectedTopic.name,
+                    topicSummary: cleanGuidanceCopy(selectedTopicSummary),
+                    knowledgeType: "topic",
+                    title:
+                      selectedTopicSummaryParts.takeaway ||
+                      cleanGuidanceCopy(selectedTopicSummary) ||
+                      selectedTopic.name,
+                    summary: cleanGuidanceCopy(selectedTopicSummary),
+                  }}
+                />
               </div>
 
               {selectedTopicValueItems.length > 0 ? (
                 <div className="space-y-3">
-                  <div>
-                    <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
-                    <p className="mt-1 text-xs text-slate-500">
-                      The strongest concrete takeaways from this topic, prioritized toward practices,
-                      architecture, config, and stack choices.
-                    </p>
-                  </div>
+                  <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
                   <div className="grid gap-3 md:grid-cols-2">
                     {selectedTopicValueItems.map((item) => (
-                      <GuidanceCard key={item.id} item={item} />
+                      <GuidanceCard
+                        key={item.id}
+                        item={item}
+                        topicName={selectedTopic.name}
+                        topicSlug={selectedTopic.slug}
+                        topicSummary={selectedTopicSummary}
+                      />
                     ))}
                   </div>
                 </div>
               ) : null}
 
               <div className="space-y-3">
-                <div>
-                  <h3 className="vibe-title text-lg text-slate-100">All Extracted Guidance</h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Everything the extractor pulled out for this topic, including supporting opinions and
-                    linked references.
-                  </p>
-                </div>
-                {rankedTopicItems.map((item) => {
+                <h3 className="vibe-title text-lg text-slate-100">
+                  {selectedTopicValueItems.length > 0 ? "Additional Extracted Guidance" : "All Extracted Guidance"}
+                </h3>
+                {(selectedTopicValueItems.length > 0 ? additionalTopicItems : rankedTopicItems).map((item) => {
                   const contributors = parseJsonArray(item.contributors);
                   const sourceLinks = parseJsonArray(item.source_links);
                   const sourceMessages = parseJsonArray(item.source_messages);
@@ -1029,6 +1076,16 @@ export default function WisdomPage() {
                       {guidance.watchout ? (
                         <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
                       ) : null}
+                      <ModelEnhancedAnalysis
+                        cacheKey={`${selectedTopic.slug}:${item.id}:detail`}
+                        payload={{
+                          topicName: selectedTopic.name,
+                          topicSummary: cleanGuidanceCopy(selectedTopicSummary),
+                          knowledgeType: item.knowledge_type,
+                          title: guidance.takeaway || item.title,
+                          summary: cleanGuidanceCopy(item.summary),
+                        }}
+                      />
                       {contributors.length > 0 ? (
                         <p className="mt-3 text-xs text-slate-500">
                           Contributors: {contributors.slice(0, 8).join(", ")}
