@@ -35,28 +35,40 @@ KNOWLEDGE_TYPES = [
 
 CLASSIFICATION_SYSTEM = "Return strict JSON array only. Do not include markdown fences, prose, or explanations."
 
-CLASSIFICATION_PROMPT = """Analyze these chat messages from a tech community and extract knowledge items.
+CLASSIFICATION_PROMPT = """Analyze these chat messages from a tech community and extract durable knowledge items.
 
-For each distinct piece of knowledge discussed, classify it:
+Only return items that would still be useful to someone who never saw the chat log.
+
+For each distinct piece of knowledge, classify it:
 - knowledge_type: one of {types}
 - topic: short topic name (2-4 words, e.g. "agent frameworks", "vector databases", "MCP protocol")
-- title: one-line summary of the knowledge (what was said/shared)
-- summary: 1-2 sentence synthesis of the group's take
+- title: the recommendation, principle, architecture move, or concrete takeaway itself. Write it directly.
+  Good: "Use multiple AI review passes before merge"
+  Bad: "People discussed multiple AI review passes"
+- summary: 2-3 short sentences explaining why it matters, when to use it, and the main tradeoff or watchout.
+  Do not mention the discussion, speakers, chat, or that something was said/reported.
 - contributors: list of sender names who contributed to this knowledge
 - links: any URLs mentioned in context
 - confidence: 0.0-1.0 how clearly this was discussed
+
+Prefer guidance that changes what someone should do, choose, or avoid.
 
 Return JSON array. If no extractable knowledge, return [].
 
 Messages:
 {messages}"""
 
-CONSENSUS_PROMPT = """Given these knowledge items about "{topic}" from a tech community, write a 2-3 sentence synthesis of what the group collectively thinks about this topic.
+CONSENSUS_PROMPT = """Given these knowledge items about "{topic}" from a tech community, write a concise value-dense synthesis for a reader scanning a card.
 
 Items:
 {items}
 
-Write the synthesis as if summarizing the group's collective view. Be specific about tools, preferences, and opinions expressed."""
+Write exactly 2 or 3 short labeled lines:
+Takeaway: the clearest recommendation or conclusion
+Why: why it matters or when it applies
+Watchout: the main tradeoff, limit, or caveat (optional)
+
+State the advice directly. Do not mention the discussion, community, speakers, or that something was said."""
 
 
 def _topic_slug(name: str) -> str:

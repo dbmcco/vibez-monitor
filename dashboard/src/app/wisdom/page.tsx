@@ -53,6 +53,7 @@ interface TopicBrowseMeta {
   itemCount: number;
   maxConfidence: number;
   types: string[];
+  items: WisdomItem[];
 }
 
 type ViewMode = "by-type" | "by-topic";
@@ -84,6 +85,37 @@ const TOPIC_SORTS: { key: TopicSort; label: string }[] = [
   { key: "freshness", label: "Freshness" },
   { key: "discussion", label: "Discussion" },
 ];
+
+const VALUE_TYPE_ORDER = [
+  "best_practices",
+  "architecture",
+  "config",
+  "stack",
+  "tutorial",
+  "research",
+  "opinion",
+  "news",
+  "showcase",
+  "people",
+] as const;
+
+const CONVERSATIONAL_LEAD_INS = [
+  /^the (community consensus|discussion|conversation|group consensus) (is|was) that\s+/i,
+  /^the discussion (indicates|highlights|suggests|shows) that\s+/i,
+  /^the discussion (indicates|highlights|suggests|shows)\s+/i,
+  /^discussion (centered on|of how to|highlights?)\s+/i,
+  /^users (reported|found|discussed|noted) that\s+/i,
+  /^users (reported|found|discussed|noted)\s+/i,
+  /^people kept coming back to\s+/i,
+  /^the group recommends?\s+/i,
+  /^community consensus is that\s+/i,
+];
+
+interface GuidanceSummary {
+  takeaway: string;
+  why: string;
+  watchout: string;
+}
 
 function formatDate(iso: string | null): string {
   if (!iso) return "";
@@ -129,8 +161,99 @@ function bestItemSummary(items: WisdomItem[]): string {
   return "";
 }
 
+function typePriority(type: string): number {
+  const idx = VALUE_TYPE_ORDER.indexOf(type as (typeof VALUE_TYPE_ORDER)[number]);
+  return idx >= 0 ? idx : VALUE_TYPE_ORDER.length;
+}
+
+function prioritizeWisdomItems(items: WisdomItem[]): WisdomItem[] {
+  return [...items].sort(
+    (a, b) =>
+      typePriority(a.knowledge_type) - typePriority(b.knowledge_type) ||
+      b.confidence - a.confidence ||
+      a.title.localeCompare(b.title),
+  );
+}
+
+function pickValueItems(items: WisdomItem[], limit: number): WisdomItem[] {
+  const ranked = prioritizeWisdomItems(items);
+  const seen = new Set<string>();
+  const selected: WisdomItem[] = [];
+  for (const item of ranked) {
+    const key = `${item.knowledge_type}:${item.title.trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(item);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+function cleanGuidanceCopy(text: string | null | undefined): string {
+  if (!text) return "";
+  let result = text.trim().replace(/\s+/g, " ");
+  for (const pattern of CONVERSATIONAL_LEAD_INS) {
+    result = result.replace(pattern, "");
+  }
+  result = result.replace(/^that\s+/i, "");
+  if (!result) return "";
+  return result[0].toUpperCase() + result.slice(1);
+}
+
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseGuidanceSummary(text: string | null | undefined): GuidanceSummary {
+  const cleaned = cleanGuidanceCopy(text);
+  if (!cleaned) {
+    return { takeaway: "", why: "", watchout: "" };
+  }
+
+  const lines = cleaned
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const labeled: Partial<GuidanceSummary> = {};
+  for (const line of lines) {
+    const match = /^(Takeaway|Why|Watchout):\s*(.+)$/i.exec(line);
+    if (!match) continue;
+    const key = match[1].toLowerCase() as keyof GuidanceSummary;
+    labeled[key] = match[2].trim();
+  }
+  if (labeled.takeaway || labeled.why || labeled.watchout) {
+    return {
+      takeaway: labeled.takeaway || "",
+      why: labeled.why || "",
+      watchout: labeled.watchout || "",
+    };
+  }
+
+  const sentences = splitSentences(cleaned);
+  return {
+    takeaway: sentences[0] || cleaned,
+    why: sentences[1] || "",
+    watchout: sentences.slice(2).join(" "),
+  };
+}
+
+function guidanceFromItem(item: WisdomItem): GuidanceSummary {
+  const parsed = parseGuidanceSummary(item.summary);
+  return {
+    takeaway: item.title.trim() || parsed.takeaway,
+    why: parsed.takeaway && parsed.takeaway !== item.title.trim() ? parsed.takeaway : parsed.why,
+    watchout: parsed.watchout,
+  };
+}
+
 function buildTopicBrowseMeta(typeItems: Record<string, WisdomItem[]>): Record<string, TopicBrowseMeta> {
-  const grouped = new Map<string, { itemCount: number; maxConfidence: number; typeSet: Set<string> }>();
+  const grouped = new Map<
+    string,
+    { itemCount: number; maxConfidence: number; typeSet: Set<string>; items: WisdomItem[] }
+  >();
 
   for (const items of Object.values(typeItems)) {
     for (const item of items) {
@@ -140,10 +263,12 @@ function buildTopicBrowseMeta(typeItems: Record<string, WisdomItem[]>): Record<s
         itemCount: 0,
         maxConfidence: 0,
         typeSet: new Set<string>(),
+        items: [],
       };
       existing.itemCount += 1;
       existing.maxConfidence = Math.max(existing.maxConfidence, item.confidence || 0);
       if (item.knowledge_type) existing.typeSet.add(item.knowledge_type);
+      existing.items.push(item);
       grouped.set(slug, existing);
     }
   }
@@ -155,6 +280,7 @@ function buildTopicBrowseMeta(typeItems: Record<string, WisdomItem[]>): Record<s
         itemCount: entry.itemCount,
         maxConfidence: entry.maxConfidence,
         types: Array.from(entry.typeSet).sort(),
+        items: prioritizeWisdomItems(entry.items),
       },
     ]),
   );
@@ -228,6 +354,36 @@ function MetricCard({
       <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</div>
       <div className="vibe-title mt-2 text-2xl text-slate-100">{value}</div>
       <p className="mt-1 text-xs text-slate-400">{detail}</p>
+    </div>
+  );
+}
+
+function GuidanceCard({
+  item,
+  compact = false,
+}: {
+  item: WisdomItem;
+  compact?: boolean;
+}) {
+  const guidance = guidanceFromItem(item);
+
+  return (
+    <div className="rounded-xl border border-slate-800/70 bg-slate-950/55 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+          <TypeLabel type={item.knowledge_type} />
+        </span>
+        <span className="text-[11px] text-slate-500">{Math.round(item.confidence * 100)}%</span>
+      </div>
+      <p className={`mt-2 font-medium text-slate-100 ${compact ? "line-clamp-2 text-sm" : "text-base"}`}>
+        {guidance.takeaway || item.title}
+      </p>
+      {guidance.why ? (
+        <p className={`mt-2 text-slate-400 ${compact ? "line-clamp-2 text-xs" : "text-sm"}`}>{guidance.why}</p>
+      ) : null}
+      {!compact && guidance.watchout ? (
+        <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
+      ) : null}
     </div>
   );
 }
@@ -398,9 +554,12 @@ export default function WisdomPage() {
     });
   const topType = stats?.type_counts[0];
   const topContributor = stats?.top_contributors[0];
+  const rankedTopicItems = prioritizeWisdomItems(topicItems);
   const selectedTopicContributors = topicContributors(topicItems);
   const selectedTopicTypes = topicTypes(topicItems);
   const selectedTopicSummary = selectedTopic?.summary?.trim() || bestItemSummary(topicItems);
+  const selectedTopicSummaryParts = parseGuidanceSummary(selectedTopicSummary);
+  const selectedTopicValueItems = pickValueItems(rankedTopicItems, 4);
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
@@ -631,7 +790,11 @@ export default function WisdomPage() {
                                   </span>
                                 ) : null}
                               </div>
-                              {item.summary ? <p className="mt-1 line-clamp-2 text-xs text-slate-400">{item.summary}</p> : null}
+                              {item.summary ? (
+                                <p className="mt-1 line-clamp-2 text-xs text-slate-400">
+                                  {cleanGuidanceCopy(item.summary)}
+                                </p>
+                              ) : null}
                             </div>
                             <div className="text-xs text-slate-500">
                               {contributors.length > 0 ? contributors.slice(0, 3).join(", ") : "No contributors"}
@@ -660,6 +823,8 @@ export default function WisdomPage() {
               {filteredTopics.map((topic) => {
                 const meta = topicMetaBySlug[topic.slug];
                 const impactScore = topicImpactScore(topic, meta);
+                const topicSummaryParts = parseGuidanceSummary(topic.summary);
+                const topicValueItems = pickValueItems(meta?.items || [], 2);
 
                 return (
                   <article
@@ -700,9 +865,26 @@ export default function WisdomPage() {
                       </div>
                     </div>
 
-                    <p className="mt-3 line-clamp-3 text-sm text-slate-400">
-                      {topic.summary || "Summary pending for this topic."}
-                    </p>
+                    <div className="mt-3 space-y-2">
+                      <div>
+                        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Takeaway
+                        </p>
+                        <p className="mt-1 line-clamp-2 text-sm text-slate-300">
+                          {topicSummaryParts.takeaway || cleanGuidanceCopy(topic.summary) || "Summary pending for this topic."}
+                        </p>
+                      </div>
+                      {topicSummaryParts.why ? (
+                        <p className="line-clamp-2 text-xs text-slate-500">{topicSummaryParts.why}</p>
+                      ) : null}
+                      {topicValueItems.length > 0 ? (
+                        <div className="grid gap-2">
+                          {topicValueItems.map((item) => (
+                            <GuidanceCard key={item.id} item={item} compact />
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
 
                     <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
                       <span className="rounded-full border border-slate-800/60 px-2 py-0.5">impact {impactScore}</span>
@@ -739,9 +921,26 @@ export default function WisdomPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="vibe-title text-2xl text-slate-100">{selectedTopic.name}</h2>
-                    <p className="mt-2 max-w-3xl text-sm text-slate-400">
-                      {selectedTopicSummary || "Summary pending for this topic."}
-                    </p>
+                    <div className="mt-2 max-w-3xl space-y-2">
+                      <div>
+                        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Takeaway
+                        </p>
+                        <p className="mt-1 text-sm text-slate-300">
+                          {selectedTopicSummaryParts.takeaway ||
+                            cleanGuidanceCopy(selectedTopicSummary) ||
+                            "Summary pending for this topic."}
+                        </p>
+                      </div>
+                      {selectedTopicSummaryParts.why ? (
+                        <p className="text-sm text-slate-400">{selectedTopicSummaryParts.why}</p>
+                      ) : null}
+                      {selectedTopicSummaryParts.watchout ? (
+                        <p className="text-sm text-amber-200/80">
+                          Watchout: {selectedTopicSummaryParts.watchout}
+                        </p>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <StarButton
@@ -777,11 +976,36 @@ export default function WisdomPage() {
                 ) : null}
               </div>
 
+              {selectedTopicValueItems.length > 0 ? (
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      The strongest concrete takeaways from this topic, prioritized toward practices,
+                      architecture, config, and stack choices.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {selectedTopicValueItems.map((item) => (
+                      <GuidanceCard key={item.id} item={item} />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               <div className="space-y-3">
-                {topicItems.map((item) => {
+                <div>
+                  <h3 className="vibe-title text-lg text-slate-100">All Extracted Guidance</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Everything the extractor pulled out for this topic, including supporting opinions and
+                    linked references.
+                  </p>
+                </div>
+                {rankedTopicItems.map((item) => {
                   const contributors = parseJsonArray(item.contributors);
                   const sourceLinks = parseJsonArray(item.source_links);
                   const sourceMessages = parseJsonArray(item.source_messages);
+                  const guidance = guidanceFromItem(item);
                   return (
                     <article key={item.id} className="vibe-panel rounded-xl p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -797,8 +1021,14 @@ export default function WisdomPage() {
                           {sourceMessages.length} messages · {sourceLinks.length} links
                         </div>
                       </div>
-                      <h3 className="vibe-title mt-3 text-lg text-slate-100">{item.title}</h3>
-                      {item.summary ? <p className="mt-2 text-sm text-slate-400">{item.summary}</p> : null}
+                      <h3 className="vibe-title mt-3 text-lg text-slate-100">{guidance.takeaway || item.title}</h3>
+                      {guidance.why ? <p className="mt-2 text-sm text-slate-400">{guidance.why}</p> : null}
+                      {!guidance.why && item.summary ? (
+                        <p className="mt-2 text-sm text-slate-400">{cleanGuidanceCopy(item.summary)}</p>
+                      ) : null}
+                      {guidance.watchout ? (
+                        <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
+                      ) : null}
                       {contributors.length > 0 ? (
                         <p className="mt-3 text-xs text-slate-500">
                           Contributors: {contributors.slice(0, 8).join(", ")}
