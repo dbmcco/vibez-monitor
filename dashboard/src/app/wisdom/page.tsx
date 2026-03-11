@@ -369,6 +369,8 @@ function GuidanceCard({
   topicSummary,
   compact = false,
   showEnhancedAnalysis = true,
+  selected = false,
+  onSelect,
 }: {
   item: WisdomItem;
   topicName: string;
@@ -376,12 +378,33 @@ function GuidanceCard({
   topicSummary: string;
   compact?: boolean;
   showEnhancedAnalysis?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const guidance = guidanceFromItem(item);
   const stableSummary = cleanGuidanceCopy(item.summary);
 
   return (
-    <div className="rounded-xl border border-slate-800/70 bg-slate-950/55 p-3">
+    <div
+      role={onSelect ? "button" : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onClick={onSelect}
+      onKeyDown={
+        onSelect
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelect();
+              }
+            }
+          : undefined
+      }
+      className={`rounded-xl border bg-slate-950/55 p-3 ${
+        selected
+          ? "border-cyan-400/60 shadow-[0_0_0_1px_rgba(34,211,238,0.2)]"
+          : "border-slate-800/70"
+      } ${onSelect ? "cursor-pointer transition hover:border-slate-600" : ""}`}
+    >
       <div className="flex items-center justify-between gap-3">
         <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
           <TypeLabel type={item.knowledge_type} />
@@ -423,6 +446,7 @@ export default function WisdomPage() {
   const [selectedTopic, setSelectedTopic] = useState<WisdomTopic | null>(null);
   const [topicItems, setTopicItems] = useState<WisdomItem[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [selectedAnalysisItemId, setSelectedAnalysisItemId] = useState<number | null>(null);
   const [topicFilter, setTopicFilter] = useState("all");
   const [topicSort, setTopicSort] = useState<TopicSort>("impact");
   const [starredOnly, setStarredOnly] = useState(false);
@@ -463,6 +487,7 @@ export default function WisdomPage() {
     setSelectedTopic(null);
     setTopicItems([]);
     setRecommendations([]);
+    setSelectedAnalysisItemId(null);
     try {
       const detailRes = await fetch(`/api/wisdom?topic=${encodeURIComponent(slug)}`);
       const detail = await detailRes.json();
@@ -528,6 +553,7 @@ export default function WisdomPage() {
     setSelectedTopic(null);
     setTopicItems([]);
     setRecommendations([]);
+    setSelectedAnalysisItemId(null);
     setError("");
     updateTopicParam(null);
   }
@@ -586,6 +612,14 @@ export default function WisdomPage() {
   const selectedTopicSummary = selectedTopic?.summary?.trim() || bestItemSummary(topicItems);
   const selectedTopicSummaryParts = parseGuidanceSummary(selectedTopicSummary);
   const selectedTopicValueItems = pickValueItems(rankedTopicItems, 4);
+  const selectedAnalysisItem =
+    selectedTopicValueItems.find((item) => item.id === selectedAnalysisItemId) || null;
+  const selectedAnalysisGuidance = selectedAnalysisItem ? guidanceFromItem(selectedAnalysisItem) : null;
+  const analysisTargetTitle = selectedAnalysisItem
+    ? selectedAnalysisGuidance?.takeaway || selectedAnalysisItem.title
+    : selectedTopicSummaryParts.takeaway || cleanGuidanceCopy(selectedTopicSummary) || selectedTopic?.name || "";
+  const analysisTargetSummary = cleanGuidanceCopy(selectedAnalysisItem?.summary || selectedTopicSummary);
+  const analysisTargetType = selectedAnalysisItem?.knowledge_type || "topic";
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
@@ -1059,6 +1093,8 @@ export default function WisdomPage() {
                           topicSlug={selectedTopic.slug}
                           topicSummary={selectedTopicSummary}
                           showEnhancedAnalysis={false}
+                          selected={selectedAnalysisItemId === item.id}
+                          onSelect={() => setSelectedAnalysisItemId(item.id)}
                         />
                       ))}
                     </div>
@@ -1068,18 +1104,30 @@ export default function WisdomPage() {
 
               <aside className="space-y-4">
                 <div className="vibe-panel rounded-xl p-4">
+                  <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                    {selectedAnalysisItem ? "Selected Guidance" : "Topic Takeaway"}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-300">{analysisTargetTitle}</p>
+                  {selectedTopicValueItems.length > 0 ? (
+                    <p className="mt-2 text-xs text-slate-500">
+                      {selectedAnalysisItem
+                        ? "Generating for the highlighted Key Guidance card."
+                        : "Click a Key Guidance card to generate a model enhancement for that specific recommendation."}
+                    </p>
+                  ) : null}
                   <ModelEnhancedAnalysis
                     standalone
-                    cacheKey={`${selectedTopic.slug}:topic-detail`}
+                    cacheKey={
+                      selectedAnalysisItem
+                        ? `${selectedTopic.slug}:${selectedAnalysisItem.id}:detail-rail`
+                        : `${selectedTopic.slug}:topic-detail`
+                    }
                     payload={{
                       topicName: selectedTopic.name,
                       topicSummary: cleanGuidanceCopy(selectedTopicSummary),
-                      knowledgeType: "topic",
-                      title:
-                        selectedTopicSummaryParts.takeaway ||
-                        cleanGuidanceCopy(selectedTopicSummary) ||
-                        selectedTopic.name,
-                      summary: cleanGuidanceCopy(selectedTopicSummary),
+                      knowledgeType: analysisTargetType,
+                      title: analysisTargetTitle,
+                      summary: analysisTargetSummary,
                     }}
                   />
                 </div>
