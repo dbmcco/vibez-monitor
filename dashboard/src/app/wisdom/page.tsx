@@ -368,12 +368,14 @@ function GuidanceCard({
   topicSlug,
   topicSummary,
   compact = false,
+  showEnhancedAnalysis = true,
 }: {
   item: WisdomItem;
   topicName: string;
   topicSlug: string;
   topicSummary: string;
   compact?: boolean;
+  showEnhancedAnalysis?: boolean;
 }) {
   const guidance = guidanceFromItem(item);
   const stableSummary = cleanGuidanceCopy(item.summary);
@@ -395,17 +397,19 @@ function GuidanceCard({
       {!compact && guidance.watchout ? (
         <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
       ) : null}
-      <ModelEnhancedAnalysis
-        compact={compact}
-        cacheKey={`${topicSlug}:${item.id}`}
-        payload={{
-          topicName,
-          topicSummary: cleanGuidanceCopy(topicSummary),
-          knowledgeType: item.knowledge_type,
-          title: guidance.takeaway || item.title,
-          summary: stableSummary,
-        }}
-      />
+      {showEnhancedAnalysis ? (
+        <ModelEnhancedAnalysis
+          compact={compact}
+          cacheKey={`${topicSlug}:${item.id}`}
+          payload={{
+            topicName,
+            topicSummary: cleanGuidanceCopy(topicSummary),
+            knowledgeType: item.knowledge_type,
+            title: guidance.takeaway || item.title,
+            summary: stableSummary,
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -582,9 +586,6 @@ export default function WisdomPage() {
   const selectedTopicSummary = selectedTopic?.summary?.trim() || bestItemSummary(topicItems);
   const selectedTopicSummaryParts = parseGuidanceSummary(selectedTopicSummary);
   const selectedTopicValueItems = pickValueItems(rankedTopicItems, 4);
-  const selectedTopicValueItemIds = new Set(selectedTopicValueItems.map((item) => item.id));
-  const additionalTopicItems = rankedTopicItems.filter((item) => !selectedTopicValueItemIds.has(item.id));
-  const detailItems = selectedTopicValueItems.length > 0 ? additionalTopicItems : rankedTopicItems;
   const starredTopicCount = Object.keys(stars.wisdomTopics).length;
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
@@ -984,200 +985,148 @@ export default function WisdomPage() {
             ← Back to topics
           </button>
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="space-y-4">
-              <div className="vibe-panel rounded-xl p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="vibe-title text-2xl text-slate-100">{selectedTopic.name}</h2>
-                    <div className="mt-2 max-w-3xl space-y-2">
-                      <div>
-                        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                          Takeaway
-                        </p>
-                        <p className="mt-1 text-sm text-slate-300">
-                          {selectedTopicSummaryParts.takeaway ||
-                            cleanGuidanceCopy(selectedTopicSummary) ||
-                            "Summary pending for this topic."}
-                        </p>
-                      </div>
-                      {selectedTopicSummaryParts.why ? (
-                        <p className="text-sm text-slate-400">{selectedTopicSummaryParts.why}</p>
-                      ) : null}
-                      {selectedTopicSummaryParts.watchout ? (
-                        <p className="text-sm text-amber-200/80">
-                          Watchout: {selectedTopicSummaryParts.watchout}
-                        </p>
-                      ) : null}
+          <div className="space-y-4">
+            <div className="vibe-panel rounded-xl p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="vibe-title text-2xl text-slate-100">{selectedTopic.name}</h2>
+                  <div className="mt-2 max-w-3xl space-y-2">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Takeaway
+                      </p>
+                      <p className="mt-1 text-sm text-slate-300">
+                        {selectedTopicSummaryParts.takeaway ||
+                          cleanGuidanceCopy(selectedTopicSummary) ||
+                          "Summary pending for this topic."}
+                      </p>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <StarButton
-                      active={isWisdomTopicStarred(selectedTopic.slug)}
-                      label={selectedTopic.name}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        toggleWisdomTopicStar(selectedTopic.slug);
-                      }}
-                    />
-                    <div className="rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400">
-                      active {formatDate(selectedTopic.last_active) || "recently"}
-                    </div>
+                    {selectedTopicSummaryParts.why ? (
+                      <p className="text-sm text-slate-400">{selectedTopicSummaryParts.why}</p>
+                    ) : null}
+                    {selectedTopicSummaryParts.watchout ? (
+                      <p className="text-sm text-amber-200/80">
+                        Watchout: {selectedTopicSummaryParts.watchout}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-400">
-                  <span className="rounded-full border border-slate-700/60 px-2 py-0.5">
-                    {selectedTopic.message_count} messages
-                  </span>
-                  <span className="rounded-full border border-slate-700/60 px-2 py-0.5">
-                    {selectedTopic.contributor_count} contributors
-                  </span>
-                  {selectedTopicTypes.map((type) => (
-                    <span key={type} className="rounded-full border border-slate-700/60 px-2 py-0.5">
-                      <TypeLabel type={type} />
-                    </span>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <StarButton
+                    active={isWisdomTopicStarred(selectedTopic.slug)}
+                    label={selectedTopic.name}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      toggleWisdomTopicStar(selectedTopic.slug);
+                    }}
+                  />
+                  <div className="rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400">
+                    active {formatDate(selectedTopic.last_active) || "recently"}
+                  </div>
                 </div>
-                {selectedTopicContributors.length > 0 ? (
-                  <p className="mt-4 text-xs text-slate-500">
-                    Contributors: {selectedTopicContributors.slice(0, 8).join(", ")}
-                  </p>
-                ) : null}
-                <ModelEnhancedAnalysis
-                  autoGenerate
-                  cacheKey={`${selectedTopic.slug}:topic-detail`}
-                  payload={{
-                    topicName: selectedTopic.name,
-                    topicSummary: cleanGuidanceCopy(selectedTopicSummary),
-                    knowledgeType: "topic",
-                    title:
-                      selectedTopicSummaryParts.takeaway ||
-                      cleanGuidanceCopy(selectedTopicSummary) ||
-                      selectedTopic.name,
-                    summary: cleanGuidanceCopy(selectedTopicSummary),
-                  }}
-                />
               </div>
-
-              {selectedTopicValueItems.length > 0 ? (
-                <div className="space-y-3">
-                  <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {selectedTopicValueItems.map((item) => (
-                      <GuidanceCard
-                        key={item.id}
-                        item={item}
-                        topicName={selectedTopic.name}
-                        topicSlug={selectedTopic.slug}
-                        topicSummary={selectedTopicSummary}
-                      />
-                    ))}
-                  </div>
-                </div>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-400">
+                <span className="rounded-full border border-slate-700/60 px-2 py-0.5">
+                  {selectedTopic.message_count} messages
+                </span>
+                <span className="rounded-full border border-slate-700/60 px-2 py-0.5">
+                  {selectedTopic.contributor_count} contributors
+                </span>
+                {selectedTopicTypes.map((type) => (
+                  <span key={type} className="rounded-full border border-slate-700/60 px-2 py-0.5">
+                    <TypeLabel type={type} />
+                  </span>
+                ))}
+              </div>
+              {selectedTopicContributors.length > 0 ? (
+                <p className="mt-4 text-xs text-slate-500">
+                  Contributors: {selectedTopicContributors.slice(0, 8).join(", ")}
+                </p>
               ) : null}
-
-              <div className="space-y-3">
-                <h3 className="vibe-title text-lg text-slate-100">
-                  {selectedTopicValueItems.length > 0 ? "Additional Extracted Guidance" : "All Extracted Guidance"}
-                </h3>
-                {detailItems.length > 0 ? (
-                  detailItems.map((item) => {
-                    const contributors = parseJsonArray(item.contributors);
-                    const sourceLinks = parseJsonArray(item.source_links);
-                    const sourceMessages = parseJsonArray(item.source_messages);
-                    const guidance = guidanceFromItem(item);
-                    return (
-                      <article key={item.id} className="vibe-panel rounded-xl p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full border border-slate-700/60 px-2 py-0.5 text-[11px]">
-                              <TypeLabel type={item.knowledge_type} />
-                            </span>
-                            <span className="text-xs text-slate-500">
-                              {Math.round(item.confidence * 100)}% confidence
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            {sourceMessages.length} messages · {sourceLinks.length} links
-                          </div>
-                        </div>
-                        <h3 className="vibe-title mt-3 text-lg text-slate-100">{guidance.takeaway || item.title}</h3>
-                        {guidance.why ? <p className="mt-2 text-sm text-slate-400">{guidance.why}</p> : null}
-                        {!guidance.why && item.summary ? (
-                          <p className="mt-2 text-sm text-slate-400">{cleanGuidanceCopy(item.summary)}</p>
-                        ) : null}
-                        {guidance.watchout ? (
-                          <p className="mt-2 text-xs text-amber-200/80">Watchout: {guidance.watchout}</p>
-                        ) : null}
-                        <ModelEnhancedAnalysis
-                          cacheKey={`${selectedTopic.slug}:${item.id}:detail`}
-                          payload={{
-                            topicName: selectedTopic.name,
-                            topicSummary: cleanGuidanceCopy(selectedTopicSummary),
-                            knowledgeType: item.knowledge_type,
-                            title: guidance.takeaway || item.title,
-                            summary: cleanGuidanceCopy(item.summary),
-                          }}
-                        />
-                        {contributors.length > 0 ? (
-                          <p className="mt-3 text-xs text-slate-500">
-                            Contributors: {contributors.slice(0, 8).join(", ")}
-                          </p>
-                        ) : null}
-                      </article>
-                    );
-                  })
-                ) : (
-                  <div className="rounded-xl border border-slate-800/60 bg-slate-950/35 px-4 py-3 text-sm text-slate-500">
-                    No additional extracted guidance yet for this topic.
-                  </div>
-                )}
-              </div>
             </div>
 
-            <aside className="space-y-4">
-              <div className="vibe-panel rounded-xl p-4">
-                <h3 className="vibe-title text-lg text-slate-100">Related Topics</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Recommendations are based on shared contributors across topics.
-                </p>
-                <div className="mt-3 space-y-2">
-                  {recommendations.length > 0 ? (
-                    recommendations.map((rec) => (
-                      <button
-                        type="button"
-                        key={rec.id}
-                        onClick={() => openTopic(rec.topic_slug)}
-                        className="w-full rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-sm text-slate-100">{rec.topic_name}</span>
-                          <span className="text-[11px] text-slate-500">{Math.round(rec.strength * 100)}%</span>
-                        </div>
-                        {rec.reason ? <p className="mt-1 text-xs text-slate-400">{rec.reason}</p> : null}
-                      </button>
-                    ))
-                  ) : (
-                    <p className="text-sm text-slate-500">No related topics yet for this cluster.</p>
-                  )}
-                </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="space-y-4">
+                {selectedTopicValueItems.length > 0 ? (
+                  <div className="space-y-3">
+                    <h3 className="vibe-title text-lg text-slate-100">Key Guidance</h3>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {selectedTopicValueItems.map((item) => (
+                        <GuidanceCard
+                          key={item.id}
+                          item={item}
+                          topicName={selectedTopic.name}
+                          topicSlug={selectedTopic.slug}
+                          topicSummary={selectedTopicSummary}
+                          showEnhancedAnalysis={false}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
-              <div className="vibe-panel rounded-xl p-4">
-                <h3 className="vibe-title text-lg text-slate-100">Top Contributors</h3>
-                <div className="mt-3 space-y-2">
-                  {(stats?.top_contributors || []).slice(0, 6).map((entry) => (
-                    <div key={entry.name} className="flex items-center justify-between text-sm">
-                      <span className="text-slate-300">{entry.name}</span>
-                      <span className="text-slate-500">{entry.count}</span>
-                    </div>
-                  ))}
-                  {!stats?.top_contributors?.length ? (
-                    <p className="text-sm text-slate-500">Contributor counts will appear after extraction runs.</p>
-                  ) : null}
+              <aside className="space-y-4">
+                <div className="vibe-panel rounded-xl p-4">
+                  <ModelEnhancedAnalysis
+                    standalone
+                    cacheKey={`${selectedTopic.slug}:topic-detail`}
+                    payload={{
+                      topicName: selectedTopic.name,
+                      topicSummary: cleanGuidanceCopy(selectedTopicSummary),
+                      knowledgeType: "topic",
+                      title:
+                        selectedTopicSummaryParts.takeaway ||
+                        cleanGuidanceCopy(selectedTopicSummary) ||
+                        selectedTopic.name,
+                      summary: cleanGuidanceCopy(selectedTopicSummary),
+                    }}
+                  />
                 </div>
-              </div>
-            </aside>
+
+                <div className="vibe-panel rounded-xl p-4">
+                  <h3 className="vibe-title text-lg text-slate-100">Related Topics</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Recommendations are based on shared contributors across topics.
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {recommendations.length > 0 ? (
+                      recommendations.map((rec) => (
+                        <button
+                          type="button"
+                          key={rec.id}
+                          onClick={() => openTopic(rec.topic_slug)}
+                          className="w-full rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-3 text-left transition hover:border-slate-600"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm text-slate-100">{rec.topic_name}</span>
+                            <span className="text-[11px] text-slate-500">{Math.round(rec.strength * 100)}%</span>
+                          </div>
+                          {rec.reason ? <p className="mt-1 text-xs text-slate-400">{rec.reason}</p> : null}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-500">No related topics yet for this cluster.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="vibe-panel rounded-xl p-4">
+                  <h3 className="vibe-title text-lg text-slate-100">Top Contributors</h3>
+                  <div className="mt-3 space-y-2">
+                    {(stats?.top_contributors || []).slice(0, 6).map((entry) => (
+                      <div key={entry.name} className="flex items-center justify-between text-sm">
+                        <span className="text-slate-300">{entry.name}</span>
+                        <span className="text-slate-500">{entry.count}</span>
+                      </div>
+                    ))}
+                    {!stats?.top_contributors?.length ? (
+                      <p className="text-sm text-slate-500">Contributor counts will appear after extraction runs.</p>
+                    ) : null}
+                  </div>
+                </div>
+              </aside>
+            </div>
           </div>
         </section>
       ) : null}

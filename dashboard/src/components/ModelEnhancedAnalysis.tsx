@@ -1,7 +1,7 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "vibez-wisdom-enhanced-analysis-v1";
 
@@ -40,26 +40,24 @@ export function ModelEnhancedAnalysis({
   cacheKey,
   payload,
   compact = false,
-  autoGenerate = false,
+  standalone = false,
 }: {
   cacheKey: string;
   payload: AnalysisPayload;
   compact?: boolean;
-  autoGenerate?: boolean;
+  standalone?: boolean;
 }) {
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [autoRequested, setAutoRequested] = useState(false);
 
   useEffect(() => {
     const cached = loadCache()[cacheKey];
     setAnalysis(cached || "");
     setError("");
-    setAutoRequested(Boolean(cached));
   }, [cacheKey]);
 
-  const generateAnalysis = useCallback(async () => {
+  async function generateAnalysis() {
     if (loading) return;
     setLoading(true);
     setError("");
@@ -84,13 +82,7 @@ export function ModelEnhancedAnalysis({
     } finally {
       setLoading(false);
     }
-  }, [cacheKey, loading, payload]);
-
-  useEffect(() => {
-    if (!autoGenerate || analysis || loading || autoRequested) return;
-    setAutoRequested(true);
-    void generateAnalysis();
-  }, [analysis, autoGenerate, autoRequested, generateAnalysis, loading]);
+  }
 
   function onGenerateClick(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -99,7 +91,7 @@ export function ModelEnhancedAnalysis({
   }
 
   return (
-    <div className="mt-3 border-t border-slate-800/60 pt-3">
+    <div className={standalone ? "" : "mt-3 border-t border-slate-800/60 pt-3"}>
       <div className="flex items-center justify-between gap-3">
         <h4 className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
           Model Enhanced Analysis
