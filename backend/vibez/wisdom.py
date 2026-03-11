@@ -214,6 +214,26 @@ def synthesize_topic(client: Anthropic, model: str, topic_name: str, items: list
         return ""
 
 
+def _best_topic_summary(items: list[dict[str, Any]]) -> str:
+    ranked = sorted(
+        items,
+        key=lambda item: (
+            float(item.get("confidence", 0.0) or 0.0),
+            len(str(item.get("summary", "") or "").strip()),
+        ),
+        reverse=True,
+    )
+    for item in ranked:
+        summary = str(item.get("summary", "") or "").strip()
+        if summary:
+            return summary
+    for item in ranked:
+        title = str(item.get("title", "") or "").strip()
+        if title:
+            return title
+    return ""
+
+
 def _fetch_messages(conn: Any, watermark: int | None) -> list[dict[str, Any]]:
     where_parts = ["LENGTH(body) > 20"]
     params: list[Any] = []
@@ -328,9 +348,9 @@ def run_wisdom_extraction(
 
     for slug, items in topic_items.items():
         topic_name = items[0]["_topic_name"]
-        summary = ""
-        if len(items) >= 3:
-            summary = synthesize_topic(client, model, topic_name, items)
+        summary = synthesize_topic(client, model, topic_name, items) if items else ""
+        if not summary:
+            summary = _best_topic_summary(items)
 
         contributors = sorted(
             {

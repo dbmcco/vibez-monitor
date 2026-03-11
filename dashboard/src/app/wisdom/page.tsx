@@ -105,6 +105,17 @@ function topicTypes(items: WisdomItem[]): string[] {
   return Array.from(new Set(items.map((item) => item.knowledge_type).filter(Boolean)));
 }
 
+function bestItemSummary(items: WisdomItem[]): string {
+  const ranked = [...items].sort((a, b) => b.confidence - a.confidence || b.id - a.id);
+  for (const item of ranked) {
+    if (item.summary?.trim()) return item.summary.trim();
+  }
+  for (const item of ranked) {
+    if (item.title?.trim()) return item.title.trim();
+  }
+  return "";
+}
+
 function Pill({
   active,
   onClick,
@@ -280,6 +291,7 @@ export default function WisdomPage() {
   const topContributor = stats?.top_contributors[0];
   const selectedTopicContributors = topicContributors(topicItems);
   const selectedTopicTypes = topicTypes(topicItems);
+  const selectedTopicSummary = selectedTopic?.summary?.trim() || bestItemSummary(topicItems);
 
   if (loading && !stats && topics.length === 0 && Object.keys(typeItems).length === 0) {
     return (
@@ -502,7 +514,7 @@ export default function WisdomPage() {
                 <button
                   key={topic.id}
                   onClick={() => openTopic(topic.slug)}
-                  className="vibe-panel rounded-xl p-4 text-left transition hover:border-slate-500/70"
+                  className="vibe-panel cursor-pointer rounded-xl p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-500/70"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
@@ -512,12 +524,12 @@ export default function WisdomPage() {
                         {topic.last_active ? ` · active ${formatDate(topic.last_active)}` : ""}
                       </p>
                     </div>
-                    <span className="rounded-full border border-cyan-400/35 bg-cyan-950/30 px-2 py-0.5 text-[11px] text-cyan-200">
-                      Open details →
+                    <span className="text-lg leading-none text-slate-500" aria-hidden="true">
+                      ↗
                     </span>
                   </div>
                   <p className="mt-3 line-clamp-3 text-sm text-slate-400">
-                    {topic.summary || "No synthesis summary yet. Open the topic to inspect the extracted items and evidence trails."}
+                    {topic.summary || "Summary pending for this topic."}
                   </p>
                 </button>
               ))}
@@ -542,8 +554,7 @@ export default function WisdomPage() {
                   <div>
                     <h2 className="vibe-title text-2xl text-slate-100">{selectedTopic.name}</h2>
                     <p className="mt-2 max-w-3xl text-sm text-slate-400">
-                      {selectedTopic.summary ||
-                        "This topic has extracted evidence but does not yet have a consensus synthesis summary."}
+                      {selectedTopicSummary || "Summary pending for this topic."}
                     </p>
                   </div>
                   <div className="rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400">

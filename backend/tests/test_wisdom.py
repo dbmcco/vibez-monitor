@@ -2,7 +2,14 @@ import json
 from types import SimpleNamespace
 
 from vibez.db import get_connection, init_db
-from vibez.wisdom import _chunk_messages, _parse_json_payload, _topic_slug, classify_chunk, run_wisdom_extraction
+from vibez.wisdom import (
+    _best_topic_summary,
+    _chunk_messages,
+    _parse_json_payload,
+    _topic_slug,
+    classify_chunk,
+    run_wisdom_extraction,
+)
 
 
 class _FakeAnthropic:
@@ -75,6 +82,16 @@ def test_classify_chunk_reads_text_from_later_blocks_and_sets_strict_system_prom
 
     assert items == [{"topic": "Agent Frameworks", "title": "Useful stacks"}]
     assert "strict JSON array only" in client.messages.last_kwargs["system"]
+
+
+def test_best_topic_summary_prefers_non_empty_summary_then_title():
+    assert _best_topic_summary(
+        [
+            {"title": "Lower confidence", "summary": "Fallback", "confidence": 0.4},
+            {"title": "Higher confidence", "summary": "Preferred summary", "confidence": 0.9},
+        ]
+    ) == "Preferred summary"
+    assert _best_topic_summary([{"title": "Title only", "summary": "", "confidence": 0.2}]) == "Title only"
 
 
 def test_run_wisdom_extraction_writes_topics_items_and_recommendations(tmp_db, monkeypatch):
@@ -152,8 +169,8 @@ def test_run_wisdom_extraction_writes_topics_items_and_recommendations(tmp_db, m
     conn.close()
 
     assert topics == [
-        ("agent-frameworks", None, 2, 2),
-        ("mcp-protocol", None, 2, 3),
+        ("agent-frameworks", "Agent Frameworks consensus", 2, 2),
+        ("mcp-protocol", "MCP Protocol consensus", 2, 3),
     ]
     assert items[0][0] == "stack"
     assert items[0][1] == "Teams are converging on agent frameworks"
@@ -163,3 +180,42 @@ def test_run_wisdom_extraction_writes_topics_items_and_recommendations(tmp_db, m
     assert recs[0][0] == 0.4
     assert "Bob" in recs[0][1]
     assert watermark == ("4000",)
+
+
+def test_run_wisdom_extraction_falls_back_to_best_item_summary_when_topic_synthesis_is_empty(tmp_db, monkeypatch):
+    init_db(tmp_db)
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO messages (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("m1", "room-a", "AGI House", "u1", "Alice", "Detailed notes on agents", 1_000, "{}"),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("vibez.wisdom.Anthropic", _FakeAnthropic)
+    monkeypatch.setattr(
+        "vibez.wisdom.classify_chunk",
+        lambda _client, _model, _chunk: [
+            {
+                "knowledge_type": "opinion",
+                "topic": "Agent Reviews",
+                "title": "Review loops matter",
+                "summary": "People kept coming back to review loops as the thing that catches bad model output.",
+                "contributors": ["Alice"],
+                "links": [],
+                "confidence": 0.7,
+            }
+        ],
+    )
+    monkeypatch.setattr("vibez.wisdom.synthesize_topic", lambda *_args, **_kwargs: "")
+
+    run_wisdom_extraction(tmp_db, api_key="test-key", full_rebuild=True)
+
+    conn = get_connection(tmp_db)
+    summary = conn.execute("SELECT summary FROM wisdom_topics WHERE slug = 'agent-reviews'").fetchone()
+    conn.close()
+
+    assert summary == (
+        "People kept coming back to review loops as the thing that catches bad model output.",
+    )
