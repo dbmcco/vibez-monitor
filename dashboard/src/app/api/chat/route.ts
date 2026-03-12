@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { searchMessages, getLatestBriefingMd } from "@/lib/db";
+import { searchMessages, getLatestBriefingMd, searchLinksFts, type LinkRow } from "@/lib/db";
 import fs from "fs";
 import { getDossierPath, getSubjectName, getSubjectPossessive } from "@/lib/profile";
 import {
@@ -18,6 +18,9 @@ trending topics, and help ${subjectName} understand conversations they may have 
 Be concise, specific, and cite who said what when relevant. If you don't have
 enough context to answer, say so clearly.
 
+When the user is looking for a link, URL, repo, post, or document, include the direct URL in plain text.
+Do not hide URLs behind markdown link text if the user is trying to find the link itself.
+
 When the user asks follow-ups, use the conversation context provided.`;
 }
 
@@ -29,6 +32,42 @@ interface ChatHistoryItem {
 interface ChatContextPayload {
   page?: string;
   pageLabel?: string;
+}
+
+const LINK_QUERY_PATTERN =
+  /\b(link|url|website|site|repo|repository|github|article|post|docs?|documentation|readme|substack|video|youtube)\b/i;
+
+function isLinkFocusedQuestion(question: string, context?: ChatContextPayload): boolean {
+  return LINK_QUERY_PATTERN.test(question) || context?.page === "/links";
+}
+
+function buildLinkBlock(links: LinkRow[]): string {
+  if (links.length === 0) return "";
+  const lines = links.map((link, index) => {
+    const title = (link.title || link.url).trim();
+    const sharedBy = link.shared_by?.trim() || "unknown";
+    const sourceGroup = link.source_group?.trim() || "unknown group";
+    const relevance = (link.relevance || "").trim().replace(/\s+/g, " ").slice(0, 220);
+    return [
+      `${index + 1}. ${title}`,
+      `   URL: ${link.url}`,
+      `   Shared by: ${sharedBy}`,
+      `   Group: ${sourceGroup}`,
+      relevance ? `   Why it matters: ${relevance}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+  return `Candidate links from the dedicated links index:\n${lines.join("\n")}\n\n`;
+}
+
+function makeUrlsVisible(text: string): string {
+  return text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, label: string, url: string) => {
+    const cleanLabel = label.trim();
+    const cleanUrl = url.trim();
+    if (!cleanLabel || cleanLabel === cleanUrl) return cleanUrl;
+    return `${cleanLabel} - ${cleanUrl}`;
+  });
 }
 
 function sanitizeHistory(input: unknown): ChatHistoryItem[] {
@@ -83,13 +122,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const chatHistory = sanitizeHistory(history);
     const chatContext = (context || undefined) as ChatContextPayload | undefined;
+    const chatHistory = sanitizeHistory(history);
+    const wantsLinks = isLinkFocusedQuestion(question, chatContext);
     const contextPrefix = chatContext?.pageLabel
       ? `The user is currently viewing the "${chatContext.pageLabel}" page of the vibez dashboard${
           chatContext.page ? ` (${chatContext.page})` : ""
         }. Use that page context when it helps prioritize the answer.\n\n`
       : "";
+    const linkCandidates = wantsLinks ? searchLinksFts(question, { limit: 8, sort: "value" }) : [];
+    const linkBlock = wantsLinks ? buildLinkBlock(linkCandidates) : "";
 
     // Search for relevant messages
     const messages = await searchMessages({ query: question, lookbackDays });
@@ -131,12 +173,16 @@ export async function POST(request: NextRequest) {
 
     const prompt = `${contextPrefix}${dossierContext ? dossierContext + "\n\n" : ""}${
       briefing ? "Latest briefing:\n" + briefing.slice(0, 1500) + "\n\n" : ""
-    }${historyBlock}Relevant messages (${messages.length} found):
+    }${historyBlock}${linkBlock}Relevant messages (${messages.length} found):
 ${msgBlock}
 
 Question: ${question}
 
-Answer based on the messages above. Be specific — cite who said what, which group, and when.`;
+Answer based on the messages above. Be specific — cite who said what, which group, and when.${
+      wantsLinks
+        ? "\n\nIf you know the link, include the full direct URL in plain text. Prefer bullet points in the form `Title - https://...`."
+        : ""
+    }`;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -186,8 +232,9 @@ Answer based on the messages above. Be specific — cite who said what, which gr
 
     const answer =
       response.content[0].type === "text" ? response.content[0].text : "";
+    const visibleAnswer = wantsLinks ? makeUrlsVisible(answer) : answer;
 
-    return NextResponse.json({ answer, messageCount: messages.length });
+    return NextResponse.json({ answer: visibleAnswer, messageCount: messages.length });
   } catch (err) {
     console.error("Chat agent error:", err);
     return NextResponse.json(
