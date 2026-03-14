@@ -10,6 +10,7 @@ from typing import Any
 
 import anthropic
 
+from vibez.budget_guard import check_budget, ensure_table, record_usage
 from vibez.config import Config
 from vibez.db import get_connection
 from vibez.paia_events_adapter import publish_event
@@ -198,6 +199,16 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
     """Classify a batch of messages using Sonnet."""
     from vibez.dossier import load_dossier, format_dossier_for_classifier
 
+    ensure_table(config.db_path)
+    allowed, spent = check_budget(config.db_path, config.daily_budget_usd)
+    if not allowed:
+        logger.warning(
+            "Skipping classification: daily budget $%.2f exceeded ($%.2f spent)",
+            config.daily_budget_usd,
+            spent,
+        )
+        return
+
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     value_cfg = load_value_config(config.db_path)
     subject_name = get_subject_name(config.subject_name)
@@ -212,6 +223,17 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
     )
 
     for msg in messages:
+        # Re-check budget before each call
+        allowed, spent = check_budget(config.db_path, config.daily_budget_usd)
+        if not allowed:
+            logger.warning(
+                "Budget freeze mid-batch at $%.2f/$%.2f — %d messages skipped",
+                spent,
+                config.daily_budget_usd,
+                len(messages) - messages.index(msg),
+            )
+            return
+
         try:
             context = get_recent_context(config.db_path, msg["room_id"], msg["timestamp"])
             prompt = build_classify_prompt(
@@ -232,6 +254,13 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
                 messages=[{"role": "user", "content": prompt}],
             )
             raw_text = response.content[0].text
+            if hasattr(response, "usage") and response.usage:
+                record_usage(
+                    config.db_path,
+                    config.classifier_model,
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                )
             classification = parse_classification(raw_text)
             if not config.contribution_intel_enabled:
                 classification = strip_contribution_intel(classification)

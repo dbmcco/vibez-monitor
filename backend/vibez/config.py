@@ -71,6 +71,7 @@ class Config:
     self_aliases: tuple[str, ...] = field(default_factory=get_self_aliases)
     dossier_path: Path = field(default_factory=get_dossier_path)
     public_mode: bool = False
+    daily_budget_usd: float = 10.0
     contribution_intel_enabled: bool = True
     log_dir: Path = field(
         default_factory=lambda: Path.home() / "Library/Logs/vibez-monitor"
@@ -167,6 +168,7 @@ class Config:
             subject_name=subject_name,
             self_aliases=self_aliases,
             dossier_path=get_dossier_path(os.environ.get("VIBEZ_DOSSIER_PATH")),
+            daily_budget_usd=float(os.environ.get("DAILY_BUDGET_USD", "10.0")),
             public_mode=public_mode,
             contribution_intel_enabled=contribution_intel_enabled,
             log_dir=Path(

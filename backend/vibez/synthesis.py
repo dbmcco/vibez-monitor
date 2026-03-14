@@ -614,6 +614,18 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
         semantic_arc_hints=semantic_arc_hints,
     )
 
+    from vibez.budget_guard import check_budget, ensure_table, record_usage
+
+    ensure_table(config.db_path)
+    allowed, spent = check_budget(config.db_path, config.daily_budget_usd)
+    if not allowed:
+        logger.warning(
+            "Skipping synthesis: daily budget $%.2f exceeded ($%.2f spent)",
+            config.daily_budget_usd,
+            spent,
+        )
+        return {"daily_memo": "", "conversation_arcs": [], "briefing": [], "contributions": [], "trends": {}, "links": []}
+
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     response = client.messages.create(
         model=config.synthesis_model, max_tokens=8192,
@@ -624,6 +636,13 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
         messages=[{"role": "user", "content": prompt}],
     )
     raw_text = response.content[0].text
+    if hasattr(response, "usage") and response.usage:
+        record_usage(
+            config.db_path,
+            config.synthesis_model,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
     report = make_pithy_report(parse_synthesis_report(raw_text))
     if not config.contribution_intel_enabled:
         report = strip_contribution_sections(report)
