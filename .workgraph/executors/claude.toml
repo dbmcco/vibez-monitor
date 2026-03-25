@@ -3,6 +3,9 @@ type = "claude"
 command = ".workgraph/executors/claude-run.sh"
 args = []
 
+[executor.env]
+WG_TASK_ID = "{{task_id}}"
+
 [executor.prompt_template]
 template = """
 You are working in: /Users/braydon/projects/personal/vibez-monitor
