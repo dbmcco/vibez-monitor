@@ -16,6 +16,7 @@ if [[ "${SYNC_LOOP_ENABLED,,}" == "1" || "${SYNC_LOOP_ENABLED,,}" == "true" || "
   (
     while true; do
       python3 backend/scripts/run_sync_once.py || true
+      python3 backend/scripts/enrich_link_authors.py --limit 200 || true
       sleep "${SYNC_LOOP_INTERVAL_SECONDS}"
     done
   ) &

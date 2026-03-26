@@ -19,6 +19,7 @@ interface Link {
   last_seen: string | null;
   mention_count: number;
   value_score: number;
+  authored_by: string | null;
 }
 
 interface LinkStats {
@@ -26,6 +27,7 @@ interface LinkStats {
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
   categories: { name: string; count: number }[];
+  authors: { name: string; count: number }[];
 }
 
 interface LinkFilters {
@@ -35,6 +37,7 @@ interface LinkFilters {
   sort: string;
   days: string;
   sharedBy: string;
+  authoredBy: string;
 }
 
 const SOURCES = [
@@ -71,6 +74,7 @@ const INITIAL_FILTERS: LinkFilters = {
   sort: "trending",
   days: "",
   sharedBy: "",
+  authoredBy: "",
 };
 
 function hostname(url: string): string {
@@ -79,6 +83,11 @@ function hostname(url: string): string {
   } catch {
     return url;
   }
+}
+
+function authoredBadge(authoredBy: string | null): string | null {
+  if (!authoredBy) return null;
+  return firstName(authoredBy);
 }
 
 function categoryBadge(cat: string | null): { color: string; label: string } | null {
@@ -171,6 +180,7 @@ export default function LinksPage() {
   const [sort, setSort] = useState(INITIAL_FILTERS.sort);
   const [days, setDays] = useState(INITIAL_FILTERS.days);
   const [sharedBy, setSharedBy] = useState(INITIAL_FILTERS.sharedBy);
+  const [authoredBy, setAuthoredBy] = useState(INITIAL_FILTERS.authoredBy);
   const [starredOnly, setStarredOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -185,6 +195,7 @@ export default function LinksPage() {
       if (filters.category !== "all") params.set("category", filters.category);
       if (filters.days) params.set("days", filters.days);
       if (filters.sharedBy) params.set("shared_by", filters.sharedBy);
+      if (filters.authoredBy) params.set("authored_by", filters.authoredBy);
       params.set("sort", filters.sort);
       params.set("limit", "100");
       const res = await fetch(`/api/links?${params.toString()}`);
@@ -224,6 +235,7 @@ export default function LinksPage() {
       sort,
       days,
       sharedBy,
+      authoredBy,
       ...overrides,
     };
   }
@@ -244,6 +256,7 @@ export default function LinksPage() {
     if (next.sort !== undefined) setSort(merged.sort);
     if (next.days !== undefined) setDays(merged.days);
     if (next.sharedBy !== undefined) setSharedBy(merged.sharedBy);
+    if (next.authoredBy !== undefined) setAuthoredBy(merged.authoredBy);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     void fetchLinks(merged);
   }
@@ -252,6 +265,7 @@ export default function LinksPage() {
     .filter((entry) => entry.name !== "whatsappbot" && !entry.name.startsWith("+"))
     .slice(0, 10);
   const topCategories = (stats?.categories || []).slice(0, 8);
+  const topAuthors = (stats?.authors || []).slice(0, 10);
   const visibleLinks = starredOnly
     ? links.filter((link) => Boolean(stars.links[linkStarKey(link.url)]))
     : links;
@@ -355,6 +369,30 @@ export default function LinksPage() {
           ))}
         </div>
 
+        {topAuthors.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+              Author
+            </span>
+            <Pill active={authoredBy === ""} onClick={() => applyFilter({ authoredBy: "" })}>
+              All
+            </Pill>
+            <Pill active={authoredBy === "any"} onClick={() => applyFilter({ authoredBy: "any" })}>
+              Members
+            </Pill>
+            {topAuthors.map((entry) => (
+              <Pill
+                key={entry.name}
+                active={authoredBy === entry.name}
+                onClick={() => applyFilter({ authoredBy: entry.name })}
+              >
+                {firstName(entry.name)}
+                <span className="ml-0.5 opacity-50"> {entry.count}</span>
+              </Pill>
+            ))}
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-1">
           <span className="w-12 text-[10px] font-medium uppercase tracking-wider text-slate-600">
             Saved
@@ -389,6 +427,7 @@ export default function LinksPage() {
               const desc = extractDescription(link);
               const badge = categoryBadge(link.category);
               const sharer = link.shared_by ? firstName(link.shared_by) : "";
+              const author = authoredBadge(link.authored_by);
 
               return (
                 <article key={link.id} className="vibe-panel rounded-xl p-4">
@@ -402,6 +441,11 @@ export default function LinksPage() {
                       <div className="flex items-center gap-2">
                         <span className="truncate font-medium text-slate-200">{domain}</span>
                         {badge ? <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span> : null}
+                        {author ? (
+                          <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
+                            ✍ {author}
+                          </span>
+                        ) : null}
                       </div>
                       {desc ? <p className="mt-1 text-sm text-slate-400">{desc}</p> : null}
                     </a>
@@ -452,6 +496,7 @@ export default function LinksPage() {
                   const desc = extractDescription(link);
                   const badge = categoryBadge(link.category);
                   const sharer = link.shared_by ? firstName(link.shared_by) : "";
+                  const author = authoredBadge(link.authored_by);
 
                   return (
                     <tr key={link.id} className="group transition hover:bg-slate-800/20">
@@ -469,6 +514,11 @@ export default function LinksPage() {
                               </span>
                               {badge ? (
                                 <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span>
+                              ) : null}
+                              {author ? (
+                                <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
+                                  ✍ {author}
+                                </span>
                               ) : null}
                             </div>
                             {desc ? <p className="mt-0.5 line-clamp-1 text-xs text-slate-400">{desc}</p> : null}

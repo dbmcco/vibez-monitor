@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS links (
     last_seen DATETIME,
     mention_count INTEGER DEFAULT 1,
     value_score REAL DEFAULT 0,
-    report_date DATE
+    report_date DATE,
+    authored_by TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_links_url_hash ON links (url_hash);
@@ -219,7 +220,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 last_seen DATETIME,
                 mention_count INTEGER DEFAULT 1,
                 value_score REAL DEFAULT 0,
-                report_date DATE
+                report_date DATE,
+                authored_by TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_links_url_hash ON links (url_hash);
             CREATE INDEX IF NOT EXISTS idx_links_category ON links (category);
@@ -227,6 +229,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen);
         """)
         changed = True
+
+    # Add authored_by column to existing links tables
+    if "links" in existing_tables:
+        link_cols = {row[1] for row in conn.execute("PRAGMA table_info(links)")}
+        if "authored_by" not in link_cols:
+            conn.execute("ALTER TABLE links ADD COLUMN authored_by TEXT")
+            changed = True
 
     if (
         "wisdom_topics" not in existing_tables

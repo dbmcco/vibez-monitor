@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vibez-monitor.enrich-link-authors</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__VIBEZ_ROOT__/backend/.venv/bin/python</string>
+        <string>__VIBEZ_ROOT__/backend/scripts/enrich_link_authors.py</string>
+        <string>--db</string>
+        <string>__VIBEZ_ROOT__/vibez.db</string>
+        <string>--limit</string>
+        <string>200</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__VIBEZ_ROOT__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>7200</integer>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/enrich-link-authors-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/enrich-link-authors-stderr.log</string>
+</dict>
+</plist>

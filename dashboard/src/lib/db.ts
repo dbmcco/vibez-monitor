@@ -3557,6 +3557,7 @@ export interface LinkRow {
   mention_count: number;
   value_score: number;
   report_date: string | null;
+  authored_by: string | null;
 }
 
 export interface LinkStats {
@@ -3564,6 +3565,7 @@ export interface LinkStats {
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
   categories: { name: string; count: number }[];
+  authors: { name: string; count: number }[];
 }
 
 function sourceFromUrl(url: string): string {
@@ -3627,12 +3629,17 @@ export function getLinkStats(opts: { days?: number }): LinkStats {
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
 
+  const authorRows = db.prepare(
+    `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql} AND authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`.replace("AND authored_by", where.length ? "AND authored_by" : "WHERE authored_by")
+  ).all(...params) as { authored_by: string; cnt: number }[];
+
   db.close();
   return {
     total,
     sources,
     sharers: sharerRows.map(r => ({ name: r.shared_by, count: r.cnt })),
     categories: catRows.map(r => ({ name: r.category || "uncategorized", count: r.cnt })),
+    authors: authorRows.map(r => ({ name: r.authored_by, count: r.cnt })),
   };
 }
 
@@ -3643,6 +3650,7 @@ export function getLinks(opts: {
   sort?: string;
   source?: string;
   sharedBy?: string;
+  authoredBy?: string;
 }): LinkRow[] {
   const db = getDb();
   const where: string[] = [];
@@ -3680,6 +3688,12 @@ export function getLinks(opts: {
     where.push("shared_by LIKE ?");
     params.push(`%${opts.sharedBy}%`);
   }
+  if (opts.authoredBy === "any") {
+    where.push("authored_by IS NOT NULL AND authored_by <> ''");
+  } else if (opts.authoredBy) {
+    where.push("authored_by LIKE ?");
+    params.push(`%${opts.authoredBy}%`);
+  }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const orderBy = SORT_MAP[opts.sort || "value"] || SORT_MAP.value;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
@@ -3688,7 +3702,7 @@ export function getLinks(opts: {
     .prepare(
       `SELECT id, url, url_hash, title, category, relevance, shared_by,
               source_group, first_seen, last_seen, mention_count, value_score,
-              report_date
+              report_date, authored_by
        FROM links ${whereSql}
        ORDER BY ${orderBy}
        LIMIT ?`
@@ -3700,7 +3714,7 @@ export function getLinks(opts: {
 
 export function searchLinksFts(
   query: string,
-  opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string }
+  opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string; authoredBy?: string }
 ): LinkRow[] {
   const terms = query.trim().split(/\s+/).filter(Boolean);
   if (!terms.length) return getLinks(opts);
@@ -3735,6 +3749,11 @@ export function searchLinksFts(
       if (patterns[opts.source]) { where.push("l.url LIKE ?"); params.push(patterns[opts.source]); }
     }
     if (opts.sharedBy) { where.push("l.shared_by LIKE ?"); params.push(`%${opts.sharedBy}%`); }
+    if (opts.authoredBy === "any") {
+      where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
+    } else if (opts.authoredBy) {
+      where.push("l.authored_by LIKE ?"); params.push(`%${opts.authoredBy}%`);
+    }
     const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
     const limit = Math.min(Math.max(1, opts.limit || 50), 200);
     params.push(limit);
@@ -3743,7 +3762,7 @@ export function searchLinksFts(
       .prepare(
         `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
                 l.shared_by, l.source_group, l.first_seen, l.last_seen,
-                l.mention_count, l.value_score, l.report_date
+                l.mention_count, l.value_score, l.report_date, l.authored_by
          FROM links_fts f
          JOIN links l ON f.rowid = l.id
          WHERE links_fts MATCH ?
@@ -3784,7 +3803,7 @@ export function searchLinksFts(
     .prepare(
       `SELECT id, url, url_hash, title, category, relevance, shared_by,
               source_group, first_seen, last_seen, mention_count, value_score,
-              report_date
+              report_date, authored_by
        FROM links ${whereSql}
        ORDER BY value_score DESC, last_seen DESC
        LIMIT ?`

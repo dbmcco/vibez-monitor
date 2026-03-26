@@ -95,8 +95,11 @@ if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
     echo "Refreshing remote synthesis..."
     "$RAILWAY_BIN" ssh --service dashboard \
       "python backend/scripts/run_synthesis.py"
+    echo "Enriching remote link authorship..."
+    "$RAILWAY_BIN" ssh --service dashboard \
+      "python backend/scripts/enrich_link_authors.py --limit 200"
   else
-    echo "railway CLI not found; skipped remote pgvector/synthesis refresh."
+    echo "railway CLI not found; skipped remote pgvector/synthesis/author enrichment."
   fi
 fi
 

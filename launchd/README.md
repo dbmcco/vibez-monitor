@@ -24,11 +24,13 @@ launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.sync.plist 2>/dev/null
 launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.synthesis.plist 2>/dev/null || true
 launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.dashboard.plist 2>/dev/null || true
 launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.classify-missing.plist 2>/dev/null || true
+launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.enrich-link-authors.plist 2>/dev/null || true
 launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist 2>/dev/null || true
 
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.sync.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.synthesis.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.dashboard.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.classify-missing.plist
+launchctl load ~/Library/LaunchAgents/com.vibez-monitor.enrich-link-authors.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist
 ```
