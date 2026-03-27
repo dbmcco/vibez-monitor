@@ -59,17 +59,24 @@ def upsert_links(
             continue
         h = _url_hash(url)
         existing = conn.execute(
-            "SELECT id, mention_count, first_seen FROM links WHERE url_hash = ?", (h,)
+            "SELECT id, mention_count, first_seen, shared_by FROM links WHERE url_hash = ?", (h,)
         ).fetchone()
         if existing:
             new_count = (existing[1] or 1) + 1
             days_ago = (datetime.now() - datetime.fromisoformat(existing[2])).days if existing[2] else 0
             score = compute_value_score(new_count, days_ago)
-            conn.execute(
-                """UPDATE links SET mention_count = ?, last_seen = ?, value_score = ?,
-                   report_date = ? WHERE id = ?""",
-                (new_count, now, score, report_date, existing[0]),
-            )
+            if not existing[3] and shared_by:
+                conn.execute(
+                    """UPDATE links SET mention_count = ?, last_seen = ?, value_score = ?,
+                       report_date = ?, shared_by = ? WHERE id = ?""",
+                    (new_count, now, score, report_date, shared_by, existing[0]),
+                )
+            else:
+                conn.execute(
+                    """UPDATE links SET mention_count = ?, last_seen = ?, value_score = ?,
+                       report_date = ? WHERE id = ?""",
+                    (new_count, now, score, report_date, existing[0]),
+                )
         else:
             score = compute_value_score(1, 0)
             conn.execute(
@@ -250,7 +257,7 @@ def upsert_message_links(
         context = " | ".join(data["snippets"][:3])
         senders = ", ".join(sorted(data["senders"]))
         existing = conn.execute(
-            "SELECT id, mention_count, first_seen, title, relevance FROM links WHERE url_hash = ?",
+            "SELECT id, mention_count, first_seen, title, relevance, shared_by FROM links WHERE url_hash = ?",
             (h,),
         ).fetchone()
 
@@ -263,10 +270,22 @@ def upsert_message_links(
             days_ago = (datetime.now() - datetime.fromisoformat(existing[2])).days if existing[2] else 0
             score = compute_value_score(new_count, days_ago)
             # If existing row has no relevance (empty), enrich with message context
-            if not existing[4]:
+            no_relevance = not existing[4]
+            no_shared_by = not existing[5] and senders
+            if no_relevance and no_shared_by:
+                conn.execute(
+                    "UPDATE links SET mention_count=?, last_seen=?, value_score=?, relevance=?, shared_by=? WHERE id=?",
+                    (new_count, latest_iso, score, context, senders, existing[0]),
+                )
+            elif no_relevance:
                 conn.execute(
                     "UPDATE links SET mention_count=?, last_seen=?, value_score=?, relevance=? WHERE id=?",
                     (new_count, latest_iso, score, context, existing[0]),
+                )
+            elif no_shared_by:
+                conn.execute(
+                    "UPDATE links SET mention_count=?, last_seen=?, value_score=?, shared_by=? WHERE id=?",
+                    (new_count, latest_iso, score, senders, existing[0]),
                 )
             else:
                 conn.execute(
