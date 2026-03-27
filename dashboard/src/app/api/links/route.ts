@@ -23,8 +23,9 @@ export async function GET(request: NextRequest) {
     const source = params.get("source") || undefined;
     const sharedBy = params.get("shared_by") || undefined;
     const authoredBy = params.get("authored_by") || undefined;
+    const pinned = params.get("pinned") === "1" ? true : undefined;
 
-    const opts = { category, days, limit, sort, source, sharedBy, authoredBy };
+    const opts = { category, days, limit, sort, source, sharedBy, authoredBy, pinned };
     const links = q ? searchLinksFts(q, opts) : getLinks(opts);
 
     return NextResponse.json({ links, total: links.length });

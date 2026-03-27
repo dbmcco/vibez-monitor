@@ -20,6 +20,7 @@ interface Link {
   mention_count: number;
   value_score: number;
   authored_by: string | null;
+  pinned: number | null;
 }
 
 interface LinkStats {
@@ -219,6 +220,7 @@ function Pill({
 
 export default function LinksPage() {
   const [links, setLinks] = useState<Link[]>([]);
+  const [pinnedLinks, setPinnedLinks] = useState<Link[]>([]);
   const [stats, setStats] = useState<LinkStats | null>(null);
   const [query, setQuery] = useState(INITIAL_FILTERS.query);
   const [source, setSource] = useState(INITIAL_FILTERS.source);
@@ -264,14 +266,25 @@ export default function LinksPage() {
     }
   }, []);
 
+  const fetchPinnedLinks = useCallback(async () => {
+    try {
+      const res = await fetch("/api/links?pinned=1&limit=20");
+      const data = await res.json();
+      setPinnedLinks(Array.isArray(data.links) ? data.links : []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     void fetchLinks(INITIAL_FILTERS);
     void fetchStats();
+    void fetchPinnedLinks();
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [fetchLinks, fetchStats]);
+  }, [fetchLinks, fetchStats, fetchPinnedLinks]);
 
   function currentFilters(overrides: Partial<LinkFilters> = {}): LinkFilters {
     return {
@@ -339,6 +352,43 @@ export default function LinksPage() {
         className="vibe-input w-full rounded-lg px-4 py-2.5 text-sm"
         aria-label="Search links"
       />
+
+      {pinnedLinks.length > 0 ? (
+        <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 p-3">
+          <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-amber-600/70">Pinned</p>
+          <div className="space-y-2">
+            {pinnedLinks.map((link) => {
+              const displayTitle = smartTitle(link);
+              const desc = extractDescription(link);
+              const author = authoredBadge(link.authored_by);
+              return (
+                <div key={link.id} className="flex items-start gap-2">
+                  <span className="mt-0.5 text-[13px] leading-none text-amber-600/60">📌</span>
+                  <div className="min-w-0 flex-1">
+                    <a
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-slate-200 hover:text-cyan-300"
+                      title={link.url}
+                    >
+                      {displayTitle}
+                    </a>
+                    {author ? (
+                      <span className="ml-2 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
+                        ✍ {author}
+                      </span>
+                    ) : null}
+                    {desc ? (
+                      <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{desc}</p>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-1">

@@ -3558,6 +3558,7 @@ export interface LinkRow {
   value_score: number;
   report_date: string | null;
   authored_by: string | null;
+  pinned: number | null;
 }
 
 export interface LinkStats {
@@ -3651,6 +3652,7 @@ export function getLinks(opts: {
   source?: string;
   sharedBy?: string;
   authoredBy?: string;
+  pinned?: boolean;
 }): LinkRow[] {
   const db = getDb();
   const where: string[] = [];
@@ -3694,6 +3696,9 @@ export function getLinks(opts: {
     where.push("authored_by LIKE ?");
     params.push(`%${opts.authoredBy}%`);
   }
+  if (opts.pinned) {
+    where.push("pinned = 1");
+  }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const orderBy = SORT_MAP[opts.sort || "value"] || SORT_MAP.value;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
@@ -3702,7 +3707,7 @@ export function getLinks(opts: {
     .prepare(
       `SELECT id, url, url_hash, title, category, relevance, shared_by,
               source_group, first_seen, last_seen, mention_count, value_score,
-              report_date, authored_by
+              report_date, authored_by, pinned
        FROM links ${whereSql}
        ORDER BY ${orderBy}
        LIMIT ?`
@@ -3762,7 +3767,7 @@ export function searchLinksFts(
       .prepare(
         `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
                 l.shared_by, l.source_group, l.first_seen, l.last_seen,
-                l.mention_count, l.value_score, l.report_date, l.authored_by
+                l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned
          FROM links_fts f
          JOIN links l ON f.rowid = l.id
          WHERE links_fts MATCH ?
@@ -3803,7 +3808,7 @@ export function searchLinksFts(
     .prepare(
       `SELECT id, url, url_hash, title, category, relevance, shared_by,
               source_group, first_seen, last_seen, mention_count, value_score,
-              report_date, authored_by
+              report_date, authored_by, pinned
        FROM links ${whereSql}
        ORDER BY value_score DESC, last_seen DESC
        LIMIT ?`
