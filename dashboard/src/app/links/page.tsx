@@ -85,6 +85,52 @@ function hostname(url: string): string {
   }
 }
 
+function smartTitle(link: Link): string {
+  const { url, title } = link;
+  // Use stored title if it's actually meaningful (not just the domain/hostname)
+  const host = hostname(url);
+  if (title && title !== host && !title.endsWith(".com") && !title.endsWith(".io") && !title.endsWith(".org") && title.length > host.length + 3) {
+    return title;
+  }
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/$/, "");
+    const parts = path.split("/").filter(Boolean);
+    // GitHub: github.com/owner/repo, github.com/owner/repo/issues/123, etc.
+    if (parsed.hostname.includes("github.com") && parts.length >= 2) {
+      const base = `${parts[0]}/${parts[1]}`;
+      if (parts[2] === "issues" || parts[2] === "pull") return `${base} #${parts[3] ?? ""}`.trim();
+      if (parts[2] === "discussions") return `${base} discussion`;
+      if (parts[2]) return `${base}/${parts.slice(2).join("/")}`;
+      return base;
+    }
+    // Gist: gist.github.com/user/hash
+    if (parsed.hostname === "gist.github.com" && parts.length >= 1) {
+      return `gist by ${parts[0]}`;
+    }
+    // Twitter/X: x.com/user/status/id → "@user"
+    if ((parsed.hostname.includes("x.com") || parsed.hostname.includes("twitter.com")) && parts[0]) {
+      return `@${parts[0]} on ${parsed.hostname.includes("x.com") ? "X" : "Twitter"}`;
+    }
+    // YouTube: use title if available, else "YouTube video"
+    if (parsed.hostname.includes("youtube.com") || parsed.hostname === "youtu.be") {
+      return title || "YouTube video";
+    }
+    // Substack: user.substack.com/p/slug → humanise slug
+    if (parsed.hostname.endsWith(".substack.com") && parts[0] === "p" && parts[1]) {
+      return parts[1].replace(/-/g, " ");
+    }
+    // Generic: if path has a meaningful last segment, humanise it
+    const last = parts[parts.length - 1];
+    if (last && last.length > 4 && !last.match(/^\d+$/)) {
+      return last.replace(/[-_]/g, " ").replace(/\.\w+$/, "");
+    }
+  } catch {
+    // fall through
+  }
+  return host;
+}
+
 function authoredBadge(authoredBy: string | null): string | null {
   if (!authoredBy) return null;
   return firstName(authoredBy);
@@ -423,7 +469,7 @@ export default function LinksPage() {
         <div className="space-y-3">
           <div className="space-y-3 sm:hidden">
             {visibleLinks.map((link) => {
-              const domain = hostname(link.url);
+              const displayTitle = smartTitle(link);
               const desc = extractDescription(link);
               const badge = categoryBadge(link.category);
               const sharer = link.shared_by ? firstName(link.shared_by) : "";
@@ -439,7 +485,7 @@ export default function LinksPage() {
                       className="block min-w-0 flex-1"
                     >
                       <div className="flex items-center gap-2">
-                        <span className="truncate font-medium text-slate-200">{domain}</span>
+                        <span className="truncate font-medium text-slate-200" title={link.url}>{displayTitle}</span>
                         {badge ? <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span> : null}
                         {author ? (
                           <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
@@ -452,7 +498,7 @@ export default function LinksPage() {
                     <StarButton
                       compact
                       active={isLinkStarred(link.url)}
-                      label={link.title || domain}
+                      label={link.url}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -492,7 +538,7 @@ export default function LinksPage() {
               </thead>
               <tbody className="divide-y divide-slate-800/40">
                 {visibleLinks.map((link) => {
-                  const domain = hostname(link.url);
+                  const displayTitle = smartTitle(link);
                   const desc = extractDescription(link);
                   const badge = categoryBadge(link.category);
                   const sharer = link.shared_by ? firstName(link.shared_by) : "";
@@ -509,8 +555,8 @@ export default function LinksPage() {
                             className="block min-w-0 flex-1"
                           >
                             <div className="flex items-center gap-2">
-                              <span className="truncate font-medium text-slate-200 group-hover:text-cyan-300">
-                                {domain}
+                              <span className="truncate font-medium text-slate-200 group-hover:text-cyan-300" title={link.url}>
+                                {displayTitle}
                               </span>
                               {badge ? (
                                 <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span>
@@ -526,7 +572,7 @@ export default function LinksPage() {
                           <StarButton
                             compact
                             active={isLinkStarred(link.url)}
-                            label={link.title || domain}
+                            label={link.url}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
