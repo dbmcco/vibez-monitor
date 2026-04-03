@@ -203,40 +203,40 @@ Where pgvector materially improves output:
 - Contribute: improved opportunity density around semantically related contribution patterns.
 - Stats: semantic coverage/orphan monitoring and arc trend diagnostics.
 
-## Railway Deployment (Web + Worker + Railway Postgres)
+## Railway Deployment (Dashboard + Volume)
 
-Recommended topology:
+Supported topology: a **single `dashboard` service** backed by a **Railway Volume** for SQLite.
 
-1. `dashboard` web service (serves `http://...` UI + API routes).
-2. `sync` worker service (continuous mode via `backend/scripts/run_sync.py`) or scheduled mode via `backend/scripts/run_sync_once.py`.
-3. `synthesis` scheduled job (runs `backend/scripts/run_synthesis.py` on schedule).
-4. Railway Postgres for pgvector embeddings.
-5. A Railway Volume for `vibez.db` (SQLite remains the primary OLTP store).
+SQLite is a single-file database — it cannot be shared across multiple Railway containers. Sync and synthesis run locally (or via `scripts/local_sync_to_railway.sh`) and push data into the Railway-hosted dashboard. See [Local -> Railway Sync](#local---railway-sync-beeper--google-groups) below.
 
-Key notes:
+What runs on Railway:
 
-- Beeper Desktop API is local-only; cloud deployments should use Google Groups unless the runtime has direct Beeper Desktop API access.
-- Set `VIBEZ_DB_PATH=/data/vibez.db` and mount the same Railway Volume path in services that read/write SQLite.
-- Set `VIBEZ_PGVECTOR_URL` to Railway Postgres `DATABASE_URL`.
-- Keep `VIBEZ_PGVECTOR_INDEX_ON_SYNC=true` so new messages are indexed automatically.
+- `dashboard` web service — serves the Next.js UI + API routes.
+- A Railway Volume mounted at `/data` — stores `vibez.db`.
+- (Optional) Railway Postgres for pgvector embeddings.
 
-Example commands:
+What runs locally:
 
-- Dashboard service:
-  - Build: `cd dashboard && npm ci && npm run build`
-  - Start: `cd dashboard && npm run start`
-- Sync worker:
-  - Start: `cd backend && python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\" && .venv/bin/python scripts/run_sync.py`
-- Sync scheduled job (twice daily):
-  - Start command: `cd backend && python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\" && .venv/bin/python scripts/run_sync_once.py`
-  - Schedule: `0 */12 * * *`
-  - Optional: set `VIBEZ_SYNC_ONCE_RUN_SYNTHESIS=true` to refresh briefing artifacts after each scheduled sync.
-- Synthesis schedule:
-  - Command: `cd backend && .venv/bin/python scripts/run_synthesis.py`
+- `run_sync.py` / `run_sync_once.py` — ingests from Beeper Desktop and/or Google Groups.
+- `run_synthesis.py` — generates briefing artifacts.
+- `local_sync_to_railway.sh` — pushes local data to Railway.
 
-Use Railway scheduled executions for synthesis (for example every 12 hours).
+Key env vars for the Railway dashboard service:
 
-Deploy helper (modeled after Meridian):
+```bash
+VIBEZ_DB_PATH=/data/vibez.db
+VIBEZ_PUSH_API_KEY=your-ingest-key
+# Optional pgvector:
+VIBEZ_PGVECTOR_URL=$DATABASE_URL
+VIBEZ_PGVECTOR_INDEX_ON_SYNC=true
+```
+
+Dashboard build/start commands:
+
+- Build: `cd dashboard && npm ci && npm run build`
+- Start: `cd dashboard && npm run start`
+
+Deploy helper:
 
 ```bash
 bash ./scripts/deploy.sh --check-only
@@ -247,7 +247,7 @@ Useful options:
 
 - `--method railway` to require `railway up`.
 - `--method git` to force `git push` deployment.
-- `--services dashboard,sync,synthesis` to target service set.
+- `--services dashboard` (default) to target the dashboard service.
 - `--app-url https://your-domain` to run post-deploy health check.
 
 ## Optional: Google Groups Ingestion

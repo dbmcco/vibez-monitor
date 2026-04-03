@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PROJECT_ID="${RAILWAY_PROJECT_ID:-}"
 ENVIRONMENT_NAME="${RAILWAY_ENVIRONMENT_NAME:-production}"
-SERVICE_NAMES_RAW="${RAILWAY_SERVICE_NAMES:-dashboard,sync,synthesis}"
+SERVICE_NAMES_RAW="${RAILWAY_SERVICE_NAMES:-dashboard}"
 APP_URL="${VIBEZ_APP_URL:-}"
 HEALTH_PATH="${VIBEZ_HEALTH_PATH:-/api/health}"
 DEPLOY_METHOD="${VIBEZ_DEPLOY_METHOD:-auto}" # auto | railway | git
@@ -184,7 +184,7 @@ Options:
                                      Source for Railway deploy snapshot (default: auto)
   --project-id <id>                 Railway project id (optional if repo is linked)
   --environment <name>              Railway environment (default: production)
-  --services <csv>                  Service names (default: dashboard,sync,synthesis)
+  --services <csv>                  Service names (default: dashboard)
   --app-url <url>                   URL for post-deploy health check (optional)
   --health-path <path>              Health endpoint path (default: /api/health)
   --check-only                      Validate deploy auth/paths and exit
