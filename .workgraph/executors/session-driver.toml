@@ -47,4 +47,40 @@ template = """
   ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
 - Artifacts live under `.workgraph/.archdrift/`.
 
+## uxdrift Protocol
+- If this task includes a `uxdrift` block (in the description), run:
+  ./.workgraph/uxdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs uxdrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- If it fails due to missing URL, set `url = "..."` in the `uxdrift` block or pass --url.
+- Artifacts live under `.workgraph/.uxdrift/`.
+
+## therapydrift Protocol
+- If this task includes a `therapydrift` block (in the description), run:
+  ./.workgraph/therapydrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs therapydrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.therapydrift/`.
+
+## fixdrift Protocol
+- If this task includes a `fixdrift` block (in the description), run:
+  ./.workgraph/fixdrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs fixdrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.fixdrift/`.
+
+## yagnidrift Protocol
+- If this task includes a `yagnidrift` block (in the description), run:
+  ./.workgraph/yagnidrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs yagnidrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.yagnidrift/`.
+
+## redrift Protocol
+- If this task includes a `redrift` block (in the description), run:
+  ./.workgraph/redrift wg check --task {{task_id}} --write-log --create-followups
+- Or run the unified check (runs redrift when a spec is present):
+  ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
+- Artifacts live under `.workgraph/.redrift/`.
+
 """

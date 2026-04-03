@@ -1,4 +1,4 @@
-.env
+.env*
 .venv/
 vibez.db
 vibez.db-*
@@ -10,6 +10,10 @@ node_modules/
 dist/
 *.egg-info/
 .workgraph/
+.amplifier/
+.claude/
+.opencode/
+test-results/
 hot_alerts.json
 ~/
 *.log

@@ -99,6 +99,18 @@ if [[ -z "${PROMPT//[[:space:]]/}" ]]; then
   exit 1
 fi
 
+# ── Agency enrichment via pre-dispatch hook (graceful fallback) ──
+# The hook calls agency-assign-workgraph and merges the composed identity
+# with the speedrift prompt. If the hook is missing or Agency is unreachable,
+# the original prompt passes through unchanged.
+PRE_DISPATCH_HOOK="$PWD/.workgraph/hooks/pre-dispatch.sh"
+if [[ -x "$PRE_DISPATCH_HOOK" ]]; then
+  ENRICHED=$(printf '%s' "$PROMPT" | "$PRE_DISPATCH_HOOK" 2>/dev/null) || true
+  if [[ -n "$ENRICHED" ]]; then
+    PROMPT="$ENRICHED"
+  fi
+fi
+
 MANUAL_OWNER_ID=""
 if MANUAL_OWNER_ID="$(detect_manual_owner_assist 2>/dev/null)"; then
   export WG_MANUAL_OWNER_ASSIST=1
