@@ -303,15 +303,6 @@ Return JSON exactly:
   return payload;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
-    }),
-  ]);
-}
-
 function mergeSmartIntel(
   dashboard: ContributionDashboard,
   payload: SmartContributionPayload | null,
@@ -440,20 +431,7 @@ export async function GET(request: NextRequest) {
     const modelName = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
     let smartPayload: SmartContributionPayload | null = null;
     if (smart) {
-      try {
-        smartPayload = await withTimeout(
-          generateSmartIntel(
-            modelName,
-            days,
-            limit,
-            dashboard.opportunities,
-          ),
-          12000,
-        );
-      } catch (error) {
-        console.warn("Smart contribution intel unavailable, serving baseline ranking:", error);
-        smartPayload = null;
-      }
+      smartPayload = await generateSmartIntel(modelName, days, limit, dashboard.opportunities);
     }
     const merged = smart ? mergeSmartIntel(dashboard, smartPayload) : dashboard;
     return NextResponse.json({
@@ -462,17 +440,9 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("GET /api/contributions failed:", error);
-    return NextResponse.json({
-      generated_at: new Date().toISOString(),
-      lookback_days: 45,
-      totals: { messages: 0, opportunities: 0, act_now: 0, high_leverage: 0, aging_risk: 0, blocked: 0 },
-      axis_summary: [],
-      need_summary: [],
-      recurring_themes: [],
-      opportunities: [],
-      sections: [],
-      smart_model: { enabled: false, summary: "", coverage: 0, model: "" },
-      contributions: [],
-    });
+    return NextResponse.json(
+      { error: "Failed to load contributions" },
+      { status: 500 },
+    );
   }
 }

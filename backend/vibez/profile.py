@@ -20,7 +20,7 @@ def get_subject_name(raw_name: str | None = None) -> str:
 
 def get_subject_possessive(subject_name: str) -> str:
     """Return possessive form of the subject name (e.g., James' / Alex's)."""
-    cleaned = subject_name.strip() or DEFAULT_SUBJECT_NAME
+    cleaned = subject_name.strip()
     if cleaned.lower().endswith("s"):
         return f"{cleaned}'"
     return f"{cleaned}'s"

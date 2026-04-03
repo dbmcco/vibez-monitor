@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 interface Thread {
@@ -184,6 +185,7 @@ interface Props {
   evidence_messages?: EvidenceMessage[];
   recent_update?: RecentUpdateSnapshot | null;
   radar?: VibezRadarSnapshot | null;
+  thread_deep_dive?: Record<string, { anchor: string | null; quotes: ThreadEvidenceQuote[] }>;
   semantic_briefing?: SemanticBriefing | null;
 }
 
@@ -385,6 +387,22 @@ interface SnapshotConversationArc {
   howToAddValue: string;
 }
 
+interface ThreadEvidenceQuote {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+}
+
+interface ThreadDeepDiveContent {
+  anchor: string | null;
+  arc: SnapshotConversationArc | null;
+  contribution: Contribution | null;
+  quotes: ThreadEvidenceQuote[];
+}
+
 function normalizeMatchText(value: string): string {
   return value
     .toLowerCase()
@@ -393,21 +411,42 @@ function normalizeMatchText(value: string): string {
     .trim();
 }
 
-function findContributionForThread(thread: Thread, contributions: Contribution[]): Contribution | null {
+function scoreContributionForThread(thread: Thread, contribution: Contribution): number {
   const titleText = normalizeMatchText(thread.title);
-  if (!titleText) return null;
+  const titleKeywords = extractKeywords(thread.title);
+  const participantKeywords = thread.participants.flatMap((participant) => extractKeywords(participant));
+  let score = 0;
 
+  for (const ref of contribution.threads || []) {
+    const refText = normalizeMatchText(ref);
+    if (!refText) continue;
+    if (titleText === refText) score += 10;
+    else if (titleText.includes(refText) || refText.includes(titleText)) score += 6;
+    score += titleKeywords.filter((keyword) => extractKeywords(ref).includes(keyword)).length * 2;
+  }
+
+  const supportText = [
+    contribution.reply_to || "",
+    contribution.why || "",
+    contribution.action || "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const supportKeywords = extractKeywords(supportText);
+  score += titleKeywords.filter((keyword) => supportKeywords.includes(keyword)).length * 3;
+  score += participantKeywords.filter((keyword) => supportKeywords.includes(keyword)).length * 2;
+  return score;
+}
+
+function findContributionForThread(thread: Thread, contributions: Contribution[]): Contribution | null {
+  let bestMatch: { contribution: Contribution; score: number } | null = null;
   for (const contribution of contributions) {
-    const threadRefs = contribution.threads || [];
-    for (const ref of threadRefs) {
-      const refText = normalizeMatchText(ref);
-      if (!refText) continue;
-      if (titleText.includes(refText) || refText.includes(titleText)) {
-        return contribution;
-      }
+    const score = scoreContributionForThread(thread, contribution);
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { contribution, score };
     }
   }
-  return null;
+  return bestMatch && bestMatch.score >= 6 ? bestMatch.contribution : null;
 }
 
 function buildConversationArcs(
@@ -434,6 +473,28 @@ function buildConversationArcs(
         "Add one concrete example or implementation detail from your current projects.",
     };
   });
+}
+
+function findConversationArcForThread(
+  thread: Thread,
+  arcs: SnapshotConversationArc[],
+): SnapshotConversationArc | null {
+  const titleText = normalizeMatchText(thread.title);
+  const titleKeywords = extractKeywords(thread.title);
+  if (!titleText && titleKeywords.length === 0) return null;
+
+  for (const arc of arcs) {
+    const arcText = normalizeMatchText(arc.title);
+    const arcKeywords = extractKeywords(arc.title);
+    if (arcText && titleText && (titleText.includes(arcText) || arcText.includes(titleText))) {
+      return arc;
+    }
+    const sharedKeywords = titleKeywords.filter((keyword) => arcKeywords.includes(keyword)).length;
+    if (sharedKeywords >= 2) {
+      return arc;
+    }
+  }
+  return null;
 }
 
 function normalizeStoredConversationArcs(
@@ -630,6 +691,101 @@ function report_dateLabel(previousReportDate: string | null, dailyMemo: string):
   return `vs ${previousReportDate}`;
 }
 
+function buildThreadEvidenceQuotes(
+  thread: Thread,
+  evidenceMessages: EvidenceMessage[],
+  recentUpdate: RecentUpdateSnapshot | null,
+): ThreadEvidenceQuote[] {
+  const combined: ThreadEvidenceQuote[] = [
+    ...evidenceMessages,
+    ...(recentUpdate?.quotes || []),
+  ];
+  if (combined.length === 0) return [];
+
+  const keywords = Array.from(
+    new Set(
+      [
+        ...extractKeywords(thread.title),
+        ...extractKeywords(thread.insights),
+        ...thread.participants.flatMap((participant) => extractKeywords(participant)),
+      ].slice(0, 24),
+    ),
+  );
+  const participants = thread.participants
+    .map((participant) => participant.trim().toLowerCase())
+    .filter(Boolean);
+  const senderCounts = new Map<string, number>();
+  const seenBodies = new Set<string>();
+
+  return combined
+    .filter((message) => {
+      const body = (message.body || "").trim();
+      return body.length >= 60;
+    })
+    .map((message) => {
+      const bodyText = message.body.toLowerCase();
+      const keywordHits = keywords.reduce(
+        (score, keyword) => (bodyText.includes(keyword) ? score + 1 : score),
+        0,
+      );
+      const participantHits = participants.reduce((score, participant) => {
+        if (!participant) return score;
+        if ((message.sender_name || "").toLowerCase() === participant) return score + 2;
+        return bodyText.includes(participant) ? score + 1 : score;
+      }, 0);
+      const relevance = message.relevance_score ?? 0;
+      const recencyHours = Math.max(0, (Date.now() - Number(message.timestamp || Date.now())) / 36e5);
+      const recencyBonus = Math.max(0, 48 - recencyHours) * 0.05;
+      return {
+        message,
+        score: relevance * 2 + keywordHits * 1.4 + participantHits * 1.8 + recencyBonus,
+      };
+    })
+    .filter(({ score, message }) => score >= 4 || (message.relevance_score ?? 0) >= 8)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.message.timestamp - a.message.timestamp;
+    })
+    .map(({ message }) => message)
+    .filter((message) => {
+      const fingerprint = message.body.trim().toLowerCase();
+      const sender = (message.sender_name || "Unknown").trim();
+      const count = senderCounts.get(sender) || 0;
+      if (!fingerprint || seenBodies.has(fingerprint) || count >= 2) return false;
+      seenBodies.add(fingerprint);
+      senderCounts.set(sender, count + 1);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function buildThreadDeepDiveMap(
+  threads: Thread[],
+  conversationArcs: SnapshotConversationArc[],
+  contributions: Contribution[],
+  evidenceMessages: EvidenceMessage[],
+  recentUpdate: RecentUpdateSnapshot | null,
+  serverDeepDive: Record<string, { anchor: string | null; quotes: ThreadEvidenceQuote[] }>,
+): Map<string, ThreadDeepDiveContent> {
+  const output = new Map<string, ThreadDeepDiveContent>();
+  threads.forEach((thread, index) => {
+    const key = `${thread.title}-${index}`;
+    const contribution = findContributionForThread(thread, contributions);
+    const arc = findConversationArcForThread(thread, conversationArcs);
+    const serverData = serverDeepDive[key];
+    output.set(key, {
+      anchor: serverData?.anchor || contribution?.reply_to || arc?.coreExchange || null,
+      arc,
+      contribution,
+      quotes:
+        serverData?.quotes?.length > 0
+          ? serverData.quotes
+          : buildThreadEvidenceQuotes(thread, evidenceMessages, recentUpdate),
+    });
+  });
+  return output;
+}
+
 export function BriefingView({
   briefing_json,
   contributions_json,
@@ -644,6 +800,7 @@ export function BriefingView({
   evidence_messages = [],
   recent_update = null,
   radar = null,
+  thread_deep_dive = {},
   semantic_briefing = null,
 }: Props) {
   const threads = parseJson<Thread[]>(briefing_json, []);
@@ -709,9 +866,22 @@ export function BriefingView({
       previousTrendData,
     ],
   );
+  const threadDeepDiveMap = useMemo(
+    () =>
+      buildThreadDeepDiveMap(
+        threads,
+        conversationArcs,
+        contributions,
+        evidence_messages,
+        recent_update,
+        thread_deep_dive,
+      ),
+    [threads, conversationArcs, contributions, evidence_messages, recent_update, thread_deep_dive],
+  );
   const visibleContributions = showAllContributions
     ? contributions
     : contributions.slice(0, 3);
+  const trendCoverageHref = `/briefing/trends?date=${encodeURIComponent(report_date)}`;
   const tabs: Array<{ key: BriefingTab; label: string; detail: string }> = [
     { key: "snapshot", label: "Snapshot", detail: "60-90 second overview" },
     { key: "daily", label: "Daily Briefing", detail: "Full narrative and action queue" },
@@ -1042,16 +1212,27 @@ export function BriefingView({
               <div className="mt-3 space-y-3">
                 {atGlanceItems.map((item, index) => {
                   const signal = signalBadge(item.signal);
+                  const showTrendCoverageLink = item.title === "Trend Movement";
                   return (
                     <article
                       key={`${item.title}-${index}`}
                       className="rounded-lg border border-slate-700/70 bg-slate-900/50 p-3"
                     >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-100">{item.title}</p>
-                        <span className={`rounded border px-2 py-0.5 text-xs ${signal.className}`}>
-                          {signal.label}
-                        </span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-100">{item.title}</p>
+                          <span className={`rounded border px-2 py-0.5 text-xs ${signal.className}`}>
+                            {signal.label}
+                          </span>
+                        </div>
+                        {showTrendCoverageLink && (
+                          <Link
+                            href={trendCoverageHref}
+                            className="inline-flex items-center rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1 text-xs font-medium text-cyan-100 transition hover:border-cyan-300/55 hover:bg-cyan-400/15"
+                          >
+                            Open coverage
+                          </Link>
+                        )}
                       </div>
                       <p className="mt-2 text-sm leading-relaxed text-slate-200">{item.detail}</p>
                       <p className="mt-2 text-xs text-slate-400">{item.freshness}</p>
@@ -1138,7 +1319,15 @@ export function BriefingView({
 
           <section className="grid gap-4 lg:grid-cols-2">
             <article className="vibe-panel rounded-xl p-5">
-              <h3 className="vibe-title text-lg text-slate-100">Trend Direction</h3>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h3 className="vibe-title text-lg text-slate-100">Trend Direction</h3>
+                <Link
+                  href={trendCoverageHref}
+                  className="inline-flex items-center rounded-md border border-cyan-400/35 bg-cyan-400/10 px-3 py-1.5 text-sm font-medium text-cyan-100 transition hover:border-cyan-300/55 hover:bg-cyan-400/15"
+                >
+                  Open coverage
+                </Link>
+              </div>
               {(trendData.emerging?.length || trendData.fading?.length || trendData.shifts) ? (
                 <div className="mt-3 space-y-3 text-sm">
                   {trendData.emerging && trendData.emerging.length > 0 && (
@@ -1340,6 +1529,12 @@ export function BriefingView({
                   {(() => {
                     const threadKey = `${thread.title}-${i}`;
                     const isExpanded = expandedThreadKey === threadKey;
+                    const deepDive = threadDeepDiveMap.get(threadKey) || {
+                      anchor: null,
+                      arc: null,
+                      contribution: null,
+                      quotes: [],
+                    };
                     return (
                       <>
                         <div className="mt-3 flex items-center justify-between gap-3">
@@ -1358,6 +1553,72 @@ export function BriefingView({
                         <p className="mt-3 text-sm leading-relaxed text-slate-300">
                           {isExpanded ? thread.insights : excerpt(thread.insights, 180)}
                         </p>
+                        {isExpanded && (deepDive.anchor || deepDive.arc || deepDive.contribution || deepDive.quotes.length > 0) && (
+                          <div className="mt-4 space-y-3">
+                            {deepDive.anchor && (
+                              <div className="rounded-lg border border-slate-700/70 bg-slate-900/55 p-3">
+                                <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                                  Primary thread cue
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                                  {deepDive.anchor}
+                                </p>
+                              </div>
+                            )}
+                            {deepDive.arc && (
+                              <div className="rounded-lg border border-slate-700/70 bg-slate-900/55 p-3">
+                                <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                                  Why this thread matters
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                                  {deepDive.arc.whyItMatters}
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                                  <span className="text-slate-500">Likely next:</span>{" "}
+                                  {deepDive.arc.likelyNext}
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-emerald-200/95">
+                                  <span className="text-emerald-300/80">How you can add value:</span>{" "}
+                                  {deepDive.arc.howToAddValue}
+                                </p>
+                              </div>
+                            )}
+                            {deepDive.contribution && (
+                              <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/8 p-3">
+                                <p className="text-xs font-semibold tracking-wide text-cyan-200 uppercase">
+                                  Suggested move
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                                  {deepDive.contribution.why}
+                                </p>
+                                <p className="mt-2 text-sm font-medium text-cyan-100">
+                                  {deepDive.contribution.action}
+                                </p>
+                              </div>
+                            )}
+                            {deepDive.quotes.length > 0 && (
+                              <div className="space-y-2">
+                                <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                                  Supporting quotes
+                                </p>
+                                {deepDive.quotes.map((quote) => (
+                                  <article
+                                    key={quote.id}
+                                    className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3"
+                                  >
+                                    <p className="text-sm leading-relaxed text-slate-100">
+                                      “{excerpt(quote.body, 220)}”
+                                    </p>
+                                    <p className="mt-2 text-xs text-slate-400">
+                                      {quote.sender_name} · {quote.room_name}
+                                      {quote.timestamp ? ` · ${formatTs(quote.timestamp)}` : ""}
+                                    </p>
+                                  </article>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {isExpanded && thread.links.length > 0 && (
                           <div className="mt-3 space-y-1">
                             {thread.links.map((link, j) => (
@@ -1456,7 +1717,15 @@ export function BriefingView({
       {activeTab === "daily" &&
         (trendData.emerging?.length || trendData.fading?.length || trendData.shifts) && (
         <section className="space-y-4">
-          <h3 className="vibe-title text-lg text-slate-100">Trend Direction</h3>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h3 className="vibe-title text-lg text-slate-100">Trend Direction</h3>
+            <Link
+              href={trendCoverageHref}
+              className="inline-flex items-center rounded-md border border-cyan-400/35 bg-cyan-400/10 px-3 py-1.5 text-sm font-medium text-cyan-100 transition hover:border-cyan-300/55 hover:bg-cyan-400/15"
+            >
+              Open coverage
+            </Link>
+          </div>
           <div className="vibe-panel rounded-xl p-5">
             {trendData.emerging && trendData.emerging.length > 0 && (
               <p className="text-sm text-emerald-300">

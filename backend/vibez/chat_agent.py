@@ -13,7 +13,7 @@ import anthropic
 from vibez.config import Config
 from vibez.db import get_connection
 from vibez.dossier import load_dossier, get_voice_profile
-from vibez.profile import get_subject_name, get_subject_possessive
+from vibez.profile import get_subject_possessive
 from vibez.semantic_index import search_hybrid_pgvector
 
 logger = logging.getLogger("vibez.chat_agent")
@@ -48,7 +48,9 @@ def search_messages(
                 dimensions=pg_dimensions,
             )
         except Exception:
-            logger.exception("pgvector search failed; falling back to SQLite keyword search")
+            logger.exception(
+                "pgvector search failed; falling back to SQLite keyword search"
+            )
 
     conn = get_connection(db_path)
     cutoff_ts = int((datetime.now() - timedelta(days=lookback_days)).timestamp() * 1000)
@@ -115,7 +117,7 @@ def get_recent_summary(db_path: Path) -> str:
 
 async def chat(config: Config, question: str, lookback_days: int = 7) -> str:
     """Answer a question about the chat content."""
-    subject_name = get_subject_name(config.subject_name)
+    subject_name = config.subject_name
     subject_possessive = get_subject_possessive(subject_name)
 
     # Search for relevant messages

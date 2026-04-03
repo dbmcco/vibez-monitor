@@ -12,12 +12,11 @@ import anthropic
 
 from vibez.config import Config
 from vibez.links import upsert_links
-from vibez.db import get_connection, init_db
+from vibez.db import get_connection, init_db, invalidate_catchup_for_date
 from vibez.dossier import load_dossier, format_dossier_for_synthesis
 from vibez.paia_events_adapter import publish_event
 from vibez.profile import (
     DEFAULT_SUBJECT_NAME,
-    get_subject_name,
     get_subject_possessive,
 )
 from vibez.semantic_index import get_semantic_arc_hints
@@ -203,7 +202,7 @@ def build_synthesis_prompt(
     semantic_arc_hints: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the synthesis prompt from classified messages."""
-    resolved_subject = get_subject_name(subject_name)
+    resolved_subject = subject_name
     subject_possessive = get_subject_possessive(resolved_subject)
     groups = set(m["room_name"] for m in messages)
 
@@ -472,6 +471,8 @@ def save_daily_report(db_path: Path, report_date: str, report: dict[str, Any], b
     if report_links:
         upsert_links(db_path, report_links, report_date=report_date)
 
+    invalidate_catchup_for_date(db_path, report_date)
+
 
 def render_briefing_markdown(
     report: dict[str, Any],
@@ -479,7 +480,7 @@ def render_briefing_markdown(
     subject_name: str = DEFAULT_SUBJECT_NAME,
 ) -> str:
     """Render the synthesis report as readable markdown."""
-    resolved_subject = get_subject_name(subject_name)
+    resolved_subject = subject_name
     lines = [f"# Vibez Daily Briefing — {report_date}\n"]
     if report.get("daily_memo"):
         lines.append("## Daily Memo\n")
@@ -575,7 +576,7 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
 
     value_cfg = load_value_config(config.db_path)
     previous = get_previous_briefing(config.db_path)
-    subject_name = get_subject_name(config.subject_name)
+    subject_name = config.subject_name
     subject_possessive = get_subject_possessive(subject_name)
 
     # Load dossier context

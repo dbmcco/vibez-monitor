@@ -146,6 +146,20 @@ interface SemanticBriefing {
   arcs: SemanticArc[];
 }
 
+interface ThreadDeepDiveQuote {
+  id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+}
+
+interface ThreadDeepDiveData {
+  anchor: string | null;
+  quotes: ThreadDeepDiveQuote[];
+}
+
 function localIsoDate(): string {
   const now = new Date();
   const year = now.getFullYear();
@@ -160,6 +174,7 @@ export default function BriefingPage() {
   const [evidenceMessages, setEvidenceMessages] = useState<EvidenceMessage[]>([]);
   const [recentUpdate, setRecentUpdate] = useState<RecentUpdateSnapshot | null>(null);
   const [radar, setRadar] = useState<VibezRadarSnapshot | null>(null);
+  const [threadDeepDive, setThreadDeepDive] = useState<Record<string, ThreadDeepDiveData>>({});
   const [semanticBriefing, setSemanticBriefing] = useState<SemanticBriefing | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -177,18 +192,21 @@ export default function BriefingPage() {
             previous_report: Report | null;
             recent_update: RecentUpdateSnapshot | null;
             radar: VibezRadarSnapshot | null;
+            thread_deep_dive: Record<string, ThreadDeepDiveData>;
             semantic_briefing: SemanticBriefing | null;
           };
           setReport(payload.report || null);
           setPreviousReport(payload.previous_report || null);
           setRecentUpdate(payload.recent_update || null);
           setRadar(payload.radar || null);
+          setThreadDeepDive(payload.thread_deep_dive || {});
           setSemanticBriefing(payload.semantic_briefing || null);
         } else {
           setReport(null);
           setPreviousReport(null);
           setRecentUpdate(null);
           setRadar(null);
+          setThreadDeepDive({});
           setSemanticBriefing(null);
         }
         if (messageResult.status === "fulfilled") {
@@ -205,6 +223,7 @@ export default function BriefingPage() {
         setPreviousReport(null);
         setRecentUpdate(null);
         setRadar(null);
+        setThreadDeepDive({});
         setSemanticBriefing(null);
         setEvidenceMessages([]);
         setLoading(false);
@@ -261,6 +280,7 @@ export default function BriefingPage() {
         evidence_messages={evidenceMessages}
         recent_update={recentUpdate}
         radar={radar}
+        thread_deep_dive={threadDeepDive}
         semantic_briefing={semanticBriefing}
       />
     </div>

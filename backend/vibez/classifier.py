@@ -16,7 +16,6 @@ from vibez.db import get_connection
 from vibez.paia_events_adapter import publish_event
 from vibez.profile import (
     DEFAULT_SUBJECT_NAME,
-    get_subject_name,
     get_subject_possessive,
 )
 
@@ -61,7 +60,7 @@ def build_classify_prompt(
     subject_name: str = DEFAULT_SUBJECT_NAME,
 ) -> str:
     """Build the classification prompt for a single message."""
-    resolved_subject = get_subject_name(subject_name)
+    resolved_subject = subject_name
     subject_possessive = get_subject_possessive(resolved_subject)
     context_lines = ""
     if context_messages:
@@ -211,7 +210,7 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
 
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     value_cfg = load_value_config(config.db_path)
-    subject_name = get_subject_name(config.subject_name)
+    subject_name = config.subject_name
     subject_possessive = get_subject_possessive(subject_name)
 
     # Load dossier once for the batch

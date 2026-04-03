@@ -9,7 +9,6 @@ from pathlib import Path
 from vibez.profile import (
     DEFAULT_SUBJECT_NAME,
     get_dossier_path,
-    get_subject_name,
     get_subject_possessive,
 )
 
@@ -33,7 +32,7 @@ def format_dossier_for_classifier(
     dossier: dict, subject_name: str = DEFAULT_SUBJECT_NAME
 ) -> str:
     """Format dossier context for injection into classifier prompts."""
-    resolved_subject = get_subject_name(subject_name)
+    resolved_subject = subject_name
     subject_possessive = get_subject_possessive(resolved_subject)
     identity = dossier.get("identity", {})
     summary = dossier.get("summary", "")
@@ -69,7 +68,7 @@ def format_dossier_for_synthesis(
     dossier: dict, subject_name: str = DEFAULT_SUBJECT_NAME
 ) -> str:
     """Format dossier context for injection into synthesis prompts."""
-    resolved_subject = get_subject_name(subject_name)
+    resolved_subject = subject_name
     subject_possessive = get_subject_possessive(resolved_subject)
     identity = dossier.get("identity", {})
     summary = dossier.get("summary", "")

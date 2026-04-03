@@ -9,6 +9,7 @@ import {
 } from "@/lib/db";
 import { isPublicMode } from "@/lib/runtime";
 import { computeSemanticAnalytics } from "@/lib/semantic";
+import { buildBriefingThreadDeepDiveData } from "@/lib/briefing-deep-dive";
 
 function sanitizeReportContributions<T extends { contributions: string | null } | null>(
   report: T,
@@ -28,6 +29,13 @@ export async function GET(request: NextRequest) {
     const previous_report = report ? getPreviousReport(report.report_date) : null;
     const recent_update = getRecentUpdateSnapshot();
     const radar = await getVibezRadarSnapshot(report, 48);
+    const thread_deep_dive = report
+      ? buildBriefingThreadDeepDiveData({
+          briefing_json: report.briefing_json,
+          contributions: publicMode ? null : report.contributions,
+          conversation_arcs: report.conversation_arcs,
+        })
+      : {};
     const semantic_briefing =
       !date || date.length === 0
         ? await computeSemanticAnalytics({
@@ -44,14 +52,17 @@ export async function GET(request: NextRequest) {
         : previous_report,
       recent_update,
       radar,
+      thread_deep_dive,
       semantic_briefing,
     });
-  } catch {
+  } catch (error) {
+    console.error("briefing api failed", error);
     return NextResponse.json({
       report: null,
       previous_report: null,
       recent_update: null,
       radar: null,
+      thread_deep_dive: {},
       semantic_briefing: null,
     });
   }

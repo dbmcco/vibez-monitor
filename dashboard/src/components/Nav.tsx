@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 
 const ALL_LINKS = [
   { href: "/briefing", label: "Briefing" },
+  { href: "/catchup", label: "Catchup" },
   { href: "/wisdom", label: "Wisdom" },
   { href: "/links", label: "Links" },
   { href: "/stats", label: "Stats" },
@@ -17,6 +18,10 @@ const PAGE_INTENT: Record<string, string> = {
   "/": "Executive signal first: what changed, why it matters, and where to pay attention.",
   "/briefing":
     "Executive signal first: what changed, why it matters, and where to pay attention.",
+  "/briefing/trends":
+    "Trend coverage: unpack the trend narrative with deeper signal, evidence, and diagnostics.",
+  "/catchup":
+    "Time-window synthesis: get up to speed on what happened while you were away.",
   "/contribute":
     "Action queue: highest-value contributions filtered by urgency, need, and relationship leverage.",
   "/stats":

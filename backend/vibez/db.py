@@ -115,6 +115,15 @@ CREATE TABLE IF NOT EXISTS wisdom_recommendations (
     strength REAL DEFAULT 0.0,
     reason TEXT
 );
+
+CREATE TABLE IF NOT EXISTS catchup_cache (
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    stale INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (start_date, end_date)
+);
 """
 
 DEFAULT_VALUE_CONFIG = {
@@ -249,6 +258,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.executescript(WISDOM_SCHEMA)
         changed = True
 
+    if "catchup_cache" not in existing_tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS catchup_cache (
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                stale INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (start_date, end_date)
+            );
+        """)
+        changed = True
+
     if changed:
         conn.commit()
 
@@ -265,5 +287,16 @@ def init_db(db_path: str | Path) -> None:
                 "INSERT OR IGNORE INTO value_config (key, value) VALUES (?, ?)",
                 (key, json.dumps(value)),
             )
+    conn.commit()
+    conn.close()
+
+
+def invalidate_catchup_for_date(db_path: str | Path, date: str) -> None:
+    """Mark catchup cache entries stale if their window contains the given date."""
+    conn = get_connection(db_path)
+    conn.execute(
+        "UPDATE catchup_cache SET stale = 1 WHERE start_date <= ? AND end_date >= ?",
+        (date, date),
+    )
     conn.commit()
     conn.close()

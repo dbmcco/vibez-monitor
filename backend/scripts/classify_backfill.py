@@ -24,7 +24,7 @@ from vibez.classifier import (
 from vibez.profile import get_subject_name, get_subject_possessive
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:3b"  # faster than qwen3:8b (no thinking overhead)
+DEFAULT_MODEL = "qwen3:8b"  # qwen2.5:3b removed; qwen3:8b is the lightweight fallback
 DEFAULT_CONCURRENCY = 2  # light parallelism — Ollama can queue a small batch
 DEFAULT_NUM_PREDICT = 220
 DEFAULT_CHUNK_SIZE = 100
