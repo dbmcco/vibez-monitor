@@ -9,6 +9,8 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -69,6 +71,10 @@ Why: why it matters or when it applies
 Watchout: the main tradeoff, limit, or caveat (optional)
 
 State the advice directly. Do not mention the discussion, community, speakers, or that something was said."""
+
+WISDOM_WRITE_RETRY_ATTEMPTS = 5
+WISDOM_WRITE_RETRY_DELAY_SECONDS = 1.0
+WISDOM_WRITE_BUSY_TIMEOUT_MS = 30_000
 
 
 def _topic_slug(name: str) -> str:
@@ -289,6 +295,174 @@ def _load_watermark(conn: Any, full_rebuild: bool) -> int | None:
         return None
 
 
+def _persist_wisdom_results(
+    db_path: Path,
+    *,
+    full_rebuild: bool,
+    prepared_topics: dict[str, dict[str, Any]],
+    latest_timestamp: int,
+) -> dict[str, int]:
+    for attempt in range(1, WISDOM_WRITE_RETRY_ATTEMPTS + 1):
+        conn = get_connection(db_path)
+        try:
+            conn.execute(f"PRAGMA busy_timeout={WISDOM_WRITE_BUSY_TIMEOUT_MS}")
+            conn.execute("BEGIN IMMEDIATE")
+
+            if full_rebuild:
+                conn.execute("DELETE FROM wisdom_recommendations")
+                conn.execute("DELETE FROM wisdom_items")
+                conn.execute("DELETE FROM wisdom_topics")
+
+            topics_created = 0
+            items_saved = 0
+            topic_metadata: dict[str, dict[str, Any]] = {}
+
+            for slug, topic in prepared_topics.items():
+                existing = conn.execute("SELECT id FROM wisdom_topics WHERE slug = ?", (slug,)).fetchone()
+                if existing:
+                    topic_id = existing[0]
+                    conn.execute(
+                        "UPDATE wisdom_topics SET name = ?, summary = ?, message_count = ?, contributor_count = ?, "
+                        "last_active = ?, updated_at = ? WHERE id = ?",
+                        (
+                            topic["topic_name"],
+                            topic["summary"] or None,
+                            len(topic["source_message_ids"]),
+                            len(topic["contributors"]),
+                            topic["last_active"],
+                            topic["updated_at"],
+                            topic_id,
+                        ),
+                    )
+                else:
+                    cursor = conn.execute(
+                        "INSERT INTO wisdom_topics (name, slug, summary, message_count, contributor_count, "
+                        "last_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            topic["topic_name"],
+                            slug,
+                            topic["summary"] or None,
+                            len(topic["source_message_ids"]),
+                            len(topic["contributors"]),
+                            topic["last_active"],
+                            topic["updated_at"],
+                            topic["updated_at"],
+                        ),
+                    )
+                    topic_id = cursor.lastrowid
+                    topics_created += 1
+
+                seen_titles: set[str] = set()
+                for item in topic["items"]:
+                    title = item["title"]
+                    title_key = hashlib.md5(f"{slug}:{title}".lower().encode()).hexdigest()
+                    if title_key in seen_titles:
+                        continue
+                    seen_titles.add(title_key)
+
+                    knowledge_type = str(item.get("knowledge_type", "opinion") or "opinion")
+                    if knowledge_type not in KNOWLEDGE_TYPES:
+                        knowledge_type = "opinion"
+
+                    existing_item = conn.execute(
+                        "SELECT id FROM wisdom_items WHERE topic_id = ? AND lower(title) = lower(?)",
+                        (topic_id, title),
+                    ).fetchone()
+                    values = (
+                        knowledge_type,
+                        item.get("summary", "") or None,
+                        json.dumps(_normalize_string_list(item.get("links"))),
+                        json.dumps(item.get("_source_messages", [])),
+                        json.dumps(_normalize_string_list(item.get("contributors"))),
+                        float(item.get("confidence", 0.5) or 0.5),
+                        topic["updated_at"],
+                    )
+                    if existing_item:
+                        conn.execute(
+                            "UPDATE wisdom_items SET knowledge_type = ?, summary = ?, source_links = ?, "
+                            "source_messages = ?, contributors = ?, confidence = ?, updated_at = ? "
+                            "WHERE id = ?",
+                            (*values, existing_item[0]),
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO wisdom_items (topic_id, knowledge_type, title, summary, "
+                            "source_links, source_messages, contributors, confidence, created_at, updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                topic_id,
+                                knowledge_type,
+                                title,
+                                item.get("summary", "") or None,
+                                json.dumps(_normalize_string_list(item.get("links"))),
+                                json.dumps(item.get("_source_messages", [])),
+                                json.dumps(_normalize_string_list(item.get("contributors"))),
+                                float(item.get("confidence", 0.5) or 0.5),
+                                topic["updated_at"],
+                                topic["updated_at"],
+                            ),
+                        )
+                    items_saved += 1
+
+                topic_metadata[slug] = {"id": topic_id, "contributors": set(topic["contributors"])}
+
+            recommendations_created = 0
+            processed_topic_ids = {meta["id"] for meta in topic_metadata.values()}
+            if processed_topic_ids:
+                placeholders = ",".join("?" for _ in processed_topic_ids)
+                conn.execute(
+                    f"DELETE FROM wisdom_recommendations WHERE from_topic_id IN ({placeholders}) OR to_topic_id IN ({placeholders})",
+                    [*processed_topic_ids, *processed_topic_ids],
+                )
+
+            slugs = list(topic_metadata.keys())
+            for index, slug_a in enumerate(slugs):
+                for slug_b in slugs[index + 1 :]:
+                    shared = topic_metadata[slug_a]["contributors"] & topic_metadata[slug_b]["contributors"]
+                    if len(shared) < 2:
+                        continue
+                    reason = f"Shared contributors: {', '.join(sorted(shared)[:5])}"
+                    strength = min(1.0, len(shared) / 5.0)
+                    conn.execute(
+                        "INSERT INTO wisdom_recommendations (from_topic_id, to_topic_id, strength, reason) "
+                        "VALUES (?, ?, ?, ?)",
+                        (
+                            topic_metadata[slug_a]["id"],
+                            topic_metadata[slug_b]["id"],
+                            strength,
+                            reason,
+                        ),
+                    )
+                    recommendations_created += 1
+
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('wisdom_last_run', ?)",
+                (str(latest_timestamp),),
+            )
+            conn.commit()
+            return {
+                "items_extracted": items_saved,
+                "topics_created": topics_created,
+                "recommendations_created": recommendations_created,
+            }
+        except sqlite3.OperationalError as exc:
+            conn.rollback()
+            if "database is locked" not in str(exc).lower() or attempt == WISDOM_WRITE_RETRY_ATTEMPTS:
+                raise
+            delay = WISDOM_WRITE_RETRY_DELAY_SECONDS * attempt
+            logger.warning(
+                "Wisdom write hit a locked database; retrying in %.1fs (%d/%d)",
+                delay,
+                attempt,
+                WISDOM_WRITE_RETRY_ATTEMPTS,
+            )
+            time.sleep(delay)
+        finally:
+            conn.close()
+
+    raise RuntimeError("Wisdom write retry loop exited unexpectedly")
+
+
 def run_wisdom_extraction(
     db_path: Path,
     api_key: str,
@@ -348,16 +522,7 @@ def run_wisdom_extraction(
         }
         topic_items.setdefault(slug, []).append(normalized)
 
-    conn = get_connection(db_path)
-    if full_rebuild:
-        conn.execute("DELETE FROM wisdom_recommendations")
-        conn.execute("DELETE FROM wisdom_items")
-        conn.execute("DELETE FROM wisdom_topics")
-
-    topics_created = 0
-    items_saved = 0
-    topic_metadata: dict[str, dict[str, Any]] = {}
-
+    prepared_topics: dict[str, dict[str, Any]] = {}
     for slug, items in topic_items.items():
         topic_name = items[0]["_topic_name"]
         summary = synthesize_topic(client, model, topic_name, items) if items else ""
@@ -384,137 +549,29 @@ def run_wisdom_extraction(
         )
         last_active = _format_iso_from_ms(last_timestamp)
         now = _now_iso()
-
-        existing = conn.execute("SELECT id FROM wisdom_topics WHERE slug = ?", (slug,)).fetchone()
-        if existing:
-            topic_id = existing[0]
-            conn.execute(
-                "UPDATE wisdom_topics SET name = ?, summary = ?, message_count = ?, contributor_count = ?, "
-                "last_active = ?, updated_at = ? WHERE id = ?",
-                (
-                    topic_name,
-                    summary or None,
-                    len(source_message_ids),
-                    len(contributors),
-                    last_active,
-                    now,
-                    topic_id,
-                ),
-            )
-        else:
-            cursor = conn.execute(
-                "INSERT INTO wisdom_topics (name, slug, summary, message_count, contributor_count, "
-                "last_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    topic_name,
-                    slug,
-                    summary or None,
-                    len(source_message_ids),
-                    len(contributors),
-                    last_active,
-                    now,
-                    now,
-                ),
-            )
-            topic_id = cursor.lastrowid
-            topics_created += 1
-
-        seen_titles: set[str] = set()
-        for item in items:
-            title = item["title"]
-            title_key = hashlib.md5(f"{slug}:{title}".lower().encode()).hexdigest()
-            if title_key in seen_titles:
-                continue
-            seen_titles.add(title_key)
-
-            knowledge_type = str(item.get("knowledge_type", "opinion") or "opinion")
-            if knowledge_type not in KNOWLEDGE_TYPES:
-                knowledge_type = "opinion"
-
-            existing_item = conn.execute(
-                "SELECT id FROM wisdom_items WHERE topic_id = ? AND lower(title) = lower(?)",
-                (topic_id, title),
-            ).fetchone()
-            values = (
-                knowledge_type,
-                item.get("summary", "") or None,
-                json.dumps(_normalize_string_list(item.get("links"))),
-                json.dumps(item.get("_source_messages", [])),
-                json.dumps(_normalize_string_list(item.get("contributors"))),
-                float(item.get("confidence", 0.5) or 0.5),
-                now,
-            )
-            if existing_item:
-                conn.execute(
-                    "UPDATE wisdom_items SET knowledge_type = ?, summary = ?, source_links = ?, "
-                    "source_messages = ?, contributors = ?, confidence = ?, updated_at = ? "
-                    "WHERE id = ?",
-                    (*values, existing_item[0]),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO wisdom_items (topic_id, knowledge_type, title, summary, "
-                    "source_links, source_messages, contributors, confidence, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        topic_id,
-                        knowledge_type,
-                        title,
-                        item.get("summary", "") or None,
-                        json.dumps(_normalize_string_list(item.get("links"))),
-                        json.dumps(item.get("_source_messages", [])),
-                        json.dumps(_normalize_string_list(item.get("contributors"))),
-                        float(item.get("confidence", 0.5) or 0.5),
-                        now,
-                        now,
-                    ),
-                )
-            items_saved += 1
-
-        topic_metadata[slug] = {"id": topic_id, "contributors": set(contributors)}
-
-    recommendations_created = 0
-    processed_topic_ids = {meta["id"] for meta in topic_metadata.values()}
-    if processed_topic_ids:
-        placeholders = ",".join("?" for _ in processed_topic_ids)
-        conn.execute(
-            f"DELETE FROM wisdom_recommendations WHERE from_topic_id IN ({placeholders}) OR to_topic_id IN ({placeholders})",
-            [*processed_topic_ids, *processed_topic_ids],
-        )
-
-    slugs = list(topic_metadata.keys())
-    for index, slug_a in enumerate(slugs):
-        for slug_b in slugs[index + 1 :]:
-            shared = topic_metadata[slug_a]["contributors"] & topic_metadata[slug_b]["contributors"]
-            if len(shared) < 2:
-                continue
-            reason = f"Shared contributors: {', '.join(sorted(shared)[:5])}"
-            strength = min(1.0, len(shared) / 5.0)
-            conn.execute(
-                "INSERT INTO wisdom_recommendations (from_topic_id, to_topic_id, strength, reason) "
-                "VALUES (?, ?, ?, ?)",
-                (
-                    topic_metadata[slug_a]["id"],
-                    topic_metadata[slug_b]["id"],
-                    strength,
-                    reason,
-                ),
-            )
-            recommendations_created += 1
-
+        prepared_topics[slug] = {
+            "topic_name": topic_name,
+            "summary": summary or None,
+            "contributors": contributors,
+            "source_message_ids": source_message_ids,
+            "last_active": last_active,
+            "updated_at": now,
+            "items": items,
+        }
     latest_timestamp = max(int(msg.get("timestamp", 0) or 0) for msg in messages)
-    conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('wisdom_last_run', ?)",
-        (str(latest_timestamp),),
+
+    persisted = _persist_wisdom_results(
+        db_path,
+        full_rebuild=full_rebuild,
+        prepared_topics=prepared_topics,
+        latest_timestamp=latest_timestamp,
     )
-    conn.commit()
-    conn.close()
 
     result = {
         "chunks_processed": len(chunks),
-        "items_extracted": items_saved,
-        "topics_created": topics_created,
-        "recommendations_created": recommendations_created,
+        "items_extracted": persisted["items_extracted"],
+        "topics_created": persisted["topics_created"],
+        "recommendations_created": persisted["recommendations_created"],
     }
     logger.info("Wisdom extraction complete: %s", result)
     return result

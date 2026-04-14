@@ -1,4 +1,7 @@
 import json
+import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 
 from vibez.db import get_connection, init_db
@@ -219,3 +222,62 @@ def test_run_wisdom_extraction_falls_back_to_best_item_summary_when_topic_synthe
     assert summary == (
         "People kept coming back to review loops as the thing that catches bad model output.",
     )
+
+
+def test_run_wisdom_extraction_retries_locked_writes(tmp_db, monkeypatch):
+    init_db(tmp_db)
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO messages (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("m1", "room-a", "AGI House", "u1", "Alice", "Detailed notes on agents", 1_000, "{}"),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("vibez.wisdom.Anthropic", _FakeAnthropic)
+    monkeypatch.setattr(
+        "vibez.wisdom.classify_chunk",
+        lambda _client, _model, _chunk: [
+            {
+                "knowledge_type": "opinion",
+                "topic": "Agent Reviews",
+                "title": "Review loops matter",
+                "summary": "Review loops catch bad model output before it lands.",
+                "contributors": ["Alice"],
+                "links": [],
+                "confidence": 0.7,
+            }
+        ],
+    )
+    monkeypatch.setattr("vibez.wisdom.synthesize_topic", lambda *_args, **_kwargs: "Agent Reviews consensus")
+    monkeypatch.setattr("vibez.wisdom.WISDOM_WRITE_RETRY_DELAY_SECONDS", 0.05)
+    monkeypatch.setattr("vibez.wisdom.WISDOM_WRITE_BUSY_TIMEOUT_MS", 10)
+
+    lock_conn = sqlite3.connect(str(tmp_db), timeout=0.0, check_same_thread=False)
+    lock_conn.execute("PRAGMA journal_mode=WAL")
+    lock_conn.execute("BEGIN IMMEDIATE")
+
+    result_holder: dict[str, object] = {}
+    error_holder: dict[str, Exception] = {}
+
+    def run_job() -> None:
+        try:
+            result_holder["result"] = run_wisdom_extraction(tmp_db, api_key="test-key", full_rebuild=True)
+        except Exception as exc:  # pragma: no cover - assertion below surfaces details
+            error_holder["error"] = exc
+
+    worker = threading.Thread(target=run_job)
+    worker.start()
+    time.sleep(0.1)
+    lock_conn.rollback()
+    lock_conn.close()
+    worker.join(timeout=5)
+
+    assert "error" not in error_holder
+    assert result_holder["result"] == {
+        "chunks_processed": 1,
+        "items_extracted": 1,
+        "topics_created": 1,
+        "recommendations_created": 0,
+    }

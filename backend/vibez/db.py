@@ -187,8 +187,9 @@ CREATE TABLE IF NOT EXISTS wisdom_recommendations (
 
 def get_connection(db_path: str | Path) -> sqlite3.Connection:
     """Get a SQLite connection with WAL mode enabled."""
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
