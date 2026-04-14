@@ -15,7 +15,6 @@ export VIBEZ_DB_PATH="${VIBEZ_DB_PATH:-$ROOT_DIR/vibez.db}"
 export VIBEZ_PGVECTOR_INDEX_ON_SYNC=false
 export VIBEZ_SYNC_ONCE_RUN_SYNTHESIS=false
 LOOKBACK_DAYS="${VIBEZ_PUSH_LOOKBACK_DAYS:-2}"
-RUN_REMOTE_REFRESH=1
 BACKFILL_YEAR=0
 PUSH_ONLY=0
 
@@ -29,17 +28,13 @@ while [[ $# -gt 0 ]]; do
       LOOKBACK_DAYS="$2"
       shift 2
       ;;
-    --skip-remote-refresh)
-      RUN_REMOTE_REFRESH=0
-      shift
-      ;;
     --push-only)
       PUSH_ONLY=1
       shift
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: ./scripts/local_sync_to_railway.sh [--backfill-year] [--lookback-days N] [--skip-remote-refresh] [--push-only]" >&2
+      echo "Usage: ./scripts/local_sync_to_railway.sh [--backfill-year] [--lookback-days N] [--push-only]" >&2
       exit 1
       ;;
   esac
@@ -98,36 +93,5 @@ echo "Pushing local data to Railway (lookback=${LOOKBACK_DAYS}d)..."
 "$PYTHON_BIN" backend/scripts/push_remote.py \
   --lookback-days "$LOOKBACK_DAYS" \
   --batch-size "${VIBEZ_PUSH_BATCH_SIZE:-400}"
-
-refresh_remote_basics() {
-  echo "Refreshing remote message links..."
-  "$RAILWAY_BIN" ssh --service dashboard \
-    "python backend/scripts/refresh_message_links.py --db /data/vibez.db"
-  echo "Refreshing remote wisdom..."
-  "$RAILWAY_BIN" ssh --service dashboard \
-    "python backend/scripts/run_wisdom.py /data/vibez.db"
-  echo "Enriching remote link authorship..."
-  "$RAILWAY_BIN" ssh --service dashboard \
-    "python backend/scripts/enrich_link_authors.py --limit 200"
-}
-
-RAILWAY_BIN="${RAILWAY_BIN:-$(command -v railway || true)}"
-if [[ -n "$RAILWAY_BIN" ]]; then
-  refresh_remote_basics
-  if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
-    REMOTE_INDEX_LOOKBACK="${VIBEZ_REMOTE_INDEX_LOOKBACK_DAYS:-$LOOKBACK_DAYS}"
-    echo "Refreshing remote pgvector index (${REMOTE_INDEX_LOOKBACK}d)..."
-    "$RAILWAY_BIN" ssh --service dashboard \
-      "python backend/scripts/pgvector_index.py --lookback-days ${REMOTE_INDEX_LOOKBACK}"
-    echo "Refreshing remote synthesis..."
-    "$RAILWAY_BIN" ssh --service dashboard \
-      "python backend/scripts/run_synthesis.py"
-  fi
-else
-  echo "railway CLI not found; skipped remote links/wisdom/author enrichment."
-  if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
-    echo "railway CLI not found; skipped remote pgvector/synthesis refresh."
-  fi
-fi
 
 echo "Local -> Railway sync complete."

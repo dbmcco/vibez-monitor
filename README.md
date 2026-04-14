@@ -72,7 +72,7 @@ Built for personal intelligence workflows, but structured so anyone can run it w
 1. `run_sync.py` (continuous) or `run_sync_once.py` (scheduled) ingests source data and normalizes messages into SQLite.
 2. Classification enriches messages with relevance, topics, needs, and contribution signals.
 3. Optional pgvector indexing mirrors embeddings for semantic retrieval and clustering.
-4. `run_synthesis.py` generates daily briefing artifacts and chat context resources.
+4. Local analysis jobs refresh links, wisdom, and daily briefing artifacts in SQLite.
 5. Next.js API routes read SQLite/pgvector-backed analytics and expose dashboard endpoints.
 6. Dashboard UI provides Chat, Briefing, Contribute, Stats, and Settings workflows.
 
@@ -156,11 +156,13 @@ npm install
 cd ..
 ```
 
-4. Run sync + synthesis manually:
+4. Run sync + local analysis manually:
 
 ```bash
 backend/.venv/bin/python backend/scripts/run_sync.py
 backend/.venv/bin/python backend/scripts/run_sync_once.py
+backend/.venv/bin/python backend/scripts/refresh_message_links.py --db vibez.db
+backend/.venv/bin/python backend/scripts/run_wisdom.py vibez.db
 backend/.venv/bin/python backend/scripts/run_synthesis.py
 ```
 
@@ -207,18 +209,21 @@ Where pgvector materially improves output:
 
 Supported topology: a **single `dashboard` service** backed by a **Railway Volume** for SQLite.
 
-SQLite is a single-file database — it cannot be shared across multiple Railway containers. Sync and synthesis run locally (or via `scripts/local_sync_to_railway.sh`) and push data into the Railway-hosted dashboard. See [Local -> Railway Sync](#local---railway-sync-beeper--google-groups) below.
+SQLite is a single-file database. It cannot be shared across multiple Railway containers, and this app now treats Railway as a serving replica only. All background sync and analysis run locally, then `scripts/local_sync_to_railway.sh` pushes the resulting raw and derived state into the Railway-hosted dashboard. See [Local -> Railway Sync](#local---railway-sync-beeper--google-groups) below.
 
 What runs on Railway:
 
 - `dashboard` web service — serves the Next.js UI + API routes.
 - A Railway Volume mounted at `/data` — stores `vibez.db`.
 - (Optional) Railway Postgres for pgvector embeddings.
+- No background inference loops.
 
 What runs locally:
 
 - `run_sync.py` / `run_sync_once.py` — ingests from Beeper Desktop and/or Google Groups.
-- `run_synthesis.py` — generates briefing artifacts.
+- `refresh_message_links.py` / `enrich_link_authors.py` — maintains local link metadata.
+- `run_wisdom.py` — extracts and updates local wisdom tables.
+- `run_synthesis.py` — generates local briefing artifacts.
 - `local_sync_to_railway.sh` — pushes local data to Railway.
 
 Key env vars for the Railway dashboard service:
@@ -311,21 +316,21 @@ Run a one-time historical backfill (about 1 year) then push:
 Run a lightweight push-only sync when your local daemon is already ingesting:
 
 ```bash
-./scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh
+./scripts/local_sync_to_railway.sh --push-only
 ```
 
 What this does:
 
 - Runs local one-shot sync (Beeper + Google Groups).
 - Pushes local messages/classifications into Railway in batches.
-- Refreshes Railway links + wisdom incrementally after push.
-- Refreshes Railway pgvector index + synthesis after push unless `--skip-remote-refresh` is used.
+- Pushes locally computed links, daily reports, wisdom tables, and sync-state watermarks into Railway.
+- Does not ask Railway to run sync, links, wisdom, synthesis, or any other background analysis.
 - Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
 - Applies `VIBEZ_ALLOWED_GROUPS` to both Beeper room titles and Google Group keys, so you can publish only the approved AGI rooms plus `made-of-meat`.
 
 `--push-only` skips the local ingest step and only uploads the existing local SQLite rows to Railway.
 Use that mode for frequent background freshness when `run_sync.py` is already running continuously.
-`--skip-remote-refresh` now skips only the heavier pgvector + synthesis refresh; links, wisdom, and link authorship maintenance still run remotely.
+Keep links, wisdom, synthesis, and any backlog repair jobs on the local machine so Railway remains a pure serving target.
 
 ## Profile Personalization
 
@@ -348,7 +353,7 @@ Replace placeholders before loading:
 - `__LOG_DIR__`
 
 For cloud sharing from local Beeper, load `com.vibez-monitor.push-railway.plist` to run
-`scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh` every 15 minutes.
+`scripts/local_sync_to_railway.sh --push-only` every 15 minutes.
 
 See [launchd/README.md](launchd/README.md) for a complete setup command sequence.
 
