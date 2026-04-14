@@ -48,6 +48,18 @@ def load_excluded_groups() -> set[str]:
     return parse_excluded_groups(os.environ.get("VIBEZ_EXCLUDED_GROUPS"))
 
 
+def parse_allowed_groups(raw: str | None) -> set[str]:
+    """Parse allowed group names from a comma-separated env var."""
+    if raw is None:
+        return set()
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
+def load_allowed_groups() -> set[str]:
+    """Load allowed group names from env, defaulting to no allowlist."""
+    return parse_allowed_groups(os.environ.get("VIBEZ_ALLOWED_GROUPS"))
+
+
 def check_token_health(base_url: str, token: str) -> None:
     """Check token validity and warn if near expiry."""
     try:
@@ -90,11 +102,18 @@ def api_get(base_url: str, path: str, token: str, params: dict | None = None) ->
 
 
 def get_whatsapp_groups(
-    base_url: str, token: str, excluded_groups: set[str] | None = None,
+    base_url: str,
+    token: str,
+    excluded_groups: set[str] | None = None,
+    allowed_groups: set[str] | None = None,
 ) -> list[dict]:
     """List WhatsApp group chats from Beeper, excluding non-community groups."""
     if excluded_groups is None:
         excluded_groups = load_excluded_groups()
+    if allowed_groups is None:
+        allowed_groups = load_allowed_groups()
+    excluded_groups_normalized = {name.strip().casefold() for name in excluded_groups}
+    allowed_groups_normalized = {name.strip().casefold() for name in allowed_groups}
 
     def is_whatsapp_group(chat: dict) -> bool:
         network = str(chat.get("network", "")).strip().casefold()
@@ -112,7 +131,11 @@ def get_whatsapp_groups(
     return [
         c for c in data.get("items", [])
         if is_whatsapp_group(c)
-        and c.get("title") not in excluded_groups
+        and str(c.get("title", "")).strip().casefold() not in excluded_groups_normalized
+        and (
+            not allowed_groups_normalized
+            or str(c.get("title", "")).strip().casefold() in allowed_groups_normalized
+        )
     ]
 
 

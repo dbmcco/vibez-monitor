@@ -55,6 +55,7 @@ class Config:
     google_groups_imap_password: str = ""
     google_groups_imap_mailbox: str = "INBOX"
     google_groups_list_ids: tuple[str, ...] = field(default_factory=tuple)
+    allowed_groups: tuple[str, ...] = field(default_factory=tuple)
     google_groups_poll_interval: int = 60
     google_groups_bootstrap_days: int = 14
     google_groups_bootstrap_max_uids: int = 2000
@@ -140,6 +141,7 @@ class Config:
             google_groups_list_ids=_parse_csv(
                 os.environ.get("GOOGLE_GROUPS_LIST_IDS")
             ),
+            allowed_groups=_parse_csv(os.environ.get("VIBEZ_ALLOWED_GROUPS")),
             google_groups_poll_interval=int(
                 os.environ.get("GOOGLE_GROUPS_POLL_INTERVAL", "60")
             ),

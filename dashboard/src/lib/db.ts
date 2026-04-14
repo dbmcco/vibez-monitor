@@ -63,6 +63,15 @@ function loadExcludedGroups(): string[] {
   return Array.from(new Set([...base, ...publicList]));
 }
 
+function loadAllowedGroups(): string[] {
+  const raw = process.env.VIBEZ_ALLOWED_GROUPS;
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
 function isPublicModeEnabled(): boolean {
   const raw = process.env.VIBEZ_PUBLIC_MODE || process.env.NEXT_PUBLIC_VIBEZ_PUBLIC_MODE;
   return typeof raw === "string" && ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
@@ -92,6 +101,26 @@ function loadRoomScope(db: Database.Database): RoomScope {
   const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));
   const activeGroupNames = Array.from(new Set([...beeperActiveGroupNames, ...googleGroupKeys]));
   const excludedGroups = normalizeExclusionList(loadExcludedGroups());
+  const allowedGroups = loadAllowedGroups();
+
+  if (allowedGroups.length > 0) {
+    const allowedGroupSet = new Set(allowedGroups.map((name) => name.toLowerCase()));
+    const allowedBeeperGroupIds =
+      beeperActiveGroupIds.length === beeperActiveGroupNames.length
+        ? beeperActiveGroupIds.filter((_, index) =>
+            allowedGroupSet.has((beeperActiveGroupNames[index] || "").toLowerCase()),
+          )
+        : [];
+    const allowedGoogleGroupIds = googleGroupKeys
+      .filter((groupKey) => allowedGroupSet.has(groupKey.toLowerCase()))
+      .map((groupKey) => `googlegroup:${groupKey}`);
+    return {
+      mode: "active_groups",
+      activeGroupIds: Array.from(new Set([...allowedBeeperGroupIds, ...allowedGoogleGroupIds])),
+      activeGroupNames: Array.from(new Set(allowedGroups)),
+      excludedGroups,
+    };
+  }
 
   if (activeGroupIds.length > 0 || activeGroupNames.length > 0) {
     return { mode: "active_groups", activeGroupIds, activeGroupNames, excludedGroups };
@@ -121,8 +150,8 @@ function buildRoomScopeWhere(alias: string, scope: RoomScope): {
       params.push(...scope.activeGroupIds);
     }
     if (scope.activeGroupNames.length > 0) {
-      parts.push(`${alias}.room_name IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
-      params.push(...scope.activeGroupNames);
+      parts.push(`LOWER(${alias}.room_name) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
+      params.push(...scope.activeGroupNames.map((name) => name.toLowerCase()));
     }
     return {
       clause: `(${parts.join(" OR ")})`,

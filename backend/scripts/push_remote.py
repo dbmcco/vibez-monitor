@@ -118,11 +118,20 @@ def load_excluded_groups() -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
+def load_allowed_groups() -> set[str]:
+    raw = os.environ.get("VIBEZ_ALLOWED_GROUPS", "").strip()
+    if not raw:
+        return set()
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 def fetch_records(
     db_path: Path,
     cutoff_ts: int | None,
+    allowed_groups: set[str],
     excluded_groups: set[str],
 ) -> list[dict[str, Any]]:
+    allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     cursor = conn.execute(
@@ -156,6 +165,8 @@ def fetch_records(
     records: list[dict[str, Any]] = []
     for row in rows:
         room_name = str(row["room_name"] or "")
+        if allowed_groups_normalized and room_name.strip().casefold() not in allowed_groups_normalized:
+            continue
         if room_name.strip().lower() in excluded_groups:
             continue
         message = {
@@ -183,7 +194,12 @@ def fetch_records(
     return records
 
 
-def fetch_sync_state(db_path: Path, excluded_groups: set[str]) -> dict[str, str]:
+def fetch_sync_state(
+    db_path: Path,
+    allowed_groups: set[str],
+    excluded_groups: set[str],
+) -> dict[str, str]:
+    allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
     conn = sqlite3.connect(str(db_path))
     cursor = conn.execute(
         f"""
@@ -196,7 +212,7 @@ def fetch_sync_state(db_path: Path, excluded_groups: set[str]) -> dict[str, str]
     rows = cursor.fetchall()
     conn.close()
     state = {str(key): str(value) for key, value in rows}
-    if not excluded_groups:
+    if not allowed_groups and not excluded_groups:
         return state
 
     names = parse_json_array(state.get("beeper_active_group_names"))
@@ -205,7 +221,11 @@ def fetch_sync_state(db_path: Path, excluded_groups: set[str]) -> dict[str, str]
         filtered_pairs = [
             (group_id, name)
             for group_id, name in zip(ids, names)
-            if name.strip().lower() not in excluded_groups
+            if (
+                not allowed_groups_normalized
+                or name.strip().casefold() in allowed_groups_normalized
+            )
+            and name.strip().lower() not in excluded_groups
         ]
         state["beeper_active_group_ids"] = json.dumps(
             [pair[0] for pair in filtered_pairs]
@@ -213,6 +233,17 @@ def fetch_sync_state(db_path: Path, excluded_groups: set[str]) -> dict[str, str]
         state["beeper_active_group_names"] = json.dumps(
             [pair[1] for pair in filtered_pairs]
         )
+    google_group_keys = parse_json_array(state.get("google_groups_active_group_keys"))
+    if google_group_keys:
+        filtered_google_group_keys = [
+            group_key
+            for group_key in google_group_keys
+            if (
+                not allowed_groups_normalized
+                or group_key.strip().casefold() in allowed_groups_normalized
+            )
+        ]
+        state["google_groups_active_group_keys"] = json.dumps(filtered_google_group_keys)
     return state
 
 
@@ -330,13 +361,16 @@ def main() -> int:
 
     batch_size = clamp_batch_size(args.batch_size)
     cutoff_ts = resolve_cutoff_ts(args.lookback_days)
+    allowed_groups = load_allowed_groups()
     excluded_groups = load_excluded_groups()
-    records = fetch_records(db_path, cutoff_ts, excluded_groups)
-    sync_state = fetch_sync_state(db_path, excluded_groups)
+    records = fetch_records(db_path, cutoff_ts, allowed_groups, excluded_groups)
+    sync_state = fetch_sync_state(db_path, allowed_groups, excluded_groups)
 
     window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"
     print(f"Local DB: {db_path}")
     print(f"Window: {window_label}")
+    if allowed_groups:
+        print(f"Allowed groups: {', '.join(sorted(allowed_groups))}")
     if excluded_groups:
         print(f"Excluded groups: {', '.join(sorted(excluded_groups))}")
     print(f"Records to push: {len(records)}")

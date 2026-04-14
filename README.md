@@ -286,12 +286,14 @@ Required local `.env`:
 VIBEZ_REMOTE_URL=https://dashboard-production-8686.up.railway.app
 VIBEZ_ACCESS_CODE=your-access-code
 VIBEZ_PUSH_API_KEY=your-ingest-key
+VIBEZ_ALLOWED_GROUPS=Show and Tell,The vibez (code code code),Off-topic,Agentic Weather Report,Intros <—- start here,Personal Agents 🦞🦀🛫😱,futures and scenarios AGI,Security,#ai-oss,Marketing and Content AGI,Personal workflows,Applied Business AGI,Presentation AGI,decentralized agi,audio intelligence,made-of-meat
 ```
 
 Required Railway env (dashboard service):
 
 ```bash
 VIBEZ_PUSH_API_KEY=your-ingest-key
+VIBEZ_ALLOWED_GROUPS=Show and Tell,The vibez (code code code),Off-topic,Agentic Weather Report,Intros <—- start here,Personal Agents 🦞🦀🛫😱,futures and scenarios AGI,Security,#ai-oss,Marketing and Content AGI,Personal workflows,Applied Business AGI,Presentation AGI,decentralized agi,audio intelligence,made-of-meat
 ```
 
 Run a normal push (new data, last 2 days):
@@ -318,6 +320,7 @@ What this does:
 - Pushes local messages/classifications into Railway in batches.
 - Refreshes Railway pgvector index + synthesis after push.
 - Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
+- Applies `VIBEZ_ALLOWED_GROUPS` to both Beeper room titles and Google Group keys, so you can publish only the approved AGI rooms plus `made-of-meat`.
 
 `--push-only` skips the local ingest step and only uploads the existing local SQLite rows to Railway.
 Use that mode for frequent background freshness when `run_sync.py` is already running continuously.

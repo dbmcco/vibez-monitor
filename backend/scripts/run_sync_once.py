@@ -101,6 +101,8 @@ async def classify_and_index(config: Config, messages: list[dict]) -> None:
 async def main() -> None:
     config = Config.from_env()
     config.log_dir.mkdir(parents=True, exist_ok=True)
+    allowed_groups = {name for name in config.allowed_groups if name}
+    allowed_groups_normalized = {name.strip().casefold() for name in allowed_groups}
 
     logging.basicConfig(
         level=logging.INFO,
@@ -117,6 +119,10 @@ async def main() -> None:
         for raw in config.google_groups_list_ids
         if (key := canonical_group_key(raw))
     }
+    if allowed_groups_normalized:
+        google_groups = {
+            key for key in google_groups if key.strip().casefold() in allowed_groups_normalized
+        }
     beeper_enabled = bool(config.beeper_api_token)
     google_enabled = bool(config.google_groups_enabled and google_groups)
 

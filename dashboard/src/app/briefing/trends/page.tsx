@@ -337,8 +337,8 @@ function buildRoomScopeWhere(scope: RoomScope, alias: string): { clause: string;
       params.push(...scope.activeGroupIds);
     }
     if (scope.activeGroupNames.length > 0) {
-      parts.push(`${alias}.room_name IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
-      params.push(...scope.activeGroupNames);
+      parts.push(`LOWER(${alias}.room_name) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
+      params.push(...scope.activeGroupNames.map((name) => name.toLowerCase()));
     }
     return {
       clause: `(${parts.join(" OR ")})`,

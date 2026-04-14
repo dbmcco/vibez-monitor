@@ -16,6 +16,25 @@ def test_load_excluded_groups_reads_env_override(monkeypatch):
     assert excluded == {"BBC News", "Custom Chatter", "Plum"}
 
 
+def test_load_allowed_groups_uses_empty_set_when_env_missing(monkeypatch):
+    monkeypatch.delenv("VIBEZ_ALLOWED_GROUPS", raising=False)
+    allowed = beeper_sync.load_allowed_groups()
+    assert allowed == set()
+
+
+def test_load_allowed_groups_reads_env_values(monkeypatch):
+    monkeypatch.setenv(
+        "VIBEZ_ALLOWED_GROUPS",
+        "Show and Tell, The vibez (code code code),  audio intelligence  ,",
+    )
+    allowed = beeper_sync.load_allowed_groups()
+    assert allowed == {
+        "Show and Tell",
+        "The vibez (code code code)",
+        "audio intelligence",
+    }
+
+
 def test_get_whatsapp_groups_filters_to_whatsapp_groups(monkeypatch):
     payload = {
         "items": [
@@ -59,6 +78,50 @@ def test_get_whatsapp_groups_excludes_known_non_community_groups(monkeypatch):
     groups = get_whatsapp_groups("http://localhost:23373", "token")
 
     assert [g["title"] for g in groups] == ["The vibez"]
+
+
+def test_get_whatsapp_groups_respects_allowlist(monkeypatch):
+    payload = {
+        "items": [
+            {"id": "g1", "network": "WhatsApp", "type": "group", "title": "The vibez (code code code)"},
+            {"id": "g2", "network": "WhatsApp", "type": "group", "title": "Off-topic"},
+            {"id": "g3", "network": "WhatsApp", "type": "group", "title": "Show and Tell"},
+        ]
+    }
+    monkeypatch.setenv(
+        "VIBEZ_ALLOWED_GROUPS",
+        "Show and Tell,The vibez (code code code)",
+    )
+    monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
+
+    groups = get_whatsapp_groups("http://localhost:23373", "token")
+
+    assert [g["title"] for g in groups] == [
+        "The vibez (code code code)",
+        "Show and Tell",
+    ]
+
+
+def test_get_whatsapp_groups_allowlist_matching_is_case_insensitive(monkeypatch):
+    payload = {
+        "items": [
+            {"id": "g1", "network": "WhatsApp", "type": "group", "title": "Security"},
+            {"id": "g2", "network": "WhatsApp", "type": "group", "title": "audio intelligence"},
+            {"id": "g3", "network": "WhatsApp", "type": "group", "title": "TechRadar"},
+        ]
+    }
+    monkeypatch.setenv(
+        "VIBEZ_ALLOWED_GROUPS",
+        "security,AUDIO INTELLIGENCE",
+    )
+    monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
+
+    groups = get_whatsapp_groups("http://localhost:23373", "token")
+
+    assert [g["title"] for g in groups] == [
+        "Security",
+        "audio intelligence",
+    ]
 
 
 def test_parse_text_message():
