@@ -16,7 +16,9 @@ if [[ "${SYNC_LOOP_ENABLED,,}" == "1" || "${SYNC_LOOP_ENABLED,,}" == "true" || "
   (
     while true; do
       python3 backend/scripts/run_sync_once.py || true
+      python3 backend/scripts/refresh_message_links.py --db "${DB_PATH}" || true
       python3 backend/scripts/enrich_link_authors.py --limit 200 || true
+      python3 backend/scripts/run_wisdom.py "${DB_PATH}" || true
       sleep "${SYNC_LOOP_INTERVAL_SECONDS}"
     done
   ) &

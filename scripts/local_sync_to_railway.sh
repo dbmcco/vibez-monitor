@@ -99,9 +99,22 @@ echo "Pushing local data to Railway (lookback=${LOOKBACK_DAYS}d)..."
   --lookback-days "$LOOKBACK_DAYS" \
   --batch-size "${VIBEZ_PUSH_BATCH_SIZE:-400}"
 
-if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
-  RAILWAY_BIN="${RAILWAY_BIN:-$(command -v railway || true)}"
-  if [[ -n "$RAILWAY_BIN" ]]; then
+refresh_remote_basics() {
+  echo "Refreshing remote message links..."
+  "$RAILWAY_BIN" ssh --service dashboard \
+    "python backend/scripts/refresh_message_links.py --db /data/vibez.db"
+  echo "Refreshing remote wisdom..."
+  "$RAILWAY_BIN" ssh --service dashboard \
+    "python backend/scripts/run_wisdom.py /data/vibez.db"
+  echo "Enriching remote link authorship..."
+  "$RAILWAY_BIN" ssh --service dashboard \
+    "python backend/scripts/enrich_link_authors.py --limit 200"
+}
+
+RAILWAY_BIN="${RAILWAY_BIN:-$(command -v railway || true)}"
+if [[ -n "$RAILWAY_BIN" ]]; then
+  refresh_remote_basics
+  if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
     REMOTE_INDEX_LOOKBACK="${VIBEZ_REMOTE_INDEX_LOOKBACK_DAYS:-$LOOKBACK_DAYS}"
     echo "Refreshing remote pgvector index (${REMOTE_INDEX_LOOKBACK}d)..."
     "$RAILWAY_BIN" ssh --service dashboard \
@@ -109,11 +122,11 @@ if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
     echo "Refreshing remote synthesis..."
     "$RAILWAY_BIN" ssh --service dashboard \
       "python backend/scripts/run_synthesis.py"
-    echo "Enriching remote link authorship..."
-    "$RAILWAY_BIN" ssh --service dashboard \
-      "python backend/scripts/enrich_link_authors.py --limit 200"
-  else
-    echo "railway CLI not found; skipped remote pgvector/synthesis/author enrichment."
+  fi
+else
+  echo "railway CLI not found; skipped remote links/wisdom/author enrichment."
+  if [[ "$RUN_REMOTE_REFRESH" -eq 1 ]]; then
+    echo "railway CLI not found; skipped remote pgvector/synthesis refresh."
   fi
 fi
 

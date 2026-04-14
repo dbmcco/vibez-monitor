@@ -318,12 +318,14 @@ What this does:
 
 - Runs local one-shot sync (Beeper + Google Groups).
 - Pushes local messages/classifications into Railway in batches.
-- Refreshes Railway pgvector index + synthesis after push.
+- Refreshes Railway links + wisdom incrementally after push.
+- Refreshes Railway pgvector index + synthesis after push unless `--skip-remote-refresh` is used.
 - Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
 - Applies `VIBEZ_ALLOWED_GROUPS` to both Beeper room titles and Google Group keys, so you can publish only the approved AGI rooms plus `made-of-meat`.
 
 `--push-only` skips the local ingest step and only uploads the existing local SQLite rows to Railway.
 Use that mode for frequent background freshness when `run_sync.py` is already running continuously.
+`--skip-remote-refresh` now skips only the heavier pgvector + synthesis refresh; links, wisdom, and link authorship maintenance still run remotely.
 
 ## Profile Personalization
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -193,6 +193,18 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
+def _days_since_iso(iso_timestamp: str | None) -> int:
+    if not iso_timestamp:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(iso_timestamp)
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0, (datetime.now(tz=timezone.utc) - parsed).days)
+
+
 def upsert_message_links(
     db_path: Path,
     messages: list[dict],
@@ -262,12 +274,20 @@ def upsert_message_links(
         ).fetchone()
 
         # Use actual message timestamps, not wall clock
-        latest_iso = datetime.utcfromtimestamp(data["latest_ts"] / 1000).isoformat() if data["latest_ts"] else datetime.now().isoformat()
-        earliest_iso = datetime.utcfromtimestamp(data["earliest_ts"] / 1000).isoformat() if data["earliest_ts"] else latest_iso
+        latest_iso = (
+            datetime.fromtimestamp(data["latest_ts"] / 1000, tz=timezone.utc).isoformat()
+            if data["latest_ts"]
+            else datetime.now(tz=timezone.utc).isoformat()
+        )
+        earliest_iso = (
+            datetime.fromtimestamp(data["earliest_ts"] / 1000, tz=timezone.utc).isoformat()
+            if data["earliest_ts"]
+            else latest_iso
+        )
 
         if existing:
             new_count = (existing[1] or 1) + data["count"]
-            days_ago = (datetime.now() - datetime.fromisoformat(existing[2])).days if existing[2] else 0
+            days_ago = _days_since_iso(existing[2])
             score = compute_value_score(new_count, days_ago)
             # If existing row has no relevance (empty), enrich with message context
             no_relevance = not existing[4]
@@ -308,6 +328,166 @@ def upsert_message_links(
     conn.commit()
     conn.close()
     return inserted
+
+
+def _load_links_refresh_watermark(
+    conn,
+    *,
+    state_key: str = "links_last_refresh_ts",
+) -> int | None:
+    row = conn.execute(
+        "SELECT value FROM sync_state WHERE key = ?",
+        (state_key,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _save_links_refresh_watermark(
+    conn,
+    timestamp_ms: int,
+    *,
+    state_key: str = "links_last_refresh_ts",
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        (state_key, str(timestamp_ms)),
+    )
+
+
+def refresh_message_links(
+    db_path: Path,
+    *,
+    allowed_groups: set[str] | None = None,
+    full_rebuild: bool = False,
+    batch_size: int = 500,
+    state_key: str = "links_last_refresh_ts",
+) -> dict[str, int]:
+    """Refresh the links table from message bodies, incrementally by timestamp."""
+    conn = get_connection(db_path)
+    allowed_groups_normalized = {
+        str(name).strip().casefold()
+        for name in (allowed_groups or set())
+        if str(name).strip()
+    }
+    preserved_metadata: dict[str, dict[str, Any]] = {}
+
+    watermark = None if full_rebuild else _load_links_refresh_watermark(conn, state_key=state_key)
+
+    if full_rebuild:
+        rows = conn.execute(
+            "SELECT url_hash, title, category, relevance, authored_by, pinned FROM links"
+        ).fetchall()
+        preserved_metadata = {
+            str(row[0]): {
+                "title": str(row[1] or "").strip(),
+                "category": str(row[2] or "").strip(),
+                "relevance": str(row[3] or "").strip(),
+                "authored_by": str(row[4] or "").strip(),
+                "pinned": int(row[5] or 0),
+            }
+            for row in rows
+            if str(row[0] or "").strip()
+        }
+        fts_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='links_fts'"
+        ).fetchone()
+        if fts_exists:
+            conn.execute("DELETE FROM links_fts")
+        conn.execute("DELETE FROM links")
+        conn.commit()
+
+    where: list[str] = ["body LIKE '%http%'"]
+    params: list[Any] = []
+    if EXCLUDED_ROOMS:
+        placeholders = ",".join("?" for _ in EXCLUDED_ROOMS)
+        where.append(f"room_name NOT IN ({placeholders})")
+        params.extend(sorted(EXCLUDED_ROOMS))
+    if watermark is not None:
+        where.append("timestamp > ?")
+        params.append(watermark)
+
+    rows = conn.execute(
+        "SELECT id, body, sender_name, timestamp, room_name "
+        f"FROM messages WHERE {' AND '.join(where)} ORDER BY timestamp ASC",
+        params,
+    ).fetchall()
+    conn.close()
+
+    messages = [
+        {
+            "id": row[0],
+            "body": row[1],
+            "sender_name": row[2],
+            "timestamp": row[3],
+            "room_name": row[4],
+        }
+        for row in rows
+        if (
+            not allowed_groups_normalized
+            or str(row[4] or "").strip().casefold() in allowed_groups_normalized
+        )
+    ]
+
+    latest_timestamp = max(
+        (int(message["timestamp"]) for message in messages),
+        default=watermark or 0,
+    )
+    links_inserted = 0
+    for start in range(0, len(messages), max(1, batch_size)):
+        links_inserted += upsert_message_links(
+            db_path,
+            messages[start : start + max(1, batch_size)],
+        )
+
+    conn = get_connection(db_path)
+    if full_rebuild and preserved_metadata:
+        for url_hash, metadata in preserved_metadata.items():
+            current = conn.execute(
+                "SELECT id, title, category, relevance, authored_by, pinned FROM links WHERE url_hash = ?",
+                (url_hash,),
+            ).fetchone()
+            if not current:
+                continue
+            link_id = current[0]
+            title = str(current[1] or "").strip()
+            category = str(current[2] or "").strip()
+            relevance = str(current[3] or "").strip()
+            authored_by = str(current[4] or "").strip()
+            pinned = int(current[5] or 0)
+
+            new_title = title
+            if metadata["title"] and len(metadata["title"]) > len(title):
+                new_title = metadata["title"]
+
+            new_category = category or metadata["category"]
+
+            new_relevance = relevance
+            if metadata["relevance"] and len(metadata["relevance"]) > len(relevance):
+                new_relevance = metadata["relevance"]
+
+            new_authored_by = authored_by or metadata["authored_by"]
+            new_pinned = 1 if pinned or metadata["pinned"] else 0
+
+            conn.execute(
+                "UPDATE links SET title = ?, category = ?, relevance = ?, authored_by = ?, pinned = ? WHERE id = ?",
+                (new_title, new_category, new_relevance, new_authored_by, new_pinned, link_id),
+            )
+            _sync_fts_row(conn, url_hash)
+    if latest_timestamp:
+        _save_links_refresh_watermark(conn, latest_timestamp, state_key=state_key)
+    conn.commit()
+    conn.close()
+
+    return {
+        "messages_scanned": len(messages),
+        "links_inserted": links_inserted,
+        "latest_timestamp": latest_timestamp,
+    }
 
 
 def search_links_fts(
