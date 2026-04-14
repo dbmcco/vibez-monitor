@@ -8,7 +8,7 @@
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>cd __VIBEZ_ROOT__ &amp;&amp; ./scripts/local_sync_to_railway.sh</string>
+        <string>cd __VIBEZ_ROOT__ &amp;&amp; ./scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__VIBEZ_ROOT__</string>
@@ -19,21 +19,8 @@
     </dict>
     <key>RunAtLoad</key>
     <true/>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Hour</key>
-            <integer>4</integer>
-            <key>Minute</key>
-            <integer>30</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>16</integer>
-            <key>Minute</key>
-            <integer>30</integer>
-        </dict>
-    </array>
+    <key>StartInterval</key>
+    <integer>900</integer>
     <key>StandardOutPath</key>
     <string>__LOG_DIR__/push-railway-stdout.log</string>
     <key>StandardErrorPath</key>

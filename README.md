@@ -306,12 +306,21 @@ Run a one-time historical backfill (about 1 year) then push:
 ./scripts/local_sync_to_railway.sh --backfill-year
 ```
 
+Run a lightweight push-only sync when your local daemon is already ingesting:
+
+```bash
+./scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh
+```
+
 What this does:
 
 - Runs local one-shot sync (Beeper + Google Groups).
 - Pushes local messages/classifications into Railway in batches.
 - Refreshes Railway pgvector index + synthesis after push.
 - Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
+
+`--push-only` skips the local ingest step and only uploads the existing local SQLite rows to Railway.
+Use that mode for frequent background freshness when `run_sync.py` is already running continuously.
 
 ## Profile Personalization
 
@@ -334,7 +343,7 @@ Replace placeholders before loading:
 - `__LOG_DIR__`
 
 For cloud sharing from local Beeper, load `com.vibez-monitor.push-railway.plist` to run
-`scripts/local_sync_to_railway.sh` at 4:30 AM and 4:30 PM local time.
+`scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh` every 15 minutes.
 
 See [launchd/README.md](launchd/README.md) for a complete setup command sequence.
 

@@ -34,3 +34,9 @@ launchctl load ~/Library/LaunchAgents/com.vibez-monitor.classify-missing.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.enrich-link-authors.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist
 ```
+
+The `com.vibez-monitor.push-railway.plist` template is intended for lightweight cloud freshness:
+
+- It runs every 15 minutes via `StartInterval=900`
+- It calls `./scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh`
+- It assumes `com.vibez-monitor.sync` is already keeping the local SQLite database current

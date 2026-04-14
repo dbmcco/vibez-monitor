@@ -17,6 +17,7 @@ export VIBEZ_SYNC_ONCE_RUN_SYNTHESIS=false
 LOOKBACK_DAYS="${VIBEZ_PUSH_LOOKBACK_DAYS:-2}"
 RUN_REMOTE_REFRESH=1
 BACKFILL_YEAR=0
+PUSH_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,13 +33,22 @@ while [[ $# -gt 0 ]]; do
       RUN_REMOTE_REFRESH=0
       shift
       ;;
+    --push-only)
+      PUSH_ONLY=1
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: ./scripts/local_sync_to_railway.sh [--backfill-year] [--lookback-days N] [--skip-remote-refresh]" >&2
+      echo "Usage: ./scripts/local_sync_to_railway.sh [--backfill-year] [--lookback-days N] [--skip-remote-refresh] [--push-only]" >&2
       exit 1
       ;;
   esac
 done
+
+if [[ "$BACKFILL_YEAR" -eq 1 && "$PUSH_ONLY" -eq 1 ]]; then
+  echo "--backfill-year and --push-only cannot be combined." >&2
+  exit 1
+fi
 
 if [[ "$BACKFILL_YEAR" -eq 1 ]]; then
   if [[ -z "${BEEPER_API_TOKEN:-}" ]]; then
@@ -77,8 +87,12 @@ PY
   LOOKBACK_DAYS=370
 fi
 
-echo "Running local one-shot sync (Beeper + Google Groups)..."
-"$PYTHON_BIN" backend/scripts/run_sync_once.py
+if [[ "$PUSH_ONLY" -eq 1 ]]; then
+  echo "Skipping local one-shot sync (--push-only)."
+else
+  echo "Running local one-shot sync (Beeper + Google Groups)..."
+  "$PYTHON_BIN" backend/scripts/run_sync_once.py
+fi
 
 echo "Pushing local data to Railway (lookback=${LOOKBACK_DAYS}d)..."
 "$PYTHON_BIN" backend/scripts/push_remote.py \
