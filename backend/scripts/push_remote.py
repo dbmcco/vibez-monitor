@@ -21,11 +21,14 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-DEFAULT_SYNC_STATE_KEYS = (
+DEFAULT_ANALYSIS_SYNC_STATE_KEYS = (
     "beeper_active_group_ids",
     "beeper_active_group_names",
     "google_groups_active_group_keys",
+    "wisdom_last_run",
+    "links_last_refresh_ts",
 )
+DEFAULT_SYNC_STATE_KEYS = DEFAULT_ANALYSIS_SYNC_STATE_KEYS
 
 
 def parse_args() -> argparse.Namespace:
@@ -205,9 +208,9 @@ def fetch_sync_state(
         f"""
         SELECT key, value
         FROM sync_state
-        WHERE key IN ({",".join("?" for _ in DEFAULT_SYNC_STATE_KEYS)})
+        WHERE key IN ({",".join("?" for _ in DEFAULT_ANALYSIS_SYNC_STATE_KEYS)})
         """,
-        DEFAULT_SYNC_STATE_KEYS,
+        DEFAULT_ANALYSIS_SYNC_STATE_KEYS,
     )
     rows = cursor.fetchall()
     conn.close()
@@ -245,6 +248,78 @@ def fetch_sync_state(
         ]
         state["google_groups_active_group_keys"] = json.dumps(filtered_google_group_keys)
     return state
+
+
+def _fetch_rows(db_path: Path, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def fetch_links(db_path: Path) -> list[dict[str, Any]]:
+    return _fetch_rows(
+        db_path,
+        """
+        SELECT url, url_hash, title, category, relevance, shared_by, source_group,
+               first_seen, last_seen, mention_count, value_score, report_date, authored_by, pinned
+        FROM links
+        ORDER BY last_seen ASC, url_hash ASC
+        """,
+    )
+
+
+def fetch_daily_reports(db_path: Path) -> list[dict[str, Any]]:
+    return _fetch_rows(
+        db_path,
+        """
+        SELECT report_date, briefing_md, briefing_json, contributions, trends,
+               daily_memo, conversation_arcs, stats, generated_at
+        FROM daily_reports
+        ORDER BY report_date ASC
+        """,
+    )
+
+
+def fetch_wisdom_topics(db_path: Path) -> list[dict[str, Any]]:
+    return _fetch_rows(
+        db_path,
+        """
+        SELECT name, slug, summary, message_count, contributor_count,
+               last_active, created_at, updated_at
+        FROM wisdom_topics
+        ORDER BY slug ASC
+        """,
+    )
+
+
+def fetch_wisdom_items(db_path: Path) -> list[dict[str, Any]]:
+    return _fetch_rows(
+        db_path,
+        """
+        SELECT wt.slug AS topic_slug, wi.knowledge_type, wi.title, wi.summary,
+               wi.source_links, wi.source_messages, wi.contributors, wi.confidence,
+               wi.created_at, wi.updated_at
+        FROM wisdom_items wi
+        JOIN wisdom_topics wt ON wt.id = wi.topic_id
+        ORDER BY wt.slug ASC, lower(wi.title) ASC
+        """,
+    )
+
+
+def fetch_wisdom_recommendations(db_path: Path) -> list[dict[str, Any]]:
+    return _fetch_rows(
+        db_path,
+        """
+        SELECT source.slug AS from_topic_slug, target.slug AS to_topic_slug,
+               wr.strength, wr.reason
+        FROM wisdom_recommendations wr
+        JOIN wisdom_topics source ON source.id = wr.from_topic_id
+        JOIN wisdom_topics target ON target.id = wr.to_topic_id
+        ORDER BY source.slug ASC, target.slug ASC
+        """,
+    )
 
 
 def request_json(
@@ -290,6 +365,27 @@ def login_access_cookie(remote_url: str, access_code: str) -> str:
     return set_cookie.split(";", 1)[0]
 
 
+def push_section(
+    remote_url: str,
+    push_key: str,
+    access_cookie: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = urllib.parse.urljoin(remote_url.rstrip("/") + "/", "api/admin/push")
+    result, _ = request_json(
+        "POST",
+        endpoint,
+        payload,
+        headers={
+            "x-vibez-push-key": push_key,
+            "Cookie": access_cookie,
+        },
+    )
+    if not result.get("ok"):
+        raise RuntimeError(f"Remote push rejected payload: {result}")
+    return result
+
+
 def push_batches(
     remote_url: str,
     push_key: str,
@@ -298,7 +394,6 @@ def push_batches(
     sync_state: dict[str, str],
     batch_size: int,
 ) -> tuple[int, int]:
-    endpoint = urllib.parse.urljoin(remote_url.rstrip("/") + "/", "api/admin/push")
     messages_written = 0
     batches = 0
 
@@ -308,17 +403,7 @@ def push_batches(
         if i == 0 and sync_state:
             payload["sync_state"] = sync_state
 
-        result, _ = request_json(
-            "POST",
-            endpoint,
-            payload,
-            headers={
-                "x-vibez-push-key": push_key,
-                "Cookie": access_cookie,
-            },
-        )
-        if not result.get("ok"):
-            raise RuntimeError(f"Remote push rejected batch at offset {i}: {result}")
+        result = push_section(remote_url, push_key, access_cookie, payload)
 
         batches += 1
         messages_written += int(result.get("messages_written", 0))
@@ -329,6 +414,42 @@ def push_batches(
         )
 
     return messages_written, batches
+
+
+def push_analysis_tables(
+    remote_url: str,
+    push_key: str,
+    access_cookie: str,
+    db_path: Path,
+    sync_state: dict[str, str],
+    batch_size: int,
+) -> None:
+    sections: list[tuple[str, list[dict[str, Any]]]] = [
+        ("links", fetch_links(db_path)),
+        ("daily_reports", fetch_daily_reports(db_path)),
+        ("wisdom_topics", fetch_wisdom_topics(db_path)),
+        ("wisdom_items", fetch_wisdom_items(db_path)),
+        ("wisdom_recommendations", fetch_wisdom_recommendations(db_path)),
+    ]
+    for section_name, rows in sections:
+        if not rows:
+            continue
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i : i + batch_size]
+            result = push_section(
+                remote_url,
+                push_key,
+                access_cookie,
+                {section_name: batch},
+            )
+            print(
+                f"  {section_name} batch {(i // batch_size) + 1}: pushed {len(batch)} rows "
+                f"(remote {section_name}_written={result.get(f'{section_name}_written', 0)})",
+                flush=True,
+            )
+    if sync_state:
+        push_section(remote_url, push_key, access_cookie, {"sync_state": sync_state})
+        print(f"  sync_state: pushed {len(sync_state)} keys", flush=True)
 
 
 def main() -> int:
@@ -376,24 +497,35 @@ def main() -> int:
     print(f"Records to push: {len(records)}")
     print(f"Sync state keys: {len(sync_state)}")
 
-    if not records:
-        print("Nothing to push.")
-        return 0
     if args.dry_run:
         print("Dry run only; no remote writes.")
         return 0
 
     access_cookie = login_access_cookie(remote_url, access_code)
-    messages_written, batches = push_batches(
+    messages_written = 0
+    batches = 0
+    if records:
+        messages_written, batches = push_batches(
+            remote_url=remote_url,
+            push_key=push_key,
+            access_cookie=access_cookie,
+            records=records,
+            sync_state=sync_state,
+            batch_size=batch_size,
+        )
+    else:
+        print("No raw message rows to push in this window.", flush=True)
+
+    push_analysis_tables(
         remote_url=remote_url,
         push_key=push_key,
         access_cookie=access_cookie,
-        records=records,
-        sync_state=sync_state,
+        db_path=db_path,
+        sync_state=sync_state if not records else {},
         batch_size=batch_size,
     )
     print(
-        f"Push complete: {len(records)} records over {batches} batches "
+        f"Push complete: {len(records)} records over {batches} message batches "
         f"(remote messages_written={messages_written})."
     )
     return 0
