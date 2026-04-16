@@ -38,6 +38,7 @@ def publish_event(
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urlopen(req, timeout=3)
+        with urlopen(req, timeout=3):
+            pass
     except (URLError, OSError, Exception):
         logger.debug("paia-events publish failed (service may be down)")

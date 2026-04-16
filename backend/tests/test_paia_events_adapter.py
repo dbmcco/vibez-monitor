@@ -41,3 +41,30 @@ def test_publish_includes_payload():
         req = mock.call_args[0][0]
         body = json.loads(req.data)
         assert body["payload"]["date"] == "2026-02-23"
+
+
+def test_publish_closes_http_response():
+    class FakeResponse:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    response = FakeResponse()
+    with patch("vibez.paia_events_adapter.urlopen", return_value=response):
+        publish_event(
+            "vibez.messages.synced",
+            "sync-123",
+            "vibez:sync:123",
+            {"count": 1},
+        )
+
+    assert response.closed is True

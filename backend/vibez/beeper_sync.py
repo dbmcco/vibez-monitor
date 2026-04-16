@@ -97,8 +97,8 @@ def api_get(base_url: str, path: str, token: str, params: dict | None = None) ->
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    resp = urllib.request.urlopen(req, timeout=30)
-    return json.loads(resp.read())
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
 
 
 def get_whatsapp_groups(

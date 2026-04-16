@@ -236,3 +236,30 @@ def test_save_active_groups_persists_ids_and_names(tmp_path):
 
     assert rows["beeper_active_group_ids"] == '["!a:beeper.local", "!b:beeper.local"]'
     assert rows["beeper_active_group_names"] == '["The vibez", "Off-topic"]'
+
+
+def test_api_get_closes_http_response(monkeypatch):
+    class FakeResponse:
+        def __init__(self):
+            self.closed = False
+
+        def read(self):
+            return b'{"items":[]}'
+
+        def close(self):
+            self.closed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    response = FakeResponse()
+    monkeypatch.setattr(beeper_sync.urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+
+    result = beeper_sync.api_get("http://localhost:23373", "/v1/chats", "token")
+
+    assert result == {"items": []}
+    assert response.closed is True
