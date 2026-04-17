@@ -10,6 +10,21 @@ from vibez.model_router import (
     validate_route_requirements,
 )
 
+ROOT = Path(__file__).resolve().parents[2]
+REQUIRED_TASK_IDS = {
+    "classification.inline",
+    "classification.backfill",
+    "synthesis.daily",
+    "wisdom.extract",
+    "wisdom.summarize",
+    "links.author_enrichment",
+    "chat.interactive",
+    "dashboard.catchup",
+    "dashboard.topic_analysis",
+    "dashboard.wisdom_enhance",
+    "dashboard.contributions",
+}
+
 
 def test_load_routes_reads_shared_manifest(tmp_path: Path):
     manifest = tmp_path / "model-routing.json"
@@ -77,3 +92,10 @@ def test_validate_route_requirements_only_requires_used_provider_keys(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
 
     validate_route_requirements(manifest)
+
+
+def test_shared_manifest_contains_required_task_routes():
+    routes = load_routes(ROOT / "config" / "model-routing.json")
+
+    assert REQUIRED_TASK_IDS.issubset(routes)
+    assert routes["classification.backfill"].provider == "ollama"

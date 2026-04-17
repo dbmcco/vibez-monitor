@@ -10,8 +10,8 @@
         <string>__VIBEZ_ROOT__/backend/scripts/classify_backfill.py</string>
         <string>--db-path</string>
         <string>__VIBEZ_ROOT__/vibez.db</string>
-        <string>--model</string>
-        <string>qwen2.5:3b</string>
+        <string>--task-id</string>
+        <string>classification.backfill</string>
         <string>--concurrency</string>
         <string>8</string>
         <string>--num-predict</string>
