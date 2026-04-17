@@ -39,8 +39,11 @@ def read_beeper_token(beeper_db_path: str | Path) -> str:
 
 @dataclass
 class Config:
-    anthropic_api_key: str
     db_path: Path
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    model_routing_path: Path = Path("config/model-routing.json")
+    ollama_base_url: str = "http://localhost:11434"
     matrix_homeserver: str = "https://matrix.beeper.com"
     matrix_access_token: str = ""
     beeper_db_path: Path = field(
@@ -116,8 +119,13 @@ class Config:
         )
 
         return cls(
-            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
+            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             db_path=db_path,
+            model_routing_path=Path(
+                os.environ.get("VIBEZ_MODEL_ROUTING_PATH", "config/model-routing.json")
+            ),
+            ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             matrix_homeserver=os.environ.get(
                 "MATRIX_HOMESERVER", "https://matrix.beeper.com"
             ),

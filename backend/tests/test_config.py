@@ -1,11 +1,14 @@
 import os
 import sqlite3
+from pathlib import Path
 from unittest.mock import patch
+
 from vibez.config import Config, read_beeper_token
 
 
 def test_config_loads_from_env(tmp_path):
     env = {
+        "OPENAI_API_KEY": "sk-openai-test-key",
         "ANTHROPIC_API_KEY": "sk-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "MATRIX_HOMESERVER": "https://matrix.beeper.com",
@@ -13,20 +16,24 @@ def test_config_loads_from_env(tmp_path):
     }
     with patch.dict(os.environ, env, clear=False):
         cfg = Config.from_env()
+    assert cfg.openai_api_key == "sk-openai-test-key"
     assert cfg.anthropic_api_key == "sk-test-key"
     assert cfg.matrix_homeserver == "https://matrix.beeper.com"
 
 
 def test_config_defaults(tmp_path):
     env = {
-        "ANTHROPIC_API_KEY": "sk-test-key",
+        "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
         "VIBEZ_SUBJECT_NAME": "User",
         "VIBEZ_SELF_ALIASES": "",
     }
-    with patch.dict(os.environ, env, clear=False):
+    with patch.dict(os.environ, env, clear=True):
         cfg = Config.from_env()
+    assert cfg.openai_api_key == ""
+    assert cfg.anthropic_api_key == ""
     assert cfg.matrix_homeserver == "https://matrix.beeper.com"
     assert cfg.sync_timeout_ms == 30000
     assert cfg.google_groups_bootstrap_days == 14
@@ -35,16 +42,18 @@ def test_config_defaults(tmp_path):
     assert cfg.synthesis_model == "claude-sonnet-4-6"
     assert cfg.subject_name == "User"
     assert cfg.self_aliases == ("User",)
+    assert cfg.model_routing_path == Path("config/model-routing.json")
 
 
 def test_config_profile_overrides(tmp_path):
     env = {
-        "ANTHROPIC_API_KEY": "sk-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
         "VIBEZ_SUBJECT_NAME": "Alex",
         "VIBEZ_SELF_ALIASES": "alex,a.smith",
         "VIBEZ_DOSSIER_PATH": str(tmp_path / "custom_dossier.json"),
+        "VIBEZ_MODEL_ROUTING_PATH": str(tmp_path / "routing.json"),
+        "OLLAMA_BASE_URL": "http://localhost:11435",
     }
     with patch.dict(os.environ, env, clear=False):
         cfg = Config.from_env()
@@ -52,6 +61,8 @@ def test_config_profile_overrides(tmp_path):
     assert cfg.subject_name == "Alex"
     assert cfg.self_aliases == ("Alex", "a.smith")
     assert str(cfg.dossier_path).endswith("custom_dossier.json")
+    assert cfg.model_routing_path == tmp_path / "routing.json"
+    assert cfg.ollama_base_url == "http://localhost:11435"
 
 
 def test_read_beeper_token(tmp_path):
@@ -72,7 +83,6 @@ def test_read_beeper_token(tmp_path):
 
 def test_config_google_groups_enabled_when_imap_and_list_ids_are_set(tmp_path):
     env = {
-        "ANTHROPIC_API_KEY": "sk-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
         "GOOGLE_GROUPS_IMAP_USER": "b@mcco.us",
@@ -88,7 +98,6 @@ def test_config_google_groups_enabled_when_imap_and_list_ids_are_set(tmp_path):
 
 def test_config_allowed_groups_are_loaded(tmp_path):
     env = {
-        "ANTHROPIC_API_KEY": "sk-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
         "VIBEZ_ALLOWED_GROUPS": "Show and Tell,Security, audio intelligence",
@@ -105,7 +114,6 @@ def test_config_allowed_groups_are_loaded(tmp_path):
 
 def test_config_public_mode_disables_contribution_intel_by_default(tmp_path):
     env = {
-        "ANTHROPIC_API_KEY": "sk-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
         "VIBEZ_PUBLIC_MODE": "true",
