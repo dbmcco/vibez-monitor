@@ -8,7 +8,7 @@
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>cd __VIBEZ_ROOT__ &amp;&amp; ./scripts/local_sync_to_railway.sh --push-only --skip-remote-refresh</string>
+        <string>cd __VIBEZ_ROOT__ &amp;&amp; ./scripts/local_sync_to_railway.sh --push-only</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__VIBEZ_ROOT__</string>
