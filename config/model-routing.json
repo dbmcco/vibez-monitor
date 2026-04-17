@@ -11,7 +11,7 @@
     },
     "classification.backfill": {
       "provider": "ollama",
-      "model": "qwen3:8b",
+      "model": "hermes3:8b",
       "mode": "json",
       "base_url": "http://localhost:11434",
       "max_tokens": 256,
