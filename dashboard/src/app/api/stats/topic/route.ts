@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 import { getTopicDrilldown, TopicDrilldown } from "@/lib/db";
+import { generateText } from "@/lib/model-router";
 import { getSubjectName, getSubjectPossessive } from "@/lib/profile";
 
 function buildTopicSystemPrompt(subjectName: string, subjectPossessive: string): string {
@@ -73,13 +73,8 @@ function parseInsights(raw: string): TopicInsights | null {
 }
 
 async function generateTopicInsights(drilldown: TopicDrilldown): Promise<TopicInsights | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
   const subjectName = getSubjectName();
   const subjectPossessive = getSubjectPossessive(subjectName);
-  const model = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
-
-  const client = new Anthropic({ apiKey });
   const topUsers = drilldown.top_users
     .slice(0, 8)
     .map((user) => `${user.name}: ${user.messages}`)
@@ -126,15 +121,13 @@ Return valid JSON only with keys:
   "next_questions": string[]
 }`;
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: 900,
+  const response = await generateText({
+    taskId: "dashboard.topic_analysis",
+    prompt,
     system: buildTopicSystemPrompt(subjectName, subjectPossessive),
-    messages: [{ role: "user", content: prompt }],
   });
 
-  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-  return parseInsights(text);
+  return parseInsights(response.text);
 }
 
 export async function GET(request: NextRequest) {

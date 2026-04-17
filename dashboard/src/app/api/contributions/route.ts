@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "crypto";
 import { getContributionDashboard, getCurrentRoomScope } from "@/lib/db";
+import { generateText, getRoute } from "@/lib/model-router";
 import { getSubjectName, getSubjectPossessive } from "@/lib/profile";
 import { isPublicMode } from "@/lib/runtime";
 import { scoreSemanticNeighborhood } from "@/lib/semantic";
@@ -217,8 +217,6 @@ async function generateSmartIntel(
   }>,
 ): Promise<SmartContributionPayload | null> {
   if (opportunities.length === 0) return null;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
   const subjectName = getSubjectName();
   const subjectPossessive = getSubjectPossessive(subjectName);
 
@@ -288,15 +286,12 @@ Return JSON exactly:
   ]
 }`;
 
-  const client = new Anthropic({ apiKey });
-  const response = await client.messages.create({
-    model,
-    max_tokens: 3200,
+  const response = await generateText({
+    taskId: "dashboard.contributions",
+    prompt,
     system: buildSmartSystemPrompt(subjectName, subjectPossessive),
-    messages: [{ role: "user", content: prompt }],
   });
-  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-  const payload = parseSmartPayload(text);
+  const payload = parseSmartPayload(response.text);
   if (!payload) return null;
 
   SMART_CACHE.set(key, { expiresAt: Date.now() + SMART_CACHE_TTL_MS, payload });
@@ -383,7 +378,7 @@ function mergeSmartIntel(
           100
         ).toFixed(1),
       ),
-      model: process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6",
+      model: getRoute("dashboard.contributions").model,
     },
   };
 }
@@ -428,7 +423,7 @@ export async function GET(request: NextRequest) {
       neighborLimit: 16,
     });
     const dashboard = mergeSemanticSupport(dashboardBase, densityById);
-    const modelName = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
+    const modelName = getRoute("dashboard.contributions").model;
     let smartPayload: SmartContributionPayload | null = null;
     if (smart) {
       smartPayload = await generateSmartIntel(modelName, days, limit, dashboard.opportunities);

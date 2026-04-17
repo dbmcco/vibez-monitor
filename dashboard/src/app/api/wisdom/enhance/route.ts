@@ -1,7 +1,6 @@
 // ABOUTME: Model-enhanced analysis API for wisdom cards.
 // ABOUTME: Rewrites a wisdom takeaway into actionable guidance with value, applicability, execution, and caveats.
 
-import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 import {
   enforceApiUsageGuard,
@@ -9,6 +8,7 @@ import {
   recordApiUsageError,
   recordApiUsageSuccess,
 } from "@/lib/api-usage";
+import { generateText, getRoute } from "@/lib/model-router";
 
 const ROUTE_KEY = "/api/wisdom/enhance";
 const SYSTEM_PROMPT =
@@ -104,16 +104,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "topicName and title are required" }, { status: 400 });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
-    }
-
-    const model =
-      process.env.WISDOM_ENHANCE_MODEL ||
-      process.env.SYNTHESIS_MODEL ||
-      process.env.CLASSIFIER_MODEL ||
-      "claude-sonnet-4-6";
+    const model = getRoute("dashboard.wisdom_enhance").model;
     const clientIp = getClientIp(request);
     const guard = enforceApiUsageGuard({ route: ROUTE_KEY, model, clientIp });
     if (!guard.allowed) {
@@ -123,19 +114,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const client = new Anthropic({ apiKey });
     const response = await (async () => {
       try {
-        const result = await client.messages.create({
-          model,
-          max_tokens: 320,
+        const result = await generateText({
+          taskId: "dashboard.wisdom_enhance",
+          prompt: buildPrompt({ topicName, topicSummary, knowledgeType, title, summary }),
           system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: buildPrompt({ topicName, topicSummary, knowledgeType, title, summary }),
-            },
-          ],
         });
         recordApiUsageSuccess({ route: ROUTE_KEY, model, clientIp, usage: result.usage });
         return result;
@@ -150,11 +134,7 @@ export async function POST(request: NextRequest) {
       }
     })();
 
-    const raw = response.content
-      .map((block) => ("text" in block && typeof block.text === "string" ? block.text : ""))
-      .join("\n")
-      .trim();
-    const analysis = parseAnalysis(raw);
+    const analysis = parseAnalysis(response.text);
 
     if (!analysis) {
       return NextResponse.json({ error: "No enhanced analysis returned." }, { status: 502 });

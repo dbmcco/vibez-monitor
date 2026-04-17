@@ -3,7 +3,8 @@
 
 import Database from "better-sqlite3";
 import path from "path";
-import Anthropic from "@anthropic-ai/sdk";
+
+import { generateText } from "@/lib/model-router";
 
 const DB_PATH =
   process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
@@ -298,27 +299,13 @@ export async function runCatchupSynthesis(
   startDate: string,
   endDate: string
 ): Promise<CatchupResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
-
   const reports = getReportsForRange(startDate, endDate);
   const prompt = buildCatchupPrompt(reports, startDate, endDate);
-
-  const client = new Anthropic({ apiKey });
-  const model =
-    process.env.SYNTHESIS_MODEL ??
-    process.env.CLASSIFIER_MODEL ??
-    "claude-sonnet-4-6";
-
-  const response = await client.messages.create({
-    model,
-    max_tokens: 4096,
+  const response = await generateText({
+    taskId: "dashboard.catchup",
+    prompt,
     system:
       "You are an intelligence analyst producing a concise catchup briefing from daily reports. Informational only — no contribution suggestions. Always respond with valid JSON.",
-    messages: [{ role: "user", content: prompt }],
   });
-
-  const raw =
-    response.content[0].type === "text" ? response.content[0].text : "";
-  return parseCatchupResult(raw);
+  return parseCatchupResult(response.text);
 }

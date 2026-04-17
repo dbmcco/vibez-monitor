@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 import { searchMessages, getLatestBriefingMd, searchLinksFts, type LinkRow } from "@/lib/db";
 import fs from "fs";
+import { generateText, getRoute } from "@/lib/model-router";
 import { getDossierPath, getSubjectName, getSubjectPossessive } from "@/lib/profile";
 import {
   enforceApiUsageGuard,
@@ -184,15 +184,7 @@ Answer based on the messages above. Be specific — cite who said what, which gr
         : ""
     }`;
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "ANTHROPIC_API_KEY not configured" },
-        { status: 500 }
-      );
-    }
-
-    const model = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
+    const model = getRoute("chat.interactive").model;
     const clientIp = getClientIp(request);
     const guard = enforceApiUsageGuard({ route: routeKey, model, clientIp });
     if (!guard.allowed) {
@@ -208,14 +200,12 @@ Answer based on the messages above. Be specific — cite who said what, which gr
       );
     }
 
-    const client = new Anthropic({ apiKey });
     const response = await (async () => {
       try {
-        const result = await client.messages.create({
-          model,
-          max_tokens: 1024,
+        const result = await generateText({
+          taskId: "chat.interactive",
+          prompt,
           system: systemPrompt,
-          messages: [{ role: "user", content: prompt }],
         });
         recordApiUsageSuccess({ route: routeKey, model, clientIp, usage: result.usage });
         return result;
@@ -230,8 +220,7 @@ Answer based on the messages above. Be specific — cite who said what, which gr
       }
     })();
 
-    const answer =
-      response.content[0].type === "text" ? response.content[0].text : "";
+    const answer = response.text;
     const visibleAnswer = wantsLinks ? makeUrlsVisible(answer) : answer;
 
     return NextResponse.json({ answer: visibleAnswer, messageCount: messages.length });
