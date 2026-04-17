@@ -21,9 +21,9 @@ from vibez.classifier import (
     write_hot_alert,
     CLASSIFY_SYSTEM_TEMPLATE,
 )
+from vibez.model_router import get_route
 from vibez.profile import get_subject_name, get_subject_possessive
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen3:8b"  # qwen2.5:3b removed; qwen3:8b is the lightweight fallback
 DEFAULT_CONCURRENCY = 2  # light parallelism — Ollama can queue a small batch
 DEFAULT_NUM_PREDICT = 220
@@ -35,6 +35,7 @@ async def classify_one(
     msg: dict,
     value_cfg: dict,
     semaphore: asyncio.Semaphore,
+    ollama_url: str,
     model: str,
     num_predict: int,
     system_prompt: str,
@@ -44,7 +45,7 @@ async def classify_one(
         prompt = build_classify_prompt(msg, value_cfg, None)
         try:
             resp = await client.post(
-                OLLAMA_URL,
+                ollama_url,
                 json={
                     "model": model,
                     "messages": [
@@ -100,7 +101,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", help="Inclusive YYYY-MM-DD lower bound on message date")
     parser.add_argument("--end-date", help="Inclusive YYYY-MM-DD upper bound on message date")
     parser.add_argument("--limit", type=int, help="Max messages to process")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model name")
+    parser.add_argument(
+        "--task-id",
+        default="classification.backfill",
+        help="Model routing task id to use for classification",
+    )
+    parser.add_argument("--model", default="", help="Deprecated override; task routing now controls the model")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="Parallel requests")
     parser.add_argument(
         "--num-predict",
@@ -176,6 +182,17 @@ async def main():
     value_cfg = load_value_config(db_path)
     subject_name = get_subject_name(os.environ.get("VIBEZ_SUBJECT_NAME"))
     subject_possessive = get_subject_possessive(subject_name)
+    route = get_route(args.task_id)
+    if route.provider != "ollama":
+        raise SystemExit(f"Task {args.task_id} must route to ollama, got {route.provider}")
+    selected_model = route.model or DEFAULT_MODEL
+    if args.model and args.model != selected_model:
+        print(
+            f"Ignoring deprecated --model={args.model}; using routed model {selected_model}",
+            flush=True,
+        )
+    ollama_base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_url = f"{ollama_base_url.rstrip('/')}/api/chat"
     system_prompt = CLASSIFY_SYSTEM_TEMPLATE.format(
         subject_name=subject_name,
         subject_possessive=subject_possessive,
@@ -185,7 +202,7 @@ async def main():
     done = 0
 
     print(
-        f"Model={args.model} Concurrency={max(1, args.concurrency)} "
+        f"Task={args.task_id} Model={selected_model} Concurrency={max(1, args.concurrency)} "
         f"num_predict={max(32, args.num_predict)} chunk_size={max(1, args.chunk_size)} "
         f"Date range={args.start_date or 'min'}..{args.end_date or 'max'}",
         flush=True,
@@ -203,7 +220,8 @@ async def main():
                     msg,
                     value_cfg,
                     semaphore,
-                    args.model,
+                    ollama_url,
+                    selected_model,
                     num_predict,
                     system_prompt,
                 )

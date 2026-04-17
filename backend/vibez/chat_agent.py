@@ -8,11 +8,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
 from vibez.config import Config
 from vibez.db import get_connection
 from vibez.dossier import load_dossier, get_voice_profile
+from vibez.model_router import generate_text
 from vibez.profile import get_subject_possessive
 from vibez.semantic_index import search_hybrid_pgvector
 
@@ -157,14 +156,13 @@ Answer the question based on the messages above. Be specific — cite who said w
 which group it was in, and when. If the question is about contribution opportunities,
 suggest concrete actions."""
 
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-    response = client.messages.create(
-        model=config.synthesis_model,
-        max_tokens=1024,
+    result = generate_text(
+        task_id="chat.interactive",
+        prompt=prompt,
         system=CHAT_SYSTEM_TEMPLATE.format(
             subject_name=subject_name,
             subject_possessive=subject_possessive,
         ),
-        messages=[{"role": "user", "content": prompt}],
+        manifest_path=config.model_routing_path,
     )
-    return response.content[0].text
+    return str(result.get("text", "") or "")

@@ -111,7 +111,7 @@ def test_strip_contribution_intel_zeros_personalized_fields():
     assert sanitized["relevance_score"] == 8
 
 
-def test_classify_messages_closes_anthropic_client(tmp_db, monkeypatch):
+def test_classify_messages_uses_named_route(tmp_db, monkeypatch):
     init_db(tmp_db)
     conn = get_connection(tmp_db)
     conn.execute(
@@ -132,13 +132,12 @@ def test_classify_messages_closes_anthropic_client(tmp_db, monkeypatch):
     conn.commit()
     conn.close()
 
-    class FakeResponse:
-        class Usage:
-            input_tokens = 1
-            output_tokens = 1
+    captured: dict[str, str] = {}
 
-        def __init__(self):
-            self.content = [type("Block", (), {"text": json.dumps({
+    def fake_generate_json(*, task_id, **_kwargs):
+        captured["task_id"] = task_id
+        return {
+            "parsed": {
                 "relevance_score": 7,
                 "topics": ["ai-models"],
                 "entities": ["Claude"],
@@ -146,29 +145,12 @@ def test_classify_messages_closes_anthropic_client(tmp_db, monkeypatch):
                 "contribution_themes": [],
                 "contribution_hint": "",
                 "alert_level": "digest",
-            })})()]
-            self.usage = self.Usage()
+            },
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "model": "gpt-5-mini",
+        }
 
-    class FakeClient:
-        def __init__(self):
-            self.closed = False
-            self.messages = self
-
-        def create(self, **_kwargs):
-            return FakeResponse()
-
-        def close(self):
-            self.closed = True
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.close()
-            return False
-
-    fake_client = FakeClient()
-    monkeypatch.setattr("vibez.classifier.anthropic.Anthropic", lambda **_kwargs: fake_client)
+    monkeypatch.setattr("vibez.classifier.generate_json", fake_generate_json)
     monkeypatch.setattr("vibez.dossier.load_dossier", lambda _path: None)
     monkeypatch.setattr("vibez.dossier.format_dossier_for_classifier", lambda *_args, **_kwargs: "")
     monkeypatch.setattr("vibez.classifier.publish_event", lambda *_args, **_kwargs: None)
@@ -196,4 +178,9 @@ def test_classify_messages_closes_anthropic_client(tmp_db, monkeypatch):
         )
     )
 
-    assert fake_client.closed is True
+    saved = get_connection(tmp_db).execute(
+        "SELECT relevance_score, alert_level FROM classifications WHERE message_id = ?",
+        ("msg-1",),
+    ).fetchone()
+    assert captured["task_id"] == "classification.inline"
+    assert saved == (7, "digest")

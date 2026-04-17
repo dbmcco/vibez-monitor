@@ -8,12 +8,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
 from vibez.config import Config
 from vibez.links import upsert_links
 from vibez.db import get_connection, init_db, invalidate_catchup_for_date
 from vibez.dossier import load_dossier, format_dossier_for_synthesis
+from vibez.model_router import generate_json
 from vibez.paia_events_adapter import publish_event
 from vibez.profile import (
     DEFAULT_SUBJECT_NAME,
@@ -627,24 +626,23 @@ async def run_daily_synthesis(config: Config) -> dict[str, Any]:
         )
         return {"daily_memo": "", "conversation_arcs": [], "briefing": [], "contributions": [], "trends": {}, "links": []}
 
-    client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-    response = client.messages.create(
-        model=config.synthesis_model, max_tokens=8192,
+    result = generate_json(
+        task_id="synthesis.daily",
+        prompt=prompt,
         system=SYNTHESIS_SYSTEM_TEMPLATE.format(
             subject_name=subject_name,
             subject_possessive=subject_possessive,
         ),
-        messages=[{"role": "user", "content": prompt}],
+        manifest_path=config.model_routing_path,
     )
-    raw_text = response.content[0].text
-    if hasattr(response, "usage") and response.usage:
-        record_usage(
-            config.db_path,
-            config.synthesis_model,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-        )
-    report = make_pithy_report(parse_synthesis_report(raw_text))
+    usage = result.get("usage", {})
+    record_usage(
+        config.db_path,
+        result.get("model", config.synthesis_model),
+        int(usage.get("input_tokens", 0)),
+        int(usage.get("output_tokens", 0)),
+    )
+    report = make_pithy_report(parse_synthesis_report(json.dumps(result.get("parsed", {}))))
     if not config.contribution_intel_enabled:
         report = strip_contribution_sections(report)
 

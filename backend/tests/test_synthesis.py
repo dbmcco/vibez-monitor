@@ -1,10 +1,17 @@
 import json
+from datetime import datetime
+from pathlib import Path
+
+import asyncio
+
 from vibez.db import init_db, get_connection
+from vibez.config import Config
 from vibez.synthesis import (
     build_synthesis_prompt,
     get_day_messages,
     make_pithy_report,
     parse_synthesis_report,
+    run_daily_synthesis,
     strip_contribution_sections,
 )
 
@@ -170,3 +177,61 @@ def test_strip_contribution_sections_removes_personalized_actions():
     sanitized = strip_contribution_sections(report)
     assert sanitized["contributions"] == []
     assert "how_to_add_value" not in sanitized["briefing"][0]
+
+
+def test_run_daily_synthesis_uses_named_route(tmp_db, monkeypatch):
+    init_db(tmp_db)
+    now_ms = int(datetime.now().timestamp() * 1000)
+    conn = get_connection(tmp_db)
+    conn.execute(
+        """INSERT INTO messages (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("m1", "room-a", "AGI House", "u1", "Alice", "Agent frameworks keep improving", now_ms - 1_000, "{}"),
+    )
+    conn.execute(
+        """INSERT INTO classifications
+           (message_id, relevance_score, topics, entities, contribution_flag, contribution_hint, alert_level, contribution_themes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("m1", 8, json.dumps(["agents"]), json.dumps(["frameworks"]), 1, "share your experience", "digest", json.dumps(["orchestration"])),
+    )
+    conn.commit()
+    conn.close()
+
+    captured: dict[str, str] = {}
+
+    def fake_generate_json(*, task_id, **_kwargs):
+        captured["task_id"] = task_id
+        return {
+            "parsed": {
+                "daily_memo": "A compact summary.",
+                "conversation_arcs": [],
+                "briefing": [],
+                "contributions": [],
+                "trends": {},
+                "links": [],
+            },
+            "usage": {"input_tokens": 2, "output_tokens": 3},
+            "model": "gpt-5.1",
+        }
+
+    monkeypatch.setattr("vibez.synthesis.generate_json", fake_generate_json)
+    monkeypatch.setattr("vibez.classifier.load_value_config", lambda _db: {"topics": ["agents"], "projects": ["Vibez"]})
+    monkeypatch.setattr("vibez.synthesis.load_dossier", lambda _path: None)
+    monkeypatch.setattr("vibez.synthesis.publish_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("vibez.synthesis.get_semantic_arc_hints", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("vibez.budget_guard.ensure_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("vibez.budget_guard.check_budget", lambda *_args, **_kwargs: (True, 0.0))
+    monkeypatch.setattr("vibez.budget_guard.record_usage", lambda *_args, **_kwargs: None)
+
+    report = asyncio.run(
+        run_daily_synthesis(
+            Config(
+                db_path=tmp_db,
+                dossier_path=Path(tmp_db).parent / "dossier.json",
+                contribution_intel_enabled=True,
+            )
+        )
+    )
+
+    assert captured["task_id"] == "synthesis.daily"
+    assert report["daily_memo"] == "A compact summary."

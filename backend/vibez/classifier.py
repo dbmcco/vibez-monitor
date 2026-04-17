@@ -8,11 +8,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
 from vibez.budget_guard import check_budget, ensure_table, record_usage
 from vibez.config import Config
 from vibez.db import get_connection
+from vibez.model_router import generate_json
 from vibez.paia_events_adapter import publish_event
 from vibez.profile import (
     DEFAULT_SUBJECT_NAME,
@@ -220,87 +219,85 @@ async def classify_messages(config: Config, messages: list[dict[str, Any]]) -> N
         else ""
     )
 
-    with anthropic.Anthropic(api_key=config.anthropic_api_key) as client:
-        for msg in messages:
-            # Re-check budget before each call
-            allowed, spent = check_budget(config.db_path, config.daily_budget_usd)
-            if not allowed:
-                logger.warning(
-                    "Budget freeze mid-batch at $%.2f/$%.2f — %d messages skipped",
-                    spent,
-                    config.daily_budget_usd,
-                    len(messages) - messages.index(msg),
-                )
-                return
+    for msg in messages:
+        # Re-check budget before each call
+        allowed, spent = check_budget(config.db_path, config.daily_budget_usd)
+        if not allowed:
+            logger.warning(
+                "Budget freeze mid-batch at $%.2f/$%.2f — %d messages skipped",
+                spent,
+                config.daily_budget_usd,
+                len(messages) - messages.index(msg),
+            )
+            return
 
-            try:
-                context = get_recent_context(config.db_path, msg["room_id"], msg["timestamp"])
-                prompt = build_classify_prompt(
-                    msg,
-                    value_cfg,
-                    context,
-                    dossier_context=dossier_ctx,
+        try:
+            context = get_recent_context(config.db_path, msg["room_id"], msg["timestamp"])
+            prompt = build_classify_prompt(
+                msg,
+                value_cfg,
+                context,
+                dossier_context=dossier_ctx,
+                subject_name=subject_name,
+            )
+
+            result = generate_json(
+                task_id="classification.inline",
+                prompt=prompt,
+                system=CLASSIFY_SYSTEM_TEMPLATE.format(
                     subject_name=subject_name,
-                )
+                    subject_possessive=subject_possessive,
+                ),
+                manifest_path=config.model_routing_path,
+            )
+            usage = result.get("usage", {})
+            record_usage(
+                config.db_path,
+                result.get("model", config.classifier_model),
+                int(usage.get("input_tokens", 0)),
+                int(usage.get("output_tokens", 0)),
+            )
+            classification = parse_classification(json.dumps(result.get("parsed", {})))
+            if not config.contribution_intel_enabled:
+                classification = strip_contribution_intel(classification)
 
-                response = client.messages.create(
-                    model=config.classifier_model,
-                    max_tokens=256,
-                    system=CLASSIFY_SYSTEM_TEMPLATE.format(
-                        subject_name=subject_name,
-                        subject_possessive=subject_possessive,
-                    ),
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                raw_text = response.content[0].text
-                if hasattr(response, "usage") and response.usage:
-                    record_usage(
-                        config.db_path,
-                        config.classifier_model,
-                        response.usage.input_tokens,
-                        response.usage.output_tokens,
-                    )
-                classification = parse_classification(raw_text)
-                if not config.contribution_intel_enabled:
-                    classification = strip_contribution_intel(classification)
+            save_classification(config.db_path, msg["id"], classification)
+            publish_event(
+                "vibez.message.classified",
+                f"class-{msg['id']}",
+                f"vibez:classified:{msg['id']}",
+                {
+                    "message_id": msg["id"],
+                    "relevance": classification["relevance_score"],
+                    "alert_level": classification["alert_level"],
+                },
+            )
 
-                save_classification(config.db_path, msg["id"], classification)
+            if classification["alert_level"] == "hot":
+                write_hot_alert(config.db_path, msg, classification)
                 publish_event(
-                    "vibez.message.classified",
-                    f"class-{msg['id']}",
-                    f"vibez:classified:{msg['id']}",
+                    "vibez.alert.hot",
+                    f"alert-{msg['id']}",
+                    f"vibez:alert:{msg['id']}",
                     {
                         "message_id": msg["id"],
-                        "relevance": classification["relevance_score"],
-                        "alert_level": classification["alert_level"],
+                        "room": msg.get("room_name", ""),
+                        "sender": msg.get("sender_name", ""),
                     },
                 )
-
-                if classification["alert_level"] == "hot":
-                    write_hot_alert(config.db_path, msg, classification)
-                    publish_event(
-                        "vibez.alert.hot",
-                        f"alert-{msg['id']}",
-                        f"vibez:alert:{msg['id']}",
-                        {
-                            "message_id": msg["id"],
-                            "room": msg.get("room_name", ""),
-                            "sender": msg.get("sender_name", ""),
-                        },
-                    )
-                    logger.info(
-                        "HOT ALERT: %s in %s (score=%d): %s",
-                        msg.get("sender_name"),
-                        msg.get("room_name"),
-                        classification["relevance_score"],
-                        classification.get("contribution_hint", ""),
-                    )
-                else:
-                    logger.debug(
-                        "Classified %s: score=%d level=%s",
-                        msg["id"],
-                        classification["relevance_score"],
-                        classification["alert_level"],
-                    )
-            except Exception:
-                logger.exception("Failed to classify message %s", msg.get("id"))
+                logger.info(
+                    "HOT ALERT: %s in %s (score=%d): %s",
+                    msg.get("sender_name"),
+                    msg.get("room_name"),
+                    classification["relevance_score"],
+                    classification.get("contribution_hint", ""),
+                )
+            else:
+                logger.debug(
+                    "Classified %s: score=%d level=%s",
+                    msg["id"],
+                    classification["relevance_score"],
+                    classification["alert_level"],
+                )
+        except Exception:
+            logger.exception("Failed to classify message %s", msg.get("id"))

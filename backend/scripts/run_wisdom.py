@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from vibez.model_router import validate_route_requirements
 from vibez.wisdom import run_wisdom_extraction
 
 
@@ -23,11 +24,9 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Extract collective wisdom from chat history")
     parser.add_argument("db_path", help="Path to vibez.db")
-    parser.add_argument("--api-key", help="Anthropic API key (or set ANTHROPIC_API_KEY)")
     parser.add_argument(
-        "--model",
-        default="claude-haiku-4-5-20251001",
-        help="Model to use for classification and synthesis",
+        "--manifest-path",
+        help="Path to model-routing.json (defaults to VIBEZ_MODEL_ROUTING_PATH or config/model-routing.json)",
     )
     parser.add_argument(
         "--full-rebuild",
@@ -38,19 +37,20 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
-    api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise SystemExit("Error: set ANTHROPIC_API_KEY or pass --api-key")
-
     db_path = Path(args.db_path)
     if not db_path.exists():
         raise SystemExit(f"Database not found: {db_path}")
 
+    manifest_path = Path(
+        args.manifest_path
+        or os.environ.get("VIBEZ_MODEL_ROUTING_PATH", "config/model-routing.json")
+    )
+    validate_route_requirements(manifest_path)
+
     result = run_wisdom_extraction(
         db_path=db_path,
-        api_key=api_key,
-        model=args.model,
         full_rebuild=args.full_rebuild,
+        manifest_path=manifest_path,
     )
 
     print("\nWisdom extraction complete:")

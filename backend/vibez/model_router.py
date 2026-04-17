@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 
 @dataclass(frozen=True)
 class ModelRoute:
@@ -80,3 +82,176 @@ def validate_route_requirements(manifest_path: Path | str | None = None) -> None
             route.base_url or os.environ.get("OLLAMA_BASE_URL")
         ):
             raise RuntimeError("OLLAMA_BASE_URL is required by model routing")
+
+
+def _build_messages(
+    *,
+    prompt: str | None,
+    system: str | None,
+    messages: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
+    if messages:
+        return [
+            {"role": str(message["role"]), "content": str(message["content"])}
+            for message in messages
+        ]
+    if prompt is None:
+        raise ValueError("prompt is required when messages are not supplied")
+    payload: list[dict[str, str]] = []
+    if system:
+        payload.append({"role": "system", "content": system})
+    payload.append({"role": "user", "content": prompt})
+    return payload
+
+
+def _usage_dict(usage: Any) -> dict[str, int]:
+    if usage is None:
+        return {"input_tokens": 0, "output_tokens": 0}
+    return {
+        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+    }
+
+
+def _parse_json_output(raw: str) -> Any:
+    text = raw.strip()
+    fenced = text.startswith("```") and text.endswith("```")
+    if fenced:
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    return json.loads(text)
+
+
+def _run_anthropic(
+    route: ModelRoute,
+    *,
+    prompt: str | None,
+    system: str | None,
+    messages: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    import anthropic
+
+    payload = _build_messages(prompt=prompt, system=None, messages=messages)
+    with anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) as client:
+        response = client.messages.create(
+            model=route.model,
+            max_tokens=route.max_tokens,
+            system=system,
+            messages=payload,
+        )
+    text = "\n".join(
+        block.text.strip()
+        for block in getattr(response, "content", []) or []
+        if getattr(block, "text", None)
+    ).strip()
+    return {
+        "text": text,
+        "usage": _usage_dict(getattr(response, "usage", None)),
+    }
+
+
+def _run_openai(
+    route: ModelRoute,
+    *,
+    prompt: str | None,
+    system: str | None,
+    messages: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    from openai import OpenAI
+
+    payload = _build_messages(prompt=prompt, system=system, messages=messages)
+    client = OpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        timeout=max(route.timeout_ms / 1000, 1),
+    )
+    response = client.responses.create(
+        model=route.model,
+        input=payload,
+        max_output_tokens=route.max_tokens,
+        temperature=route.temperature,
+    )
+    return {
+        "text": getattr(response, "output_text", "") or "",
+        "usage": _usage_dict(getattr(response, "usage", None)),
+    }
+
+
+def _run_ollama(
+    route: ModelRoute,
+    *,
+    prompt: str | None,
+    system: str | None,
+    messages: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    payload = _build_messages(prompt=prompt, system=system, messages=messages)
+    base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL")
+    if not base_url:
+        raise RuntimeError("OLLAMA_BASE_URL is required by model routing")
+    endpoint = f"{base_url.rstrip('/')}/api/chat"
+    response = httpx.post(
+        endpoint,
+        json={
+            "model": route.model,
+            "messages": payload,
+            "stream": False,
+            "options": {
+                "temperature": route.temperature,
+                "num_predict": route.max_tokens,
+            },
+            "format": "json" if route.mode == "json" else None,
+        },
+        timeout=max(route.timeout_ms / 1000, 1),
+    )
+    response.raise_for_status()
+    data = response.json()
+    return {
+        "text": data.get("message", {}).get("content", "") or "",
+        "usage": {
+            "input_tokens": int(data.get("prompt_eval_count", 0) or 0),
+            "output_tokens": int(data.get("eval_count", 0) or 0),
+        },
+    }
+
+
+def generate_text(
+    task_id: str,
+    *,
+    prompt: str | None = None,
+    system: str | None = None,
+    messages: list[dict[str, str]] | None = None,
+    manifest_path: Path | str | None = None,
+) -> dict[str, Any]:
+    route = get_route(task_id, manifest_path)
+    if route.provider == "anthropic":
+        result = _run_anthropic(route, prompt=prompt, system=system, messages=messages)
+    elif route.provider == "openai":
+        result = _run_openai(route, prompt=prompt, system=system, messages=messages)
+    elif route.provider == "ollama":
+        result = _run_ollama(route, prompt=prompt, system=system, messages=messages)
+    else:
+        raise ValueError(f"unsupported model provider: {route.provider}")
+    return {
+        **result,
+        "provider": route.provider,
+        "model": route.model,
+    }
+
+
+def generate_json(
+    task_id: str,
+    *,
+    prompt: str | None = None,
+    system: str | None = None,
+    messages: list[dict[str, str]] | None = None,
+    manifest_path: Path | str | None = None,
+) -> dict[str, Any]:
+    result = generate_text(
+        task_id,
+        prompt=prompt,
+        system=system,
+        messages=messages,
+        manifest_path=manifest_path,
+    )
+    return {
+        **result,
+        "parsed": _parse_json_output(result["text"]),
+    }

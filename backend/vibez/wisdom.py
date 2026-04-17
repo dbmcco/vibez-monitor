@@ -15,10 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from anthropic import Anthropic
-
 from vibez.db import get_connection
 from vibez.links import EXCLUDED_ROOMS
+from vibez.model_router import generate_json, generate_text
 
 logger = logging.getLogger("vibez.wisdom")
 
@@ -181,7 +180,11 @@ def _parse_json_payload(raw: str) -> Any | None:
     return None
 
 
-def classify_chunk(client: Anthropic, model: str, chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def classify_chunk(
+    chunk: list[dict[str, Any]],
+    *,
+    manifest_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
     """Classify a chunk of messages into knowledge items."""
     formatted = _format_chunk_for_llm(chunk)
     if not formatted.strip():
@@ -193,26 +196,30 @@ def classify_chunk(client: Anthropic, model: str, chunk: list[dict[str, Any]]) -
     )
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=2048,
+        result = generate_json(
+            task_id="wisdom.extract",
+            prompt=prompt,
             system=CLASSIFICATION_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
+            manifest_path=manifest_path,
         )
-        raw = _response_text(response)
-        items = _parse_json_payload(raw)
+        items = result.get("parsed")
         if isinstance(items, dict) and isinstance(items.get("items"), list):
             items = items["items"]
         if isinstance(items, list):
             return items
-        logger.warning("Wisdom classifier returned non-array payload: %r", raw[:200])
+        logger.warning("Wisdom classifier returned non-array payload: %r", items)
         return []
     except Exception:
         logger.exception("Failed to classify wisdom chunk")
         return []
 
 
-def synthesize_topic(client: Anthropic, model: str, topic_name: str, items: list[dict[str, Any]]) -> str:
+def synthesize_topic(
+    topic_name: str,
+    items: list[dict[str, Any]],
+    *,
+    manifest_path: Path | str | None = None,
+) -> str:
     """Generate a consensus summary for a topic."""
     items_text = "\n".join(
         f"- [{item.get('knowledge_type', '?')}] {item.get('title', '?')}: {item.get('summary', '')}"
@@ -221,12 +228,12 @@ def synthesize_topic(client: Anthropic, model: str, topic_name: str, items: list
     prompt = CONSENSUS_PROMPT.format(topic=topic_name, items=items_text)
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
+        result = generate_text(
+            task_id="wisdom.summarize",
+            prompt=prompt,
+            manifest_path=manifest_path,
         )
-        return _response_text(response)
+        return str(result.get("text", "") or "")
     except Exception:
         logger.exception("Failed to synthesize wisdom topic %s", topic_name)
         return ""
@@ -465,9 +472,10 @@ def _persist_wisdom_results(
 
 def run_wisdom_extraction(
     db_path: Path,
-    api_key: str,
+    api_key: str = "",
     model: str = "claude-haiku-4-5-20251001",
     full_rebuild: bool = False,
+    manifest_path: Path | str | None = None,
 ) -> dict[str, int]:
     """Run the full wisdom extraction batch job."""
     conn = get_connection(db_path)
@@ -486,12 +494,10 @@ def run_wisdom_extraction(
 
     chunks = _chunk_messages(messages)
     logger.info("Split %d messages into %d chunks", len(messages), len(chunks))
-
-    client = Anthropic(api_key=api_key)
     all_items: list[dict[str, Any]] = []
 
     for index, chunk in enumerate(chunks, start=1):
-        items = classify_chunk(client, model, chunk)
+        items = classify_chunk(chunk, manifest_path=manifest_path)
         source_message_ids = [msg["id"] for msg in chunk]
         source_timestamps = [int(msg.get("timestamp", 0) or 0) for msg in chunk]
         for item in items:
@@ -525,7 +531,11 @@ def run_wisdom_extraction(
     prepared_topics: dict[str, dict[str, Any]] = {}
     for slug, items in topic_items.items():
         topic_name = items[0]["_topic_name"]
-        summary = synthesize_topic(client, model, topic_name, items) if items else ""
+        summary = (
+            synthesize_topic(topic_name, items, manifest_path=manifest_path)
+            if items
+            else ""
+        )
         if not summary:
             summary = _best_topic_summary(items)
 

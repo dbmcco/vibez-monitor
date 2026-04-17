@@ -12,10 +12,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import anthropic
-
 from vibez.budget_guard import check_budget, record_usage
 from vibez.db import get_connection
+from vibez.model_router import generate_json
 
 logger = logging.getLogger("vibez.author_classifier")
 
@@ -136,7 +135,6 @@ def enrich_link_authors(
     members = _get_group_members(db_path)
     members_str = ", ".join(members) if members else "unknown"
 
-    client = anthropic.Anthropic(api_key=api_key)
     counts = {"heuristic": 0, "llm": 0, "skipped_budget": 0, "total": len(links)}
 
     for link in links:
@@ -172,20 +170,20 @@ def enrich_link_authors(
         )
 
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=128,
+            result = generate_json(
+                task_id="links.author_enrichment",
+                prompt=prompt,
                 system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
             )
-            raw = response.content[0].text.strip()
-            # Strip think blocks and markdown fences if present
-            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw).rstrip("`").strip()
-            if hasattr(response, "usage") and response.usage:
-                record_usage(db_path, model, response.usage.input_tokens, response.usage.output_tokens)
+            usage = result.get("usage", {})
+            record_usage(
+                db_path,
+                result.get("model", model),
+                int(usage.get("input_tokens", 0)),
+                int(usage.get("output_tokens", 0)),
+            )
 
-            parsed = json.loads(raw)
+            parsed = result.get("parsed", {})
             authored_by = parsed.get("authored_by") or None
             confidence = parsed.get("confidence", "")
             reason = parsed.get("reason", "")
