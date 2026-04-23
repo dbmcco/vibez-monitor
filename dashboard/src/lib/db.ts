@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import path from "path";
+import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search";
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
 import {
   computeSemanticAnalytics,
@@ -190,6 +191,24 @@ function normalizeSenderName(raw: string, aliases: UserAliasMap): string {
   const trimmed = raw.trim();
   if (!trimmed) return "Unknown";
   return aliases[trimmed.toLowerCase()] || trimmed;
+}
+
+function buildLinkTermMatchScore(alias: string, terms: string[]): {
+  sql: string;
+  params: unknown[];
+} {
+  const searchable = `lower(coalesce(${alias}.title,'') || ' ' || coalesce(${alias}.relevance,'') || ' ' || coalesce(${alias}.category,'') || ' ' || coalesce(${alias}.url,''))`;
+  if (!terms.length) {
+    return { sql: "0", params: [] };
+  }
+
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  for (const term of terms) {
+    clauses.push(`CASE WHEN ${searchable} LIKE ? THEN ? ELSE 0 END`);
+    params.push(`%${term.toLowerCase()}%`, term.length);
+  }
+  return { sql: clauses.join(" + "), params };
 }
 
 export function getDb() {
@@ -3750,8 +3769,9 @@ export function searchLinksFts(
   query: string,
   opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string; authoredBy?: string }
 ): LinkRow[] {
-  const terms = query.trim().split(/\s+/).filter(Boolean);
-  if (!terms.length) return getLinks(opts);
+  const ftsQuery = buildLinksFtsQuery(query);
+  const terms = normalizeLinkSearchTerms(query);
+  if (!ftsQuery || !terms.length) return getLinks(opts);
 
   const db = getDb();
 
@@ -3761,9 +3781,9 @@ export function searchLinksFts(
     .get();
 
   if (ftsExists) {
-    const ftsQuery = terms.map((t) => `"${t}"`).join(" OR ");
+    const matchScore = buildLinkTermMatchScore("l", terms);
     const where: string[] = [];
-    const params: unknown[] = [ftsQuery];
+    const params: unknown[] = [...matchScore.params, ftsQuery];
     if (opts.category) {
       where.push("l.category = ?");
       params.push(opts.category);
@@ -3796,12 +3816,13 @@ export function searchLinksFts(
       .prepare(
         `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
                 l.shared_by, l.source_group, l.first_seen, l.last_seen,
-                l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned
+                l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
+                (${matchScore.sql}) AS term_match_score
          FROM links_fts f
          JOIN links l ON f.rowid = l.id
          WHERE links_fts MATCH ?
          ${extraWhere}
-         ORDER BY rank, l.value_score DESC
+         ORDER BY term_match_score DESC, rank, l.value_score DESC
          LIMIT ?`
       )
       .all(...params) as LinkRow[];

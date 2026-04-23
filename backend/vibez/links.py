@@ -134,6 +134,37 @@ def _sync_fts_row(conn, url_hash: str):
             (link_id, row[1], row[2], row[3], row[4]))
 
 
+def _normalize_link_search_term(raw: str) -> str:
+    term = raw.replace("’", "'")
+    term = re.sub(r"^[^\w:/._-]+|[^\w:/._-]+$", "", term)
+    term = re.sub(r"'s$", "", term, flags=re.IGNORECASE)
+    return term.replace("'", "")
+
+
+def _build_links_fts_query(query: str) -> tuple[str, list[str]]:
+    terms: list[str] = []
+    for raw in query.strip().split():
+        normalized = _normalize_link_search_term(raw)
+        if normalized and normalized not in terms:
+            terms.append(normalized)
+    return " OR ".join(f'"{term}"' for term in terms), terms
+
+
+def _build_term_match_score_sql(alias: str, terms: list[str]) -> tuple[str, list[Any]]:
+    searchable = (
+        f"lower(coalesce({alias}.title,'') || ' ' || coalesce({alias}.relevance,'') || ' ' "
+        f"|| coalesce({alias}.category,'') || ' ' || coalesce({alias}.url,''))"
+    )
+    clauses: list[str] = []
+    params: list[Any] = []
+    for term in terms:
+        clauses.append(f"CASE WHEN {searchable} LIKE ? THEN ? ELSE 0 END")
+        params.extend([f"%{term.lower()}%", len(term)])
+    if not clauses:
+        return "0", []
+    return " + ".join(clauses), params
+
+
 def get_links(
     db_path: Path,
     *,
@@ -506,8 +537,11 @@ def search_links_fts(
         conn.close()
         return get_links(db_path, category=category, days=days, limit=limit)
 
-    # FTS5 query — quote terms for safety
-    fts_query = " OR ".join(f'"{term}"' for term in q.split() if term)
+    fts_query, terms = _build_links_fts_query(q)
+    if not terms:
+        conn.close()
+        return get_links(db_path, category=category, days=days, limit=limit)
+    match_score_sql, match_score_params = _build_term_match_score_sql("l", terms)
 
     where: list[str] = []
     params: list[Any] = []
@@ -524,14 +558,15 @@ def search_links_fts(
     rows = conn.execute(
         f"""SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
                    l.shared_by, l.source_group, l.first_seen, l.last_seen,
-                   l.mention_count, l.value_score, l.report_date
+                   l.mention_count, l.value_score, l.report_date,
+                   ({match_score_sql}) AS term_match_score
             FROM links_fts f
             JOIN links l ON f.rowid = l.id
             WHERE links_fts MATCH ?
             {extra_where}
-            ORDER BY rank, l.value_score DESC
+            ORDER BY term_match_score DESC, rank, l.value_score DESC
             LIMIT ?""",
-        (fts_query, *params),
+        (*match_score_params, fts_query, *params),
     ).fetchall()
     conn.close()
     return [

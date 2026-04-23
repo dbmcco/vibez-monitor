@@ -22,6 +22,32 @@ def _seed_links(tmp_path: Path) -> Path:
     return db_path
 
 
+def _seed_possessive_links(tmp_path: Path) -> Path:
+    db_path = tmp_path / "possessive.db"
+    init_db(db_path)
+    upsert_links(
+        db_path,
+        [
+            {
+                "url": "https://wiki.thirdgulfwar.com/",
+                "title": "wiki.thirdgulfwar.com",
+                "category": "article",
+                "relevance": "I built a personal knowledge base around the Iran war. [Schuyler topics: geopolitics]",
+            },
+            {
+                "url": "https://www.outcryai.com/library",
+                "title": "outcryai.com",
+                "category": "article",
+                "relevance": "Example research report on Iran site",
+            },
+        ],
+        report_date="2026-03-17",
+        shared_by="Nat",
+        source_group="Show and Tell",
+    )
+    return db_path
+
+
 def test_fts_search_finds_by_title(tmp_path: Path):
     db_path = _seed_links(tmp_path)
     results = search_links_fts(db_path, "trycycle")
@@ -48,3 +74,13 @@ def test_fts_search_respects_category_filter(tmp_path: Path):
     urls = [r["url"] for r in results]
     assert "https://tool.dev/orchestrator" in urls
     assert "https://github.com/dan/trycycle" not in urls
+
+
+def test_fts_search_normalizes_possessive_terms(tmp_path: Path):
+    db_path = _seed_possessive_links(tmp_path)
+
+    possessive_results = search_links_fts(db_path, "schuyler's")
+    ranked_results = search_links_fts(db_path, "schuyler's iran site")
+
+    assert any(r["url"] == "https://wiki.thirdgulfwar.com/" for r in possessive_results)
+    assert ranked_results[0]["url"] == "https://wiki.thirdgulfwar.com/"
