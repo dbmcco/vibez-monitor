@@ -7,11 +7,12 @@ import OpenAI from "openai";
 export interface ModelRoute {
   provider: "openai" | "anthropic" | "ollama";
   model: string;
-  mode: "text" | "json";
+  mode: "text" | "json" | "embedding";
   max_tokens: number;
   temperature: number;
   timeout_ms: number;
   base_url?: string;
+  dimensions?: number;
 }
 
 interface ModelMessage {
@@ -27,6 +28,12 @@ export interface ModelTextResult {
     input_tokens: number;
     output_tokens: number;
   };
+}
+
+export interface ModelEmbeddingResult {
+  vectors: number[][];
+  model: string;
+  provider: string;
 }
 
 const ROUTE_CACHE = new Map<string, Record<string, ModelRoute>>();
@@ -176,6 +183,28 @@ async function runOpenAIRoute(
   };
 }
 
+async function runOpenAIEmbeddingRoute(
+  route: ModelRoute,
+  inputs: string[],
+  dimensions?: number,
+): Promise<ModelEmbeddingResult> {
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: route.timeout_ms,
+  });
+  const response = await client.embeddings.create({
+    model: route.model,
+    input: inputs,
+    encoding_format: "float",
+    dimensions: dimensions ?? route.dimensions,
+  });
+  return {
+    vectors: response.data.map((item) => item.embedding as number[]),
+    model: route.model,
+    provider: route.provider,
+  };
+}
+
 async function runOllamaRoute(
   route: ModelRoute,
   payload: ModelMessage[],
@@ -262,4 +291,47 @@ export async function generateJson<T>({
     ...result,
     parsed: parseJsonText(result.text) as T,
   };
+}
+
+export async function embedTexts({
+  taskId,
+  inputs,
+  dimensions,
+  manifestPath,
+}: {
+  taskId: string;
+  inputs: string[];
+  dimensions?: number;
+  manifestPath?: string;
+}): Promise<ModelEmbeddingResult> {
+  const routes = loadRoutes(manifestPath);
+  const route = getRoute(taskId, routes);
+  validateRouteRequirements(route);
+  if (route.mode !== "embedding") {
+    throw new Error(`task ${taskId} is not an embedding route`);
+  }
+  if (route.provider === "openai") {
+    return runOpenAIEmbeddingRoute(route, inputs, dimensions);
+  }
+  throw new Error(`unsupported embedding provider: ${route.provider}`);
+}
+
+export async function embedText({
+  taskId,
+  input,
+  dimensions,
+  manifestPath,
+}: {
+  taskId: string;
+  input: string;
+  dimensions?: number;
+  manifestPath?: string;
+}): Promise<number[]> {
+  const result = await embedTexts({
+    taskId,
+    inputs: [input],
+    dimensions,
+    manifestPath,
+  });
+  return result.vectors[0] || [];
 }

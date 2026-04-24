@@ -12,6 +12,7 @@ from vibez.model_router import (
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED_TASK_IDS = {
+    "embedding.semantic",
     "classification.inline",
     "classification.backfill",
     "synthesis.daily",
@@ -40,6 +41,15 @@ def test_load_routes_reads_shared_manifest(tmp_path: Path):
                         "max_tokens": 256,
                         "temperature": 0.1,
                         "timeout_ms": 30000,
+                    },
+                    "embedding.semantic": {
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                        "mode": "embedding",
+                        "max_tokens": 0,
+                        "temperature": 0,
+                        "timeout_ms": 30000,
+                        "dimensions": 256,
                     }
                 },
             }
@@ -56,6 +66,17 @@ def test_load_routes_reads_shared_manifest(tmp_path: Path):
         temperature=0.1,
         timeout_ms=30000,
         base_url=None,
+        dimensions=None,
+    )
+    assert routes["embedding.semantic"] == ModelRoute(
+        provider="openai",
+        model="text-embedding-3-small",
+        mode="embedding",
+        max_tokens=0,
+        temperature=0,
+        timeout_ms=30000,
+        base_url=None,
+        dimensions=256,
     )
 
 
@@ -83,6 +104,15 @@ def test_validate_route_requirements_only_requires_used_provider_keys(
                         "max_tokens": 256,
                         "temperature": 0.1,
                         "timeout_ms": 30000,
+                    },
+                    "embedding.semantic": {
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                        "mode": "embedding",
+                        "max_tokens": 0,
+                        "temperature": 0,
+                        "timeout_ms": 30000,
+                        "dimensions": 256,
                     }
                 },
             }

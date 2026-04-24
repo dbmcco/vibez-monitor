@@ -20,6 +20,7 @@ class ModelRoute:
     temperature: float
     timeout_ms: int
     base_url: str | None = None
+    dimensions: int | None = None
 
 
 def default_manifest_path() -> Path:
@@ -59,6 +60,11 @@ def load_routes(manifest_path: Path | str | None = None) -> dict[str, ModelRoute
             base_url=(
                 str(raw_route["base_url"])
                 if raw_route.get("base_url") is not None
+                else None
+            ),
+            dimensions=(
+                int(raw_route["dimensions"])
+                if raw_route.get("dimensions") is not None
                 else None
             ),
         )
@@ -175,6 +181,30 @@ def _run_openai(
     }
 
 
+def _embed_openai(
+    route: ModelRoute,
+    *,
+    texts: list[str],
+    dimensions: int | None = None,
+) -> list[list[float]]:
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        timeout=max(route.timeout_ms / 1000, 1),
+    )
+    kwargs: dict[str, Any] = {
+        "model": route.model,
+        "input": texts,
+        "encoding_format": "float",
+    }
+    resolved_dimensions = dimensions or route.dimensions
+    if resolved_dimensions:
+        kwargs["dimensions"] = resolved_dimensions
+    response = client.embeddings.create(**kwargs)
+    return [list(item.embedding) for item in response.data]
+
+
 def _run_ollama(
     route: ModelRoute,
     *,
@@ -255,3 +285,34 @@ def generate_json(
         **result,
         "parsed": _parse_json_output(result["text"]),
     }
+
+
+def embed_texts(
+    task_id: str,
+    texts: list[str],
+    *,
+    dimensions: int | None = None,
+    manifest_path: Path | str | None = None,
+) -> list[list[float]]:
+    route = get_route(task_id, manifest_path)
+    if route.mode != "embedding":
+        raise ValueError(f"task {task_id} is not an embedding route")
+    if route.provider == "openai":
+        return _embed_openai(route, texts=texts, dimensions=dimensions)
+    raise ValueError(f"unsupported embedding provider: {route.provider}")
+
+
+def embed_text(
+    task_id: str,
+    text: str,
+    *,
+    dimensions: int | None = None,
+    manifest_path: Path | str | None = None,
+) -> list[float]:
+    vectors = embed_texts(
+        task_id,
+        [text],
+        dimensions=dimensions,
+        manifest_path=manifest_path,
+    )
+    return vectors[0] if vectors else []

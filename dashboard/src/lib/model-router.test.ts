@@ -15,6 +15,15 @@ describe("model-router", () => {
       JSON.stringify({
         version: 1,
         routes: {
+          "embedding.semantic": {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            mode: "embedding",
+            max_tokens: 0,
+            temperature: 0,
+            timeout_ms: 30000,
+            dimensions: 256,
+          },
           "chat.interactive": {
             provider: "openai",
             model: "gpt-5.1",
@@ -33,6 +42,12 @@ describe("model-router", () => {
       provider: "openai",
       model: "gpt-5.1",
       mode: "text",
+    });
+    expect(routes["embedding.semantic"]).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      mode: "embedding",
+      dimensions: 256,
     });
   });
 
