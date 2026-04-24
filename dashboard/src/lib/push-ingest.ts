@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { Pool } from "pg";
 
 const ALLOWED_SYNC_STATE_KEYS = new Set([
   "beeper_active_group_ids",
@@ -7,6 +8,9 @@ const ALLOWED_SYNC_STATE_KEYS = new Set([
   "wisdom_last_run",
   "links_last_refresh_ts",
 ]);
+const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
+const EMBEDDING_BATCH_SIZE = 100;
+let pgPool: Pool | null = null;
 
 export interface MessagePayload {
   id: string;
@@ -94,6 +98,43 @@ export interface WisdomRecommendationPayload {
   reason?: string | null;
 }
 
+export interface MessageEmbeddingPayload {
+  message_id: string;
+  room_id: string;
+  room_name: string;
+  sender_id: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score?: number | null;
+  topics?: string | unknown;
+  entities?: string | unknown;
+  contribution_flag?: number | boolean | null;
+  contribution_themes?: string | unknown;
+  contribution_hint?: string | null;
+  alert_level?: string | null;
+  embedding: string;
+}
+
+export interface LinkEmbeddingPayload {
+  link_id: number;
+  url: string;
+  url_hash: string;
+  title?: string | null;
+  category?: string | null;
+  relevance?: string | null;
+  shared_by?: string | null;
+  source_group?: string | null;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  mention_count?: number | null;
+  value_score?: number | null;
+  report_date?: string | null;
+  authored_by?: string | null;
+  pinned?: number | boolean | null;
+  embedding: string;
+}
+
 export interface PushPayload {
   records?: unknown;
   links?: unknown;
@@ -101,6 +142,8 @@ export interface PushPayload {
   wisdom_topics?: unknown;
   wisdom_items?: unknown;
   wisdom_recommendations?: unknown;
+  message_embeddings?: unknown;
+  link_embeddings?: unknown;
   sync_state?: unknown;
 }
 
@@ -112,7 +155,14 @@ export interface PushResult {
   wisdom_topics_written: number;
   wisdom_items_written: number;
   wisdom_recommendations_written: number;
+  message_embeddings_written: number;
+  link_embeddings_written: number;
   sync_state_written: number;
+}
+
+export interface PgvectorWriter {
+  writeMessageEmbeddings(rows: MessageEmbeddingPayload[]): Promise<number>;
+  writeLinkEmbeddings(rows: LinkEmbeddingPayload[]): Promise<number>;
 }
 
 function parseJsonList(value: unknown): string[] {
@@ -152,6 +202,84 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function parseJsonText(value: unknown, fallback = "[]"): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || fallback;
+  }
+  if (value === null || value === undefined) return fallback;
+  return JSON.stringify(value);
+}
+
+function parseEmbeddingLiteral(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("[") ? trimmed : `[${trimmed}]`;
+}
+
+function messageTableName(): string {
+  const raw = (process.env.VIBEZ_PGVECTOR_TABLE || "vibez_message_embeddings")
+    .trim()
+    .toLowerCase();
+  if (!IDENT_RE.test(raw)) {
+    throw new Error(`Invalid VIBEZ_PGVECTOR_TABLE '${raw}'.`);
+  }
+  return raw;
+}
+
+function linkTableName(): string {
+  const raw = (process.env.VIBEZ_PGVECTOR_LINK_TABLE || "vibez_link_embeddings")
+    .trim()
+    .toLowerCase();
+  if (!IDENT_RE.test(raw)) {
+    throw new Error(`Invalid VIBEZ_PGVECTOR_LINK_TABLE '${raw}'.`);
+  }
+  return raw;
+}
+
+function pgvectorDimensions(): number {
+  const value = Number.parseInt(process.env.VIBEZ_PGVECTOR_DIM || "256", 10);
+  if (!Number.isFinite(value)) return 256;
+  return Math.max(64, Math.min(value, 3072));
+}
+
+function getPgPool(): Pool | null {
+  const url = (process.env.VIBEZ_PGVECTOR_URL || "").trim();
+  if (!url) return null;
+  if (!pgPool) {
+    pgPool = new Pool({
+      connectionString: url,
+      max: 4,
+      idleTimeoutMillis: 10_000,
+      allowExitOnIdle: true,
+    });
+  }
+  return pgPool;
+}
+
+function isValidMessageEmbedding(row: MessageEmbeddingPayload): boolean {
+  return Boolean(
+    row.message_id &&
+      row.room_id &&
+      row.room_name &&
+      row.sender_id &&
+      row.sender_name &&
+      typeof row.body === "string" &&
+      Number.isFinite(Number(row.timestamp)) &&
+      parseEmbeddingLiteral(row.embedding),
+  );
+}
+
+function isValidLinkEmbedding(row: LinkEmbeddingPayload): boolean {
+  return Boolean(
+    Number.isFinite(Number(row.link_id)) &&
+      row.url &&
+      row.url_hash &&
+      parseEmbeddingLiteral(row.embedding),
+  );
+}
+
 function sanitizeSyncState(raw: unknown): Array<[string, string]> {
   if (!raw || typeof raw !== "object") return [];
   const entries: Array<[string, string]> = [];
@@ -174,6 +302,8 @@ export function hasPushPayloadContent(payload: PushPayload): boolean {
     asArray(payload.wisdom_topics).length > 0 ||
     asArray(payload.wisdom_items).length > 0 ||
     asArray(payload.wisdom_recommendations).length > 0 ||
+    asArray(payload.message_embeddings).length > 0 ||
+    asArray(payload.link_embeddings).length > 0 ||
     sanitizeSyncState(payload.sync_state).length > 0
   );
 }
@@ -389,6 +519,272 @@ function upsertWisdomRecommendation(
   );
 }
 
+async function ensureMessagePgvectorSchema(pool: Pool): Promise<void> {
+  const table = messageTableName();
+  const dims = pgvectorDimensions();
+  const idxPrefix = `${table}_idx`;
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${table} (
+      message_id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      room_name TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      timestamp BIGINT NOT NULL,
+      relevance_score DOUBLE PRECISION,
+      topics JSONB NOT NULL DEFAULT '[]'::jsonb,
+      entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+      contribution_flag BOOLEAN NOT NULL DEFAULT FALSE,
+      contribution_themes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      contribution_hint TEXT,
+      alert_level TEXT,
+      embedding VECTOR(${dims}) NOT NULL,
+      body_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(body, ''))) STORED,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS ${idxPrefix}_embedding ON ${table} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS ${idxPrefix}_tsv ON ${table} USING gin (body_tsv)`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS ${idxPrefix}_timestamp ON ${table} (timestamp DESC)`,
+  );
+}
+
+async function ensureLinkPgvectorSchema(pool: Pool): Promise<void> {
+  const table = linkTableName();
+  const dims = pgvectorDimensions();
+  const idxPrefix = `${table}_idx`;
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${table} (
+      link_id BIGINT PRIMARY KEY,
+      url TEXT NOT NULL,
+      url_hash TEXT NOT NULL UNIQUE,
+      title TEXT,
+      category TEXT,
+      relevance TEXT,
+      shared_by TEXT,
+      source_group TEXT,
+      first_seen TEXT,
+      last_seen TEXT,
+      mention_count INTEGER NOT NULL DEFAULT 1,
+      value_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      report_date DATE,
+      authored_by TEXT,
+      pinned BOOLEAN NOT NULL DEFAULT FALSE,
+      embedding VECTOR(${dims}) NOT NULL,
+      search_tsv TSVECTOR GENERATED ALWAYS AS (
+        to_tsvector(
+          'english',
+          coalesce(title, '')
+          || ' ' || coalesce(relevance, '')
+          || ' ' || coalesce(category, '')
+          || ' ' || coalesce(url, '')
+          || ' ' || coalesce(shared_by, '')
+          || ' ' || coalesce(source_group, '')
+          || ' ' || coalesce(authored_by, '')
+        )
+      ) STORED,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS ${idxPrefix}_embedding ON ${table} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS ${idxPrefix}_tsv ON ${table} USING gin (search_tsv)`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS ${idxPrefix}_last_seen ON ${table} (last_seen DESC)`,
+  );
+}
+
+async function upsertMessageEmbeddingBatch(
+  pool: Pool,
+  rows: MessageEmbeddingPayload[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const table = messageTableName();
+  const params: unknown[] = [];
+  const values = rows.map((row) => {
+    const base = params.length;
+    params.push(
+      row.message_id.trim(),
+      row.room_id.trim(),
+      row.room_name.trim(),
+      row.sender_id.trim(),
+      row.sender_name.trim(),
+      row.body,
+      Math.trunc(Number(row.timestamp)),
+      row.relevance_score === null || row.relevance_score === undefined ? null : Number(row.relevance_score),
+      parseJsonText(row.topics, "[]"),
+      parseJsonText(row.entities, "[]"),
+      Boolean(row.contribution_flag),
+      parseJsonText(row.contribution_themes, "[]"),
+      row.contribution_hint ?? null,
+      normalizeAlertLevel(row.alert_level),
+      parseEmbeddingLiteral(row.embedding),
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}::jsonb, $${base + 10}::jsonb, $${base + 11}, $${base + 12}::jsonb, $${base + 13}, $${base + 14}, $${base + 15}::vector, now())`;
+  });
+  await pool.query(
+    `
+      INSERT INTO ${table} (
+        message_id, room_id, room_name, sender_id, sender_name, body, timestamp,
+        relevance_score, topics, entities, contribution_flag, contribution_themes,
+        contribution_hint, alert_level, embedding, updated_at
+      ) VALUES ${values.join(", ")}
+      ON CONFLICT (message_id) DO UPDATE SET
+        room_id = EXCLUDED.room_id,
+        room_name = EXCLUDED.room_name,
+        sender_id = EXCLUDED.sender_id,
+        sender_name = EXCLUDED.sender_name,
+        body = EXCLUDED.body,
+        timestamp = EXCLUDED.timestamp,
+        relevance_score = EXCLUDED.relevance_score,
+        topics = EXCLUDED.topics,
+        entities = EXCLUDED.entities,
+        contribution_flag = EXCLUDED.contribution_flag,
+        contribution_themes = EXCLUDED.contribution_themes,
+        contribution_hint = EXCLUDED.contribution_hint,
+        alert_level = EXCLUDED.alert_level,
+        embedding = EXCLUDED.embedding,
+        updated_at = now()
+    `,
+    params,
+  );
+  return rows.length;
+}
+
+async function upsertLinkEmbeddingBatch(
+  pool: Pool,
+  rows: LinkEmbeddingPayload[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const table = linkTableName();
+  const params: unknown[] = [];
+  const values = rows.map((row) => {
+    const base = params.length;
+    params.push(
+      Math.trunc(Number(row.link_id)),
+      row.url,
+      row.url_hash,
+      row.title ?? null,
+      row.category ?? null,
+      row.relevance ?? null,
+      row.shared_by ?? null,
+      row.source_group ?? null,
+      row.first_seen ?? null,
+      row.last_seen ?? null,
+      Number(row.mention_count ?? 0),
+      Number(row.value_score ?? 0),
+      row.report_date ? String(row.report_date).trim() || null : null,
+      row.authored_by ?? null,
+      Boolean(row.pinned),
+      parseEmbeddingLiteral(row.embedding),
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14}, $${base + 15}, $${base + 16}::vector, now())`;
+  });
+  await pool.query(
+    `
+      INSERT INTO ${table} (
+        link_id, url, url_hash, title, category, relevance, shared_by, source_group,
+        first_seen, last_seen, mention_count, value_score, report_date, authored_by,
+        pinned, embedding, updated_at
+      ) VALUES ${values.join(", ")}
+      ON CONFLICT (link_id) DO UPDATE SET
+        url = EXCLUDED.url,
+        url_hash = EXCLUDED.url_hash,
+        title = EXCLUDED.title,
+        category = EXCLUDED.category,
+        relevance = EXCLUDED.relevance,
+        shared_by = EXCLUDED.shared_by,
+        source_group = EXCLUDED.source_group,
+        first_seen = EXCLUDED.first_seen,
+        last_seen = EXCLUDED.last_seen,
+        mention_count = EXCLUDED.mention_count,
+        value_score = EXCLUDED.value_score,
+        report_date = EXCLUDED.report_date,
+        authored_by = EXCLUDED.authored_by,
+        pinned = EXCLUDED.pinned,
+        embedding = EXCLUDED.embedding,
+        updated_at = now()
+    `,
+    params,
+  );
+  return rows.length;
+}
+
+function createDefaultPgvectorWriter(): PgvectorWriter | null {
+  const pool = getPgPool();
+  if (!pool) return null;
+  return {
+    async writeMessageEmbeddings(rows: MessageEmbeddingPayload[]) {
+      await ensureMessagePgvectorSchema(pool);
+      let written = 0;
+      for (let i = 0; i < rows.length; i += EMBEDDING_BATCH_SIZE) {
+        written += await upsertMessageEmbeddingBatch(
+          pool,
+          rows.slice(i, i + EMBEDDING_BATCH_SIZE),
+        );
+      }
+      return written;
+    },
+    async writeLinkEmbeddings(rows: LinkEmbeddingPayload[]) {
+      await ensureLinkPgvectorSchema(pool);
+      let written = 0;
+      for (let i = 0; i < rows.length; i += EMBEDDING_BATCH_SIZE) {
+        written += await upsertLinkEmbeddingBatch(
+          pool,
+          rows.slice(i, i + EMBEDDING_BATCH_SIZE),
+        );
+      }
+      return written;
+    },
+  };
+}
+
+export async function applyPgvectorPayload(
+  payload: PushPayload,
+  writer?: PgvectorWriter | null,
+): Promise<Pick<PushResult, "message_embeddings_written" | "link_embeddings_written">> {
+  const messageEmbeddings = asArray<MessageEmbeddingPayload>(payload.message_embeddings).filter(
+    (row) => row && isValidMessageEmbedding(row),
+  );
+  const linkEmbeddings = asArray<LinkEmbeddingPayload>(payload.link_embeddings).filter(
+    (row) => row && isValidLinkEmbedding(row),
+  );
+
+  const result = {
+    message_embeddings_written: 0,
+    link_embeddings_written: 0,
+  };
+  if (messageEmbeddings.length === 0 && linkEmbeddings.length === 0) {
+    return result;
+  }
+
+  const resolvedWriter = writer ?? createDefaultPgvectorWriter();
+  if (!resolvedWriter) {
+    throw new Error("Pgvector is not configured for embedding payloads.");
+  }
+
+  if (messageEmbeddings.length > 0) {
+    result.message_embeddings_written =
+      await resolvedWriter.writeMessageEmbeddings(messageEmbeddings);
+  }
+  if (linkEmbeddings.length > 0) {
+    result.link_embeddings_written =
+      await resolvedWriter.writeLinkEmbeddings(linkEmbeddings);
+  }
+  return result;
+}
+
 export function applyPushPayload(
   db: Database.Database,
   payload: PushPayload,
@@ -425,6 +821,8 @@ export function applyPushPayload(
     wisdom_topics_written: 0,
     wisdom_items_written: 0,
     wisdom_recommendations_written: 0,
+    message_embeddings_written: 0,
+    link_embeddings_written: 0,
     sync_state_written: 0,
   };
 

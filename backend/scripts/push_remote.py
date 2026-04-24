@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import urllib.error
@@ -29,6 +30,8 @@ DEFAULT_ANALYSIS_SYNC_STATE_KEYS = (
     "links_last_refresh_ts",
 )
 DEFAULT_SYNC_STATE_KEYS = DEFAULT_ANALYSIS_SYNC_STATE_KEYS
+EMBEDDING_BATCH_SIZE = 100
+_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -258,6 +261,107 @@ def _fetch_rows(db_path: Path, query: str, params: tuple[Any, ...] = ()) -> list
     return [dict(row) for row in rows]
 
 
+def _validate_ident(raw: str, label: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value or not _IDENT_RE.fullmatch(value):
+        raise ValueError(f"Invalid {label}: {raw!r}")
+    return value
+
+
+def _import_psycopg():
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise RuntimeError(
+            "psycopg is required to push pgvector embeddings. Install with: pip install 'psycopg[binary]>=3.2'"
+        ) from exc
+    return psycopg
+
+
+def fetch_message_embeddings(
+    allowed_groups: set[str],
+    excluded_groups: set[str],
+    *,
+    cutoff_ts: int | None = None,
+) -> list[dict[str, Any]]:
+    pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip()
+    if not pg_url:
+        return []
+    table = _validate_ident(
+        os.environ.get("VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings"),
+        "VIBEZ_PGVECTOR_TABLE",
+    )
+    psycopg = _import_psycopg()
+    params: list[Any] = []
+    where_parts: list[str] = []
+    if cutoff_ts is not None:
+        params.append(int(cutoff_ts))
+        where_parts.append("timestamp >= %s")
+    if allowed_groups:
+        params.append([item.strip().casefold() for item in allowed_groups if item.strip()])
+        where_parts.append("lower(room_name) = ANY(%s)")
+    if excluded_groups:
+        params.append([item.strip().lower() for item in excluded_groups if item.strip()])
+        where_parts.append("NOT (lower(room_name) = ANY(%s))")
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    sql = f"""
+        SELECT message_id, room_id, room_name, sender_id, sender_name, body, timestamp,
+               relevance_score, topics::text AS topics, entities::text AS entities,
+               contribution_flag, contribution_themes::text AS contribution_themes,
+               contribution_hint, alert_level, embedding::text AS embedding
+        FROM {table}
+        {where_sql}
+        ORDER BY timestamp ASC, message_id ASC
+    """
+    with psycopg.connect(pg_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            columns = [desc.name for desc in cur.description]
+            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+
+
+def fetch_link_embeddings(
+    allowed_groups: set[str],
+    excluded_groups: set[str],
+    *,
+    cutoff_ts: int | None = None,
+) -> list[dict[str, Any]]:
+    pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip()
+    if not pg_url:
+        return []
+    table = _validate_ident(
+        os.environ.get("VIBEZ_PGVECTOR_LINK_TABLE", "vibez_link_embeddings"),
+        "VIBEZ_PGVECTOR_LINK_TABLE",
+    )
+    psycopg = _import_psycopg()
+    params: list[Any] = []
+    where_parts: list[str] = []
+    if cutoff_ts is not None:
+        cutoff_iso = datetime.fromtimestamp(cutoff_ts / 1000, tz=timezone.utc).isoformat()
+        params.append(cutoff_iso)
+        where_parts.append("COALESCE(last_seen, '') >= %s")
+    if allowed_groups:
+        params.append([item.strip().casefold() for item in allowed_groups if item.strip()])
+        where_parts.append("lower(source_group) = ANY(%s)")
+    if excluded_groups:
+        params.append([item.strip().lower() for item in excluded_groups if item.strip()])
+        where_parts.append("NOT (lower(source_group) = ANY(%s))")
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    sql = f"""
+        SELECT link_id, url, url_hash, title, category, relevance, shared_by, source_group,
+               first_seen, last_seen, mention_count, value_score, report_date::text AS report_date, authored_by,
+               pinned, embedding::text AS embedding
+        FROM {table}
+        {where_sql}
+        ORDER BY COALESCE(last_seen, '') ASC, link_id ASC
+    """
+    with psycopg.connect(pg_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            columns = [desc.name for desc in cur.description]
+            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+
+
 def fetch_links(db_path: Path) -> list[dict[str, Any]]:
     return _fetch_rows(
         db_path,
@@ -423,19 +527,46 @@ def push_analysis_tables(
     db_path: Path,
     sync_state: dict[str, str],
     batch_size: int,
+    *,
+    cutoff_ts: int | None = None,
+    allowed_groups: set[str] | None = None,
+    excluded_groups: set[str] | None = None,
 ) -> None:
+    resolved_allowed = allowed_groups or set()
+    resolved_excluded = excluded_groups or set()
     sections: list[tuple[str, list[dict[str, Any]]]] = [
         ("links", fetch_links(db_path)),
         ("daily_reports", fetch_daily_reports(db_path)),
         ("wisdom_topics", fetch_wisdom_topics(db_path)),
         ("wisdom_items", fetch_wisdom_items(db_path)),
         ("wisdom_recommendations", fetch_wisdom_recommendations(db_path)),
+        (
+            "message_embeddings",
+            fetch_message_embeddings(
+                resolved_allowed,
+                resolved_excluded,
+                cutoff_ts=cutoff_ts,
+            ),
+        ),
+        (
+            "link_embeddings",
+            fetch_link_embeddings(
+                resolved_allowed,
+                resolved_excluded,
+                cutoff_ts=cutoff_ts,
+            ),
+        ),
     ]
     for section_name, rows in sections:
         if not rows:
             continue
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i : i + batch_size]
+        resolved_batch_size = (
+            min(batch_size, EMBEDDING_BATCH_SIZE)
+            if section_name.endswith("embeddings")
+            else batch_size
+        )
+        for i in range(0, len(rows), resolved_batch_size):
+            batch = rows[i : i + resolved_batch_size]
             result = push_section(
                 remote_url,
                 push_key,
@@ -523,6 +654,9 @@ def main() -> int:
         db_path=db_path,
         sync_state=sync_state if not records else {},
         batch_size=batch_size,
+        cutoff_ts=cutoff_ts,
+        allowed_groups=allowed_groups,
+        excluded_groups=excluded_groups,
     )
     print(
         f"Push complete: {len(records)} records over {batches} message batches "

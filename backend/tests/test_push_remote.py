@@ -7,6 +7,7 @@ from backend.scripts import push_remote
 from backend.scripts.push_remote import (
     DEFAULT_ANALYSIS_SYNC_STATE_KEYS,
     fetch_daily_reports,
+    fetch_link_embeddings,
     fetch_links,
     fetch_sync_state,
     fetch_wisdom_items,
@@ -194,6 +195,53 @@ def test_push_analysis_tables_sends_each_table_in_its_own_section(
         return {"ok": True}
 
     monkeypatch.setattr(push_remote, "push_section", fake_push_section)
+    monkeypatch.setattr(
+        push_remote,
+        "fetch_message_embeddings",
+        lambda *_args, **_kwargs: [
+            {
+                "message_id": "m1",
+                "room_id": "room-1",
+                "room_name": "Show and Tell",
+                "sender_id": "user-1",
+                "sender_name": "Alice",
+                "body": "hello world",
+                "timestamp": 1776120000000,
+                "relevance_score": 8,
+                "topics": '["agents"]',
+                "entities": '["Alice"]',
+                "contribution_flag": 1,
+                "contribution_themes": '["demo"]',
+                "contribution_hint": "worth saving",
+                "alert_level": "digest",
+                "embedding": "[0.1,0.2]",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        push_remote,
+        "fetch_link_embeddings",
+        lambda *_args, **_kwargs: [
+            {
+                "link_id": 7,
+                "url": "https://example.com/a",
+                "url_hash": "hash-a",
+                "title": "Example A",
+                "category": "repo",
+                "relevance": "Useful repo",
+                "shared_by": "Alice",
+                "source_group": "Show and Tell",
+                "first_seen": "2026-04-14T10:00:00+00:00",
+                "last_seen": "2026-04-14T10:05:00+00:00",
+                "mention_count": 2,
+                "value_score": 1.5,
+                "report_date": "2026-04-14",
+                "authored_by": "Alice",
+                "pinned": 1,
+                "embedding": "[0.3,0.4]",
+            }
+        ],
+    )
 
     push_remote.push_analysis_tables(
         remote_url="https://example.com",
@@ -210,5 +258,148 @@ def test_push_analysis_tables_sends_each_table_in_its_own_section(
         {"wisdom_topics": fetch_wisdom_topics(db_path)},
         {"wisdom_items": fetch_wisdom_items(db_path)},
         {"wisdom_recommendations": fetch_wisdom_recommendations(db_path)},
+        {
+            "message_embeddings": [
+                {
+                    "message_id": "m1",
+                    "room_id": "room-1",
+                    "room_name": "Show and Tell",
+                    "sender_id": "user-1",
+                    "sender_name": "Alice",
+                    "body": "hello world",
+                    "timestamp": 1776120000000,
+                    "relevance_score": 8,
+                    "topics": '["agents"]',
+                    "entities": '["Alice"]',
+                    "contribution_flag": 1,
+                    "contribution_themes": '["demo"]',
+                    "contribution_hint": "worth saving",
+                    "alert_level": "digest",
+                    "embedding": "[0.1,0.2]",
+                }
+            ]
+        },
+        {
+            "link_embeddings": [
+                {
+                    "link_id": 7,
+                    "url": "https://example.com/a",
+                    "url_hash": "hash-a",
+                    "title": "Example A",
+                    "category": "repo",
+                    "relevance": "Useful repo",
+                    "shared_by": "Alice",
+                    "source_group": "Show and Tell",
+                    "first_seen": "2026-04-14T10:00:00+00:00",
+                    "last_seen": "2026-04-14T10:05:00+00:00",
+                    "mention_count": 2,
+                    "value_score": 1.5,
+                    "report_date": "2026-04-14",
+                    "authored_by": "Alice",
+                    "pinned": 1,
+                    "embedding": "[0.3,0.4]",
+                }
+            ]
+        },
         {"sync_state": {"wisdom_last_run": "1776160800000"}},
+    ]
+
+
+def test_fetch_link_embeddings_coerces_report_date_to_text(monkeypatch):
+    monkeypatch.setenv("VIBEZ_PGVECTOR_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("VIBEZ_PGVECTOR_LINK_TABLE", "vibez_link_embeddings")
+
+    class FakeCursor:
+        description = [
+            type("Col", (), {"name": name})
+            for name in [
+                "link_id",
+                "url",
+                "url_hash",
+                "title",
+                "category",
+                "relevance",
+                "shared_by",
+                "source_group",
+                "first_seen",
+                "last_seen",
+                "mention_count",
+                "value_score",
+                "report_date",
+                "authored_by",
+                "pinned",
+                "embedding",
+            ]
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params):
+            self.sql = sql
+            self.params = params
+
+        def fetchall(self):
+            return [
+                (
+                    7,
+                    "https://example.com/a",
+                    "hash-a",
+                    "Example A",
+                    "repo",
+                    "Useful repo",
+                    "Alice",
+                    "Show and Tell",
+                    "2026-04-14T10:00:00+00:00",
+                    "2026-04-14T10:05:00+00:00",
+                    2,
+                    1.5,
+                    "2026-04-14",
+                    "Alice",
+                    True,
+                    "[0.1,0.2]",
+                )
+            ]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(_url):
+            return FakeConnection()
+
+    monkeypatch.setattr(push_remote, "_import_psycopg", lambda: FakePsycopg)
+
+    rows = fetch_link_embeddings({"Show and Tell"}, set(), cutoff_ts=None)
+
+    assert rows == [
+        {
+            "link_id": 7,
+            "url": "https://example.com/a",
+            "url_hash": "hash-a",
+            "title": "Example A",
+            "category": "repo",
+            "relevance": "Useful repo",
+            "shared_by": "Alice",
+            "source_group": "Show and Tell",
+            "first_seen": "2026-04-14T10:00:00+00:00",
+            "last_seen": "2026-04-14T10:05:00+00:00",
+            "mention_count": 2,
+            "value_score": 1.5,
+            "report_date": "2026-04-14",
+            "authored_by": "Alice",
+            "pinned": True,
+            "embedding": "[0.1,0.2]",
+        }
     ]

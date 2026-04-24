@@ -23,10 +23,23 @@ DEFAULT_LINK_TABLE = "vibez_link_embeddings"
 DEFAULT_DIMENSIONS = 256
 EMBED_BATCH_SIZE = 128
 MAX_EMBED_TEXT_CHARS = 1500
+MAX_LINK_EMBED_TEXT_CHARS = 1400
 EMBED_BATCH_MAX_CHARS = 90000
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_EMBED_TEXT_TRANSLATION = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+        "\u00a0": " ",
+    }
+)
 _TITLE_STOPWORDS = {
     "about",
     "after",
@@ -147,6 +160,20 @@ def _parse_json_list(raw: str | None) -> list[str]:
     return [str(item).strip() for item in parsed if str(item).strip()]
 
 
+def _normalize_embedding_part(raw_part: Any) -> str:
+    text = html.unescape(str(raw_part or "")).replace("\ufeff", " ")
+    text = unicodedata.normalize("NFKC", text).translate(_EMBED_TEXT_TRANSLATION)
+    return re.sub(
+        r"\s+",
+        " ",
+        "".join(
+            char
+            for char in text
+            if not unicodedata.category(char).startswith("C") or char in "\t\n\r "
+        ),
+    ).strip()
+
+
 def _compose_bounded_embedding_text(
     parts: Sequence[str],
     *,
@@ -161,16 +188,7 @@ def _compose_bounded_embedding_text(
     separator_len = len(separator)
 
     for raw_part in parts:
-        text = html.unescape(str(raw_part or "")).replace("\ufeff", " ")
-        part = re.sub(
-            r"\s+",
-            " ",
-            "".join(
-                char
-                for char in text
-                if not unicodedata.category(char).startswith("C") or char in "\t\n\r "
-            ),
-        ).strip()
+        part = _normalize_embedding_part(raw_part)
         if not part:
             continue
 
@@ -216,7 +234,8 @@ def _compose_link_embedding_text(row: dict[str, Any]) -> str:
             str(row.get("shared_by") or ""),
             str(row.get("source_group") or ""),
             str(row.get("relevance") or ""),
-        ]
+        ],
+        max_chars=MAX_LINK_EMBED_TEXT_CHARS,
     )
 
 

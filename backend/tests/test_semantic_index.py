@@ -54,11 +54,31 @@ def test_compose_link_embedding_text_caps_long_documents_and_keeps_metadata():
 
     text = semantic_index._compose_link_embedding_text(row)
 
-    assert len(text) <= semantic_index.MAX_EMBED_TEXT_CHARS
+    assert len(text) <= semantic_index.MAX_LINK_EMBED_TEXT_CHARS
     assert "https://wiki.thirdgulfwar.com/" in text
     assert "Schuyler's Iran site" in text
     assert "Nat" in text
     assert "Show and Tell" in text
+
+
+def test_compose_link_embedding_text_normalizes_smart_quotes():
+    row = {
+        "title": "Cora’s email “future”",
+        "relevance": "It’s what Gmail “should” do.",
+        "category": "discussion",
+        "url": "https://example.com/post",
+        "shared_by": "Dave",
+        "source_group": "made-of-meat",
+        "authored_by": "Cora",
+    }
+
+    text = semantic_index._compose_link_embedding_text(row)
+
+    assert "’" not in text
+    assert "“" not in text
+    assert "”" not in text
+    assert "Cora's email \"future\"" in text
+    assert "It's what Gmail \"should\" do." in text
 
 
 def test_batched_by_chars_splits_large_payloads():

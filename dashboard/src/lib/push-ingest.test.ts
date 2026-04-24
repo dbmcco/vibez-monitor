@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { applyPushPayload } from "./push-ingest";
+import { applyPgvectorPayload, applyPushPayload } from "./push-ingest";
 
 const openDbs: Database.Database[] = [];
 const tempDirs: string[] = [];
@@ -291,6 +291,66 @@ describe("applyPushPayload", () => {
       from_slug: "agent-reviews",
       to_slug: "agent-reviews",
       strength: 0.5,
+    });
+  });
+
+  test("writes precomputed embedding payloads through the pgvector writer", async () => {
+    const writeMessageEmbeddings = vi.fn(async (rows) => rows.length);
+    const writeLinkEmbeddings = vi.fn(async (rows) => rows.length);
+
+    const result = await applyPgvectorPayload(
+      {
+        message_embeddings: [
+          {
+            message_id: "m1",
+            room_id: "room-1",
+            room_name: "Show and Tell",
+            sender_id: "user-1",
+            sender_name: "Alice",
+            body: "hello world",
+            timestamp: 1776120000000,
+            relevance_score: 8,
+            topics: "[\"agents\"]",
+            entities: "[\"Alice\"]",
+            contribution_flag: 1,
+            contribution_themes: "[\"demo\"]",
+            contribution_hint: "worth saving",
+            alert_level: "digest",
+            embedding: "[0.1,0.2]",
+          },
+        ],
+        link_embeddings: [
+          {
+            link_id: 7,
+            url: "https://example.com/a",
+            url_hash: "hash-a",
+            title: "Example A",
+            category: "repo",
+            relevance: "Useful repo",
+            shared_by: "Alice",
+            source_group: "Show and Tell",
+            first_seen: "2026-04-14T10:00:00+00:00",
+            last_seen: "2026-04-14T10:05:00+00:00",
+            mention_count: 2,
+            value_score: 1.5,
+            report_date: "2026-04-14",
+            authored_by: "Alice",
+            pinned: 1,
+            embedding: "[0.3,0.4]",
+          },
+        ],
+      },
+      {
+        writeMessageEmbeddings,
+        writeLinkEmbeddings,
+      },
+    );
+
+    expect(writeMessageEmbeddings).toHaveBeenCalledTimes(1);
+    expect(writeLinkEmbeddings).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      message_embeddings_written: 1,
+      link_embeddings_written: 1,
     });
   });
 });

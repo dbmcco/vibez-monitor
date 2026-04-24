@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import path from "path";
 
 import {
+  applyPgvectorPayload,
   applyPushPayload,
   getRecordCount,
   hasPushPayloadContent,
@@ -70,8 +71,9 @@ export async function POST(request: NextRequest) {
   db.pragma("foreign_keys = ON");
 
   try {
-    const result = applyPushPayload(db, payload);
-    return NextResponse.json({ ok: true, ...result });
+    const sqliteResult = applyPushPayload(db, payload);
+    const pgvectorResult = await applyPgvectorPayload(payload);
+    return NextResponse.json({ ok: true, ...sqliteResult, ...pgvectorResult });
   } catch (error) {
     console.error("POST /api/admin/push failed", error);
     return NextResponse.json({ ok: false, error: "Failed to write payload." }, { status: 500 });

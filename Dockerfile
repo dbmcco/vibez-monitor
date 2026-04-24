@@ -8,6 +8,7 @@ ENV PATH="/opt/venv/bin:${PATH}"
 RUN pip install --no-cache-dir --upgrade pip \
   && pip install --no-cache-dir -e ./backend
 
+COPY config ./config
 COPY dashboard ./dashboard
 RUN cd dashboard \
   && npm ci \
