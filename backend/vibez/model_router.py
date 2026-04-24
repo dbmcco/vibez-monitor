@@ -84,10 +84,26 @@ def validate_route_requirements(manifest_path: Path | str | None = None) -> None
             raise RuntimeError("OPENAI_API_KEY is required by model routing")
         if route.provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("ANTHROPIC_API_KEY is required by model routing")
-        if route.provider == "ollama" and not (
-            route.base_url or os.environ.get("OLLAMA_BASE_URL")
-        ):
-            raise RuntimeError("OLLAMA_BASE_URL is required by model routing")
+        if route.provider == "ollama":
+            continue
+
+
+def _normalize_embedding_dimensions(
+    vector: list[float],
+    dimensions: int | None = None,
+) -> list[float]:
+    values = [float(value) for value in vector]
+    if dimensions is None or dimensions <= 0 or len(values) == dimensions:
+        return values
+    if len(values) < dimensions:
+        raise ValueError(
+            f"embedding dimension mismatch: requested {dimensions}, got {len(values)}"
+        )
+    shortened = values[:dimensions]
+    norm = sum(value * value for value in shortened) ** 0.5
+    if norm <= 0:
+        return shortened
+    return [value / norm for value in shortened]
 
 
 def _build_messages(
@@ -202,7 +218,36 @@ def _embed_openai(
     if resolved_dimensions:
         kwargs["dimensions"] = resolved_dimensions
     response = client.embeddings.create(**kwargs)
-    return [list(item.embedding) for item in response.data]
+    return [
+        _normalize_embedding_dimensions(list(item.embedding), resolved_dimensions)
+        for item in response.data
+    ]
+
+
+def _embed_ollama(
+    route: ModelRoute,
+    *,
+    texts: list[str],
+    dimensions: int | None = None,
+) -> list[list[float]]:
+    base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434"
+    response = httpx.post(
+        f"{base_url.rstrip('/')}/api/embed",
+        json={
+            "model": route.model,
+            "input": texts,
+        },
+        timeout=max(route.timeout_ms / 1000, 1),
+    )
+    response.raise_for_status()
+    data = response.json()
+    embeddings = data.get("embeddings") or data.get("embedding") or []
+    if embeddings and isinstance(embeddings[0], (int, float)):
+        embeddings = [embeddings]
+    return [
+        _normalize_embedding_dimensions(list(vector), dimensions or route.dimensions)
+        for vector in embeddings
+    ]
 
 
 def _run_ollama(
@@ -299,6 +344,8 @@ def embed_texts(
         raise ValueError(f"task {task_id} is not an embedding route")
     if route.provider == "openai":
         return _embed_openai(route, texts=texts, dimensions=dimensions)
+    if route.provider == "ollama":
+        return _embed_ollama(route, texts=texts, dimensions=dimensions)
     raise ValueError(f"unsupported embedding provider: {route.provider}")
 
 

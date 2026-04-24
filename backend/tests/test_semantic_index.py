@@ -3,6 +3,62 @@ from __future__ import annotations
 from vibez import semantic_index
 
 
+def test_compose_embedding_text_caps_long_documents_and_keeps_metadata():
+    row = {
+        "body": "agentic systems " * 400,
+        "topics": '["retrieval"]',
+        "entities": '["pgvector"]',
+        "contribution_themes": '["search"]',
+        "contribution_hint": "important thread",
+        "room_name": "Show and Tell",
+        "sender_name": "Nat",
+    }
+
+    text = semantic_index._compose_embedding_text(row)
+
+    assert len(text) <= semantic_index.MAX_EMBED_TEXT_CHARS
+    assert "Show and Tell" in text
+    assert "Nat" in text
+    assert "retrieval" in text
+    assert "pgvector" in text
+
+
+def test_compose_link_embedding_text_caps_long_documents_and_keeps_metadata():
+    row = {
+        "title": "Schuyler's Iran site",
+        "relevance": "analysis " * 400,
+        "category": "article",
+        "url": "https://wiki.thirdgulfwar.com/",
+        "shared_by": "Nat",
+        "source_group": "Show and Tell",
+        "authored_by": "Schuyler",
+    }
+
+    text = semantic_index._compose_link_embedding_text(row)
+
+    assert len(text) <= semantic_index.MAX_EMBED_TEXT_CHARS
+    assert "https://wiki.thirdgulfwar.com/" in text
+    assert "Schuyler's Iran site" in text
+    assert "Nat" in text
+    assert "Show and Tell" in text
+
+
+def test_batched_by_chars_splits_large_payloads():
+    items = [
+        "a" * 40000,
+        "b" * 40000,
+        "c" * 40000,
+    ]
+
+    batches = semantic_index._batched_by_chars(
+        items,
+        size=semantic_index.EMBED_BATCH_SIZE,
+        max_chars=90000,
+    )
+
+    assert [len(batch) for batch in batches] == [2, 1]
+
+
 def test_embed_text_uses_embedding_route(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -258,6 +314,119 @@ def test_index_link_rows_to_pgvector_executes_upsert(monkeypatch):
     vector_literal = payload[0][-1]
     assert isinstance(vector_literal, str)
     assert vector_literal.startswith("[") and vector_literal.endswith("]")
+
+
+def test_ensure_link_pgvector_schema_avoids_concat_ws_in_generated_column(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql):
+            captured.setdefault("sql", []).append(sql)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            captured["committed"] = True
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(_url):
+            return FakeConnection()
+
+    monkeypatch.setattr(semantic_index, "_import_psycopg", lambda: FakePsycopg)
+
+    semantic_index.ensure_link_pgvector_schema("postgresql://localhost/test")
+
+    create_table_sql = next(
+        sql for sql in captured["sql"] if "CREATE TABLE IF NOT EXISTS" in sql
+    )
+    assert "concat_ws" not in create_table_sql.lower()
+
+
+def test_index_link_rows_to_pgvector_coerces_blank_report_date_to_none(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def executemany(self, sql, payload):
+            captured["payload"] = payload
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            captured["committed"] = True
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(_url):
+            return FakeConnection()
+
+    monkeypatch.setattr(semantic_index, "_import_psycopg", lambda: FakePsycopg)
+    monkeypatch.setattr(
+        semantic_index,
+        "ensure_link_pgvector_schema",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        semantic_index,
+        "embed_texts",
+        lambda texts, *, dimensions=semantic_index.DEFAULT_DIMENSIONS: [
+            [0.5] * dimensions for _ in texts
+        ],
+    )
+
+    semantic_index.index_link_rows_to_pgvector(
+        "postgresql://localhost/test",
+        [
+            {
+                "id": 9,
+                "url": "https://example.com/post",
+                "url_hash": "hash",
+                "title": "Example",
+                "category": "article",
+                "relevance": "summary",
+                "shared_by": "Nat",
+                "source_group": "Show and Tell",
+                "first_seen": "2026-04-23T12:00:00",
+                "last_seen": "2026-04-23T12:05:00",
+                "mention_count": 1,
+                "value_score": 1.0,
+                "report_date": "",
+                "authored_by": "Schuyler",
+                "pinned": 0,
+            }
+        ],
+    )
+
+    payload = captured["payload"]
+    assert payload[0][12] is None
 
 
 def test_index_sqlite_links_skips_batches_without_urls(tmp_db, monkeypatch):

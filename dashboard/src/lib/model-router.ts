@@ -83,9 +83,29 @@ function validateRouteRequirements(route: ModelRoute): void {
   if (route.provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY not configured");
   }
-  if (route.provider === "ollama" && !route.base_url && !process.env.OLLAMA_BASE_URL) {
-    throw new Error("OLLAMA_BASE_URL not configured");
+  if (route.provider === "ollama") {
+    return;
   }
+}
+
+function normalizeEmbeddingDimensions(
+  vector: number[],
+  dimensions?: number,
+): number[] {
+  if (!dimensions || dimensions <= 0 || vector.length === dimensions) {
+    return vector.map((value) => Number(value));
+  }
+  if (vector.length < dimensions) {
+    throw new Error(
+      `embedding dimension mismatch: requested ${dimensions}, got ${vector.length}`,
+    );
+  }
+  const shortened = vector.slice(0, dimensions).map((value) => Number(value));
+  const norm = Math.sqrt(
+    shortened.reduce((sum, value) => sum + value * value, 0),
+  );
+  if (norm <= 0) return shortened;
+  return shortened.map((value) => value / norm);
 }
 
 function buildMessages({
@@ -209,7 +229,7 @@ async function runOllamaRoute(
   route: ModelRoute,
   payload: ModelMessage[],
 ): Promise<ModelTextResult> {
-  const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL;
+  const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   if (!baseUrl) throw new Error("OLLAMA_BASE_URL not configured");
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
     method: "POST",
@@ -241,6 +261,37 @@ async function runOllamaRoute(
       input_tokens: data.prompt_eval_count ?? 0,
       output_tokens: data.eval_count ?? 0,
     },
+  };
+}
+
+async function runOllamaEmbeddingRoute(
+  route: ModelRoute,
+  inputs: string[],
+  dimensions?: number,
+): Promise<ModelEmbeddingResult> {
+  const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: route.model,
+      input: inputs,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`ollama embed request failed: ${response.status}`);
+  }
+  const data = (await response.json()) as {
+    embeddings?: number[][];
+    embedding?: number[];
+  };
+  const rawEmbeddings = data.embeddings || (data.embedding ? [data.embedding] : []);
+  return {
+    vectors: rawEmbeddings.map((vector) =>
+      normalizeEmbeddingDimensions(vector, dimensions ?? route.dimensions),
+    ),
+    model: route.model,
+    provider: route.provider,
   };
 }
 
@@ -312,6 +363,9 @@ export async function embedTexts({
   }
   if (route.provider === "openai") {
     return runOpenAIEmbeddingRoute(route, inputs, dimensions);
+  }
+  if (route.provider === "ollama") {
+    return runOllamaEmbeddingRoute(route, inputs, dimensions);
   }
   throw new Error(`unsupported embedding provider: ${route.provider}`);
 }

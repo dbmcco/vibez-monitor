@@ -2,12 +2,12 @@
   "version": 1,
   "routes": {
     "embedding.semantic": {
-      "provider": "openai",
-      "model": "text-embedding-3-small",
+      "provider": "ollama",
+      "model": "mxbai-embed-large:latest",
       "mode": "embedding",
       "max_tokens": 0,
       "temperature": 0,
-      "timeout_ms": 30000,
+      "timeout_ms": 60000,
       "dimensions": 256
     },
     "classification.inline": {

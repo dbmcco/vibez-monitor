@@ -8,7 +8,7 @@ import re
 import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from vibez.db import get_connection
 from vibez import model_router
@@ -19,6 +19,9 @@ logger = logging.getLogger("vibez.semantic_index")
 DEFAULT_TABLE = "vibez_message_embeddings"
 DEFAULT_LINK_TABLE = "vibez_link_embeddings"
 DEFAULT_DIMENSIONS = 256
+EMBED_BATCH_SIZE = 128
+MAX_EMBED_TEXT_CHARS = 1600
+EMBED_BATCH_MAX_CHARS = 90000
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
@@ -142,40 +145,107 @@ def _parse_json_list(raw: str | None) -> list[str]:
     return [str(item).strip() for item in parsed if str(item).strip()]
 
 
+def _compose_bounded_embedding_text(
+    parts: Sequence[str],
+    *,
+    max_chars: int = MAX_EMBED_TEXT_CHARS,
+) -> str:
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+
+    chosen: list[str] = []
+    current_length = 0
+    separator = " \n "
+    separator_len = len(separator)
+
+    for raw_part in parts:
+        part = str(raw_part or "").strip()
+        if not part:
+            continue
+
+        prefix_len = separator_len if chosen else 0
+        remaining = max_chars - current_length - prefix_len
+        if remaining <= 0:
+            break
+        if len(part) > remaining:
+            chosen.append(part[:remaining].rstrip())
+            break
+
+        chosen.append(part)
+        current_length += prefix_len + len(part)
+
+    return separator.join(part for part in chosen if part)
+
+
 def _compose_embedding_text(row: dict[str, Any]) -> str:
     topics = " ".join(_parse_json_list(row.get("topics")))
     entities = " ".join(_parse_json_list(row.get("entities")))
     themes = " ".join(_parse_json_list(row.get("contribution_themes")))
     hint = str(row.get("contribution_hint") or "")
-    return " \n ".join(
-        part
-        for part in [
-            str(row.get("body") or ""),
+    return _compose_bounded_embedding_text(
+        [
+            str(row.get("room_name") or ""),
+            str(row.get("sender_name") or ""),
             topics,
             entities,
             themes,
             hint,
-            str(row.get("room_name") or ""),
-            str(row.get("sender_name") or ""),
+            str(row.get("body") or ""),
         ]
-        if part
     )
 
 
 def _compose_link_embedding_text(row: dict[str, Any]) -> str:
-    return " \n ".join(
-        part
-        for part in [
+    return _compose_bounded_embedding_text(
+        [
             str(row.get("title") or ""),
-            str(row.get("relevance") or ""),
             str(row.get("category") or ""),
             str(row.get("url") or ""),
+            str(row.get("authored_by") or ""),
             str(row.get("shared_by") or ""),
             str(row.get("source_group") or ""),
-            str(row.get("authored_by") or ""),
+            str(row.get("relevance") or ""),
         ]
-        if part
     )
+
+
+def _batched(items: Sequence[Any], size: int = EMBED_BATCH_SIZE) -> list[Sequence[Any]]:
+    if size <= 0:
+        raise ValueError("batch size must be positive")
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _batched_by_chars(
+    items: Sequence[Any],
+    *,
+    size: int = EMBED_BATCH_SIZE,
+    max_chars: int = EMBED_BATCH_MAX_CHARS,
+    measure: Callable[[Any], int] | None = None,
+) -> list[list[Any]]:
+    if size <= 0:
+        raise ValueError("batch size must be positive")
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+
+    item_measure = measure or (lambda item: len(str(item)))
+    batches: list[list[Any]] = []
+    current: list[Any] = []
+    current_chars = 0
+
+    for item in items:
+        item_chars = max(0, int(item_measure(item)))
+        would_overflow_count = len(current) >= size
+        would_overflow_chars = bool(current) and current_chars + item_chars > max_chars
+        if would_overflow_count or would_overflow_chars:
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += item_chars
+
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _import_psycopg():
@@ -271,16 +341,13 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     search_tsv TSVECTOR GENERATED ALWAYS AS (
         to_tsvector(
             'english',
-            concat_ws(
-                ' ',
-                coalesce(title, ''),
-                coalesce(relevance, ''),
-                coalesce(category, ''),
-                coalesce(url, ''),
-                coalesce(shared_by, ''),
-                coalesce(source_group, ''),
-                coalesce(authored_by, '')
-            )
+            coalesce(title, '')
+            || ' ' || coalesce(relevance, '')
+            || ' ' || coalesce(category, '')
+            || ' ' || coalesce(url, '')
+            || ' ' || coalesce(shared_by, '')
+            || ' ' || coalesce(source_group, '')
+            || ' ' || coalesce(authored_by, '')
         )
     ) STORED,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -470,29 +537,36 @@ ON CONFLICT (message_id) DO UPDATE SET
     updated_at = now();
 """
     payload: list[tuple[Any, ...]] = []
-    embedding_texts_batch = [_compose_embedding_text(row) for row in rows]
-    embeddings = embed_texts(embedding_texts_batch, dimensions=dims)
-    for row, vector in zip(rows, embeddings, strict=True):
-        embedding = _vector_literal(vector)
-        payload.append(
-            (
-                row["id"],
-                row["room_id"],
-                row["room_name"],
-                row["sender_id"],
-                row["sender_name"],
-                row["body"] or "",
-                int(row["timestamp"]),
-                row["relevance_score"],
-                row["topics"] or "[]",
-                row["entities"] or "[]",
-                bool(row["contribution_flag"] or 0),
-                row["contribution_themes"] or "[]",
-                row["contribution_hint"],
-                row["alert_level"],
-                embedding,
+    row_texts = [(row, _compose_embedding_text(row)) for row in rows]
+    for batch in _batched_by_chars(
+        row_texts,
+        size=EMBED_BATCH_SIZE,
+        max_chars=EMBED_BATCH_MAX_CHARS,
+        measure=lambda item: len(item[1]),
+    ):
+        row_batch = [row for row, _text in batch]
+        embeddings = embed_texts([text for _row, text in batch], dimensions=dims)
+        for row, vector in zip(row_batch, embeddings, strict=True):
+            embedding = _vector_literal(vector)
+            payload.append(
+                (
+                    row["id"],
+                    row["room_id"],
+                    row["room_name"],
+                    row["sender_id"],
+                    row["sender_name"],
+                    row["body"] or "",
+                    int(row["timestamp"]),
+                    row["relevance_score"],
+                    row["topics"] or "[]",
+                    row["entities"] or "[]",
+                    bool(row["contribution_flag"] or 0),
+                    row["contribution_themes"] or "[]",
+                    row["contribution_hint"],
+                    row["alert_level"],
+                    embedding,
+                )
             )
-        )
 
     with psycopg.connect(pg_url) as conn:
         with conn.cursor() as cur:
@@ -572,30 +646,40 @@ ON CONFLICT (link_id) DO UPDATE SET
     embedding = EXCLUDED.embedding,
     updated_at = now();
 """
-    embedding_texts_batch = [_compose_link_embedding_text(row) for row in rows]
-    embeddings = embed_texts(embedding_texts_batch, dimensions=dims)
     payload: list[tuple[Any, ...]] = []
-    for row, vector in zip(rows, embeddings, strict=True):
-        payload.append(
-            (
-                int(row["id"]),
-                str(row.get("url") or ""),
-                str(row.get("url_hash") or ""),
-                str(row.get("title") or ""),
-                str(row.get("category") or ""),
-                str(row.get("relevance") or ""),
-                str(row.get("shared_by") or ""),
-                str(row.get("source_group") or ""),
-                row.get("first_seen"),
-                row.get("last_seen"),
-                int(row.get("mention_count") or 0),
-                float(row.get("value_score") or 0),
-                row.get("report_date"),
-                str(row.get("authored_by") or ""),
-                bool(row.get("pinned") or 0),
-                _vector_literal(vector),
+    row_texts = [(row, _compose_link_embedding_text(row)) for row in rows]
+    for batch in _batched_by_chars(
+        row_texts,
+        size=EMBED_BATCH_SIZE,
+        max_chars=EMBED_BATCH_MAX_CHARS,
+        measure=lambda item: len(item[1]),
+    ):
+        row_batch = [row for row, _text in batch]
+        embeddings = embed_texts([text for _row, text in batch], dimensions=dims)
+        for row, vector in zip(row_batch, embeddings, strict=True):
+            report_date = row.get("report_date")
+            if isinstance(report_date, str):
+                report_date = report_date.strip() or None
+            payload.append(
+                (
+                    int(row["id"]),
+                    str(row.get("url") or ""),
+                    str(row.get("url_hash") or ""),
+                    str(row.get("title") or ""),
+                    str(row.get("category") or ""),
+                    str(row.get("relevance") or ""),
+                    str(row.get("shared_by") or ""),
+                    str(row.get("source_group") or ""),
+                    row.get("first_seen"),
+                    row.get("last_seen"),
+                    int(row.get("mention_count") or 0),
+                    float(row.get("value_score") or 0),
+                    report_date,
+                    str(row.get("authored_by") or ""),
+                    bool(row.get("pinned") or 0),
+                    _vector_literal(vector),
+                )
             )
-        )
 
     with psycopg.connect(pg_url) as conn:
         with conn.cursor() as cur:
