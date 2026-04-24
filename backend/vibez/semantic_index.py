@@ -6,6 +6,8 @@ import json
 import logging
 import re
 import hashlib
+import html
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -20,7 +22,7 @@ DEFAULT_TABLE = "vibez_message_embeddings"
 DEFAULT_LINK_TABLE = "vibez_link_embeddings"
 DEFAULT_DIMENSIONS = 256
 EMBED_BATCH_SIZE = 128
-MAX_EMBED_TEXT_CHARS = 1600
+MAX_EMBED_TEXT_CHARS = 1500
 EMBED_BATCH_MAX_CHARS = 90000
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
@@ -159,7 +161,16 @@ def _compose_bounded_embedding_text(
     separator_len = len(separator)
 
     for raw_part in parts:
-        part = str(raw_part or "").strip()
+        text = html.unescape(str(raw_part or "")).replace("\ufeff", " ")
+        part = re.sub(
+            r"\s+",
+            " ",
+            "".join(
+                char
+                for char in text
+                if not unicodedata.category(char).startswith("C") or char in "\t\n\r "
+            ),
+        ).strip()
         if not part:
             continue
 

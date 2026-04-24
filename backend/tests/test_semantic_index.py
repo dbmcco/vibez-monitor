@@ -23,6 +23,24 @@ def test_compose_embedding_text_caps_long_documents_and_keeps_metadata():
     assert "pgvector" in text
 
 
+def test_compose_embedding_text_normalizes_html_entities_and_bom():
+    row = {
+        "body": "See:&nbsp; this thread \ufeff about embeddings",
+        "topics": "[]",
+        "entities": "[]",
+        "contribution_themes": "[]",
+        "contribution_hint": "",
+        "room_name": "made-of-meat",
+        "sender_name": "Steve",
+    }
+
+    text = semantic_index._compose_embedding_text(row)
+
+    assert "&nbsp;" not in text
+    assert "\ufeff" not in text
+    assert "See:" in text
+
+
 def test_compose_link_embedding_text_caps_long_documents_and_keeps_metadata():
     row = {
         "title": "Schuyler's Iran site",
