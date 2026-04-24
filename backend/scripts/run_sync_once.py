@@ -69,7 +69,7 @@ def initialize_beeper_cursors(config: Config, groups: list[dict]) -> None:
 
 async def classify_and_index(config: Config, messages: list[dict]) -> None:
     from vibez.classifier import classify_messages
-    from vibez.semantic_index import index_sqlite_messages
+    from vibez.semantic_index import index_sqlite_links, index_sqlite_messages
 
     await classify_messages(config, messages)
 
@@ -95,6 +95,18 @@ async def classify_and_index(config: Config, messages: list[dict]) -> None:
         logging.getLogger("vibez.sync_once").info(
             "Indexed %d messages into pgvector",
             indexed,
+        )
+    indexed_links = index_sqlite_links(
+        config.db_path,
+        config.pgvector_url,
+        table=config.pgvector_link_table,
+        dimensions=config.pgvector_dimensions,
+        source_messages=messages,
+    )
+    if indexed_links:
+        logging.getLogger("vibez.sync_once").info(
+            "Indexed %d links into pgvector",
+            indexed_links,
         )
 
 

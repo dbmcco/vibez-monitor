@@ -5,16 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
 
 from vibez.db import get_connection
 from vibez import model_router
+from vibez.links import extract_urls
 
 logger = logging.getLogger("vibez.semantic_index")
 
 DEFAULT_TABLE = "vibez_message_embeddings"
+DEFAULT_LINK_TABLE = "vibez_link_embeddings"
 DEFAULT_DIMENSIONS = 256
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
@@ -159,6 +162,22 @@ def _compose_embedding_text(row: dict[str, Any]) -> str:
     )
 
 
+def _compose_link_embedding_text(row: dict[str, Any]) -> str:
+    return " \n ".join(
+        part
+        for part in [
+            str(row.get("title") or ""),
+            str(row.get("relevance") or ""),
+            str(row.get("category") or ""),
+            str(row.get("url") or ""),
+            str(row.get("shared_by") or ""),
+            str(row.get("source_group") or ""),
+            str(row.get("authored_by") or ""),
+        ]
+        if part
+    )
+
+
 def _import_psycopg():
     try:
         import psycopg
@@ -220,6 +239,71 @@ CREATE TABLE IF NOT EXISTS {table_name} (
         conn.commit()
 
 
+def ensure_link_pgvector_schema(
+    pg_url: str,
+    *,
+    table: str = DEFAULT_LINK_TABLE,
+    dimensions: int = DEFAULT_DIMENSIONS,
+) -> None:
+    table_name = _validate_table_name(table)
+    dims = _normalize_dimensions(dimensions)
+    psycopg = _import_psycopg()
+    idx_prefix = f"{table_name}_idx"
+
+    create_table_sql = f"""
+CREATE TABLE IF NOT EXISTS {table_name} (
+    link_id BIGINT PRIMARY KEY,
+    url TEXT NOT NULL,
+    url_hash TEXT NOT NULL UNIQUE,
+    title TEXT,
+    category TEXT,
+    relevance TEXT,
+    shared_by TEXT,
+    source_group TEXT,
+    first_seen TEXT,
+    last_seen TEXT,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    value_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+    report_date DATE,
+    authored_by TEXT,
+    pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    embedding VECTOR({dims}) NOT NULL,
+    search_tsv TSVECTOR GENERATED ALWAYS AS (
+        to_tsvector(
+            'english',
+            concat_ws(
+                ' ',
+                coalesce(title, ''),
+                coalesce(relevance, ''),
+                coalesce(category, ''),
+                coalesce(url, ''),
+                coalesce(shared_by, ''),
+                coalesce(source_group, ''),
+                coalesce(authored_by, '')
+            )
+        )
+    ) STORED,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+    with psycopg.connect(pg_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            cur.execute(create_table_sql)
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS {idx_prefix}_embedding "
+                f"ON {table_name} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
+            )
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS {idx_prefix}_tsv ON {table_name} USING gin (search_tsv)"
+            )
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS {idx_prefix}_last_seen ON {table_name} (last_seen DESC)"
+            )
+        conn.commit()
+
+
 def _fetch_sqlite_rows(
     db_path: Path,
     *,
@@ -267,6 +351,74 @@ def _fetch_sqlite_rows(
             "contribution_themes": row[11] if row[11] else "[]",
             "contribution_hint": row[12],
             "alert_level": row[13],
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+    return rows
+
+
+def _url_hash(url: str) -> str:
+    normalized = url.strip().rstrip("/").lower()
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _link_hashes_from_messages(messages: Sequence[dict[str, Any]]) -> list[str]:
+    hashes: set[str] = set()
+    for message in messages:
+        body = str(message.get("body") or "")
+        for url in extract_urls(body):
+            hashes.add(_url_hash(url))
+    return sorted(hashes)
+
+
+def _fetch_sqlite_link_rows(
+    db_path: Path,
+    *,
+    url_hashes: Sequence[str] | None = None,
+    since_iso: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    conn = get_connection(db_path)
+    where_parts: list[str] = []
+    params: list[Any] = []
+    if since_iso is not None:
+        where_parts.append("last_seen >= ?")
+        params.append(since_iso)
+    if url_hashes:
+        placeholders = ",".join("?" for _ in url_hashes)
+        where_parts.append(f"url_hash IN ({placeholders})")
+        params.extend(url_hashes)
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    limit_sql = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+
+    cursor = conn.execute(
+        f"""SELECT id, url, url_hash, title, category, relevance, shared_by,
+                   source_group, first_seen, last_seen, mention_count, value_score,
+                   report_date, authored_by, pinned
+            FROM links
+            {where_sql}
+            ORDER BY last_seen DESC
+            {limit_sql}""",
+        params,
+    )
+    rows = [
+        {
+            "id": row[0],
+            "url": row[1],
+            "url_hash": row[2],
+            "title": row[3] or "",
+            "category": row[4] or "",
+            "relevance": row[5] or "",
+            "shared_by": row[6] or "",
+            "source_group": row[7] or "",
+            "first_seen": row[8],
+            "last_seen": row[9],
+            "mention_count": row[10] or 0,
+            "value_score": row[11] or 0,
+            "report_date": row[12],
+            "authored_by": row[13] or "",
+            "pinned": bool(row[14] or 0),
         }
         for row in cursor.fetchall()
     ]
@@ -370,6 +522,114 @@ def index_sqlite_messages(
         limit=limit,
     )
     return index_rows_to_pgvector(
+        pg_url,
+        rows,
+        table=table,
+        dimensions=dimensions,
+    )
+
+
+def index_link_rows_to_pgvector(
+    pg_url: str,
+    rows: Sequence[dict[str, Any]],
+    *,
+    table: str = DEFAULT_LINK_TABLE,
+    dimensions: int = DEFAULT_DIMENSIONS,
+) -> int:
+    if not rows:
+        return 0
+
+    table_name = _validate_table_name(table)
+    dims = _normalize_dimensions(dimensions)
+    psycopg = _import_psycopg()
+    ensure_link_pgvector_schema(pg_url, table=table_name, dimensions=dims)
+
+    sql = f"""
+INSERT INTO {table_name} (
+    link_id, url, url_hash, title, category, relevance, shared_by, source_group,
+    first_seen, last_seen, mention_count, value_score, report_date, authored_by,
+    pinned, embedding, updated_at
+) VALUES (
+    %s, %s, %s, %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s, %s,
+    %s, %s::vector, now()
+)
+ON CONFLICT (link_id) DO UPDATE SET
+    url = EXCLUDED.url,
+    url_hash = EXCLUDED.url_hash,
+    title = EXCLUDED.title,
+    category = EXCLUDED.category,
+    relevance = EXCLUDED.relevance,
+    shared_by = EXCLUDED.shared_by,
+    source_group = EXCLUDED.source_group,
+    first_seen = EXCLUDED.first_seen,
+    last_seen = EXCLUDED.last_seen,
+    mention_count = EXCLUDED.mention_count,
+    value_score = EXCLUDED.value_score,
+    report_date = EXCLUDED.report_date,
+    authored_by = EXCLUDED.authored_by,
+    pinned = EXCLUDED.pinned,
+    embedding = EXCLUDED.embedding,
+    updated_at = now();
+"""
+    embedding_texts_batch = [_compose_link_embedding_text(row) for row in rows]
+    embeddings = embed_texts(embedding_texts_batch, dimensions=dims)
+    payload: list[tuple[Any, ...]] = []
+    for row, vector in zip(rows, embeddings, strict=True):
+        payload.append(
+            (
+                int(row["id"]),
+                str(row.get("url") or ""),
+                str(row.get("url_hash") or ""),
+                str(row.get("title") or ""),
+                str(row.get("category") or ""),
+                str(row.get("relevance") or ""),
+                str(row.get("shared_by") or ""),
+                str(row.get("source_group") or ""),
+                row.get("first_seen"),
+                row.get("last_seen"),
+                int(row.get("mention_count") or 0),
+                float(row.get("value_score") or 0),
+                row.get("report_date"),
+                str(row.get("authored_by") or ""),
+                bool(row.get("pinned") or 0),
+                _vector_literal(vector),
+            )
+        )
+
+    with psycopg.connect(pg_url) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, payload)
+        conn.commit()
+    return len(payload)
+
+
+def index_sqlite_links(
+    db_path: Path,
+    pg_url: str,
+    *,
+    table: str = DEFAULT_LINK_TABLE,
+    dimensions: int = DEFAULT_DIMENSIONS,
+    url_hashes: Sequence[str] | None = None,
+    source_messages: Sequence[dict[str, Any]] | None = None,
+    lookback_days: int | None = None,
+    limit: int | None = None,
+) -> int:
+    resolved_hashes = list(url_hashes or ())
+    if source_messages and not resolved_hashes:
+        resolved_hashes = _link_hashes_from_messages(source_messages)
+        if not resolved_hashes:
+            return 0
+    since_iso = None
+    if lookback_days is not None and lookback_days > 0:
+        since_iso = (datetime.now() - timedelta(days=lookback_days)).isoformat()
+    rows = _fetch_sqlite_link_rows(
+        db_path,
+        url_hashes=resolved_hashes or None,
+        since_iso=since_iso,
+        limit=limit,
+    )
+    return index_link_rows_to_pgvector(
         pg_url,
         rows,
         table=table,

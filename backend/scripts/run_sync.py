@@ -78,7 +78,7 @@ async def main():
 
     # Classify new messages inline as they arrive
     from vibez.classifier import classify_messages
-    from vibez.semantic_index import index_sqlite_messages
+    from vibez.semantic_index import index_sqlite_links, index_sqlite_messages
 
     async def on_messages(messages):
         await classify_messages(config, messages)
@@ -103,6 +103,18 @@ async def main():
                 logger.info("Indexed %d messages into pgvector", indexed)
         except Exception:
             logger.exception("Failed to index sync batch into pgvector")
+        try:
+            indexed_links = index_sqlite_links(
+                config.db_path,
+                config.pgvector_url,
+                table=config.pgvector_link_table,
+                dimensions=config.pgvector_dimensions,
+                source_messages=messages,
+            )
+            if indexed_links:
+                logger.info("Indexed %d links into pgvector", indexed_links)
+        except Exception:
+            logger.exception("Failed to index link batch into pgvector")
 
     async def run_source_with_restart(name: str, source_coro_factory):
         while True:

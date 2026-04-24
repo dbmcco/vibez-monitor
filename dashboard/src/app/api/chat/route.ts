@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchMessages, getLatestBriefingMd, searchLinksFts, type LinkRow } from "@/lib/db";
+import { searchMessages, getLatestBriefingMd, searchLinks, type LinkRow } from "@/lib/db";
 import fs from "fs";
 import { generateText, getRoute } from "@/lib/model-router";
 import { getDossierPath, getSubjectName, getSubjectPossessive } from "@/lib/profile";
@@ -130,7 +130,9 @@ export async function POST(request: NextRequest) {
           chatContext.page ? ` (${chatContext.page})` : ""
         }. Use that page context when it helps prioritize the answer.\n\n`
       : "";
-    const linkCandidates = wantsLinks ? searchLinksFts(question, { limit: 8, sort: "value" }) : [];
+    const linkCandidates = wantsLinks
+      ? await searchLinks({ query: question, limit: 8, sort: "value" })
+      : [];
     const linkBlock = wantsLinks ? buildLinkBlock(linkCandidates) : "";
 
     // Search for relevant messages

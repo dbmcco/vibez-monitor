@@ -80,4 +80,46 @@ describe("semantic pgvector search", () => {
       sender_name: "Sam",
     });
   });
+
+  test("searchHybridLinks embeds the query through the shared model router", async () => {
+    embedTextMock.mockResolvedValue(new Array<number>(64).fill(0.4));
+    queryMock.mockResolvedValue({
+      rows: [
+        {
+          id: 7,
+          url: "https://wiki.thirdgulfwar.com/",
+          url_hash: "abc123",
+          title: "wiki.thirdgulfwar.com",
+          category: "article",
+          relevance: "Schuyler's Iran site",
+          shared_by: "Nat",
+          source_group: "Show and Tell",
+          first_seen: "2026-04-23T12:00:00",
+          last_seen: "2026-04-23T12:05:00",
+          mention_count: 2,
+          value_score: 1.7,
+          report_date: "2026-04-23",
+          authored_by: "Schuyler",
+          pinned: 0,
+        },
+      ],
+    });
+
+    const semantic = await import("./semantic");
+    const rows = await semantic.searchHybridLinks({
+      query: "schuyler's iran site",
+      limit: 5,
+    });
+
+    expect(embedTextMock).toHaveBeenCalledWith({
+      taskId: "embedding.semantic",
+      input: "schuyler's iran site",
+      dimensions: 64,
+    });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(rows?.[0]).toMatchObject({
+      url: "https://wiki.thirdgulfwar.com/",
+      title: "wiki.thirdgulfwar.com",
+    });
+  });
 });

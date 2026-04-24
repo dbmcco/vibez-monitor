@@ -2,7 +2,7 @@
 // ABOUTME: Supports FTS search, source/sharer/category filtering, sort, and stats.
 
 import { NextRequest, NextResponse } from "next/server";
-import { getLinks, searchLinksFts, getLinkStats } from "@/lib/db";
+import { getLinks, searchLinks, getLinkStats } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const pinned = params.get("pinned") === "1" ? true : undefined;
 
     const opts = { category, days, limit, sort, source, sharedBy, authoredBy, pinned };
-    const links = q ? searchLinksFts(q, opts) : getLinks(opts);
+    const links = q ? await searchLinks({ query: q, ...opts }) : getLinks(opts);
 
     return NextResponse.json({ links, total: links.length });
   } catch (err) {

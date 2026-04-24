@@ -26,6 +26,24 @@ export interface SemanticMessageRow {
   alert_level: string | null;
 }
 
+export interface SemanticLinkRow {
+  id: number;
+  url: string;
+  url_hash: string;
+  title: string | null;
+  category: string | null;
+  relevance: string | null;
+  shared_by: string | null;
+  source_group: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  mention_count: number;
+  value_score: number;
+  report_date: string | null;
+  authored_by: string | null;
+  pinned: number | null;
+}
+
 export interface SemanticThreadInput {
   key: string;
   text: string;
@@ -129,6 +147,18 @@ function tableName(): string {
   if (!IDENT_RE.test(raw)) {
     throw new Error(
       `Invalid VIBEZ_PGVECTOR_TABLE '${raw}'. Use lowercase letters, numbers, underscores.`,
+    );
+  }
+  return raw;
+}
+
+function linkTableName(): string {
+  const raw = (process.env.VIBEZ_PGVECTOR_LINK_TABLE || "vibez_link_embeddings")
+    .trim()
+    .toLowerCase();
+  if (!IDENT_RE.test(raw)) {
+    throw new Error(
+      `Invalid VIBEZ_PGVECTOR_LINK_TABLE '${raw}'. Use lowercase letters, numbers, underscores.`,
     );
   }
   return raw;
@@ -299,6 +329,171 @@ LIMIT $${limitParam}
   }
 }
 
+export async function searchHybridLinks(opts: {
+  query: string;
+  category?: string;
+  days?: number;
+  limit?: number;
+  source?: string;
+  sharedBy?: string;
+  authoredBy?: string;
+  pinned?: boolean;
+}): Promise<SemanticLinkRow[] | null> {
+  const pg = getPool();
+  if (!pg) return null;
+
+  const limit = Math.max(1, Math.min(opts.limit || 50, 200));
+  const params: unknown[] = [];
+  const whereParts: string[] = [];
+
+  if (opts.category) {
+    params.push(opts.category);
+    whereParts.push(`l.category = $${params.length}`);
+  }
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    params.push(cutoff);
+    whereParts.push(`COALESCE(l.last_seen, '') >= $${params.length}`);
+  }
+  if (opts.source && opts.source !== "all") {
+    const patterns: Record<string, string> = {
+      github: "%github.com%",
+      x: "%x.com%",
+      youtube: "%youtu%",
+      substack: "%substack.com%",
+      medium: "%medium.com%",
+      arxiv: "%arxiv.org%",
+      reddit: "%reddit.com%",
+      hackernews: "%news.ycombinator.com%",
+      linkedin: "%linkedin.com%",
+      notion: "%notion.so%",
+      gdocs: "%docs.google.com%",
+    };
+    const pattern = patterns[opts.source];
+    if (pattern) {
+      params.push(pattern);
+      whereParts.push(`l.url LIKE $${params.length}`);
+    }
+  }
+  if (opts.sharedBy) {
+    params.push(`%${opts.sharedBy}%`);
+    whereParts.push(`l.shared_by LIKE $${params.length}`);
+  }
+  if (opts.authoredBy === "any") {
+    whereParts.push(`l.authored_by IS NOT NULL AND l.authored_by <> ''`);
+  } else if (opts.authoredBy) {
+    params.push(`%${opts.authoredBy}%`);
+    whereParts.push(`l.authored_by LIKE $${params.length}`);
+  }
+  if (opts.pinned) {
+    whereParts.push("l.pinned = true");
+  }
+
+  params.push(
+    vectorLiteral(
+      await embedText({
+        taskId: "embedding.semantic",
+        input: opts.query || "",
+        dimensions: dimensions(),
+      }),
+    ),
+  );
+  const vectorParam = params.length;
+  params.push((opts.query || "").trim());
+  const queryParam = params.length;
+  params.push(limit);
+  const limitParam = params.length;
+
+  const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+  const sql = `
+WITH params AS (
+  SELECT $${vectorParam}::vector AS qvec, NULLIF($${queryParam}, '') AS qtext
+)
+SELECT
+  l.link_id AS id,
+  l.url,
+  l.url_hash,
+  l.title,
+  l.category,
+  l.relevance,
+  l.shared_by,
+  l.source_group,
+  l.first_seen,
+  l.last_seen,
+  l.mention_count,
+  l.value_score,
+  l.report_date,
+  l.authored_by,
+  CASE WHEN l.pinned THEN 1 ELSE 0 END AS pinned
+FROM ${linkTableName()} l
+CROSS JOIN params p
+${whereSql}
+ORDER BY
+  (0.60 * (1 - (l.embedding <=> p.qvec)))
+  + (
+      CASE
+        WHEN p.qtext IS NULL THEN 0
+        ELSE 0.25 * LEAST(2, ts_rank_cd(l.search_tsv, websearch_to_tsquery('english', p.qtext)))
+      END
+    )
+  + (0.15 * LEAST(3, COALESCE(l.value_score, 0)) / 3.0) DESC,
+  l.last_seen DESC
+LIMIT $${limitParam}
+`;
+
+  try {
+    const result = await pg.query(sql, params);
+    return result.rows.map((row) => ({
+      id: Number(row.id || 0),
+      url: String(row.url || ""),
+      url_hash: String(row.url_hash || ""),
+      title:
+        row.title === null || row.title === undefined ? null : String(row.title),
+      category:
+        row.category === null || row.category === undefined
+          ? null
+          : String(row.category),
+      relevance:
+        row.relevance === null || row.relevance === undefined
+          ? null
+          : String(row.relevance),
+      shared_by:
+        row.shared_by === null || row.shared_by === undefined
+          ? null
+          : String(row.shared_by),
+      source_group:
+        row.source_group === null || row.source_group === undefined
+          ? null
+          : String(row.source_group),
+      first_seen:
+        row.first_seen === null || row.first_seen === undefined
+          ? null
+          : String(row.first_seen),
+      last_seen:
+        row.last_seen === null || row.last_seen === undefined
+          ? null
+          : String(row.last_seen),
+      mention_count: Number(row.mention_count || 0),
+      value_score: Number(row.value_score || 0),
+      report_date:
+        row.report_date === null || row.report_date === undefined
+          ? null
+          : String(row.report_date),
+      authored_by:
+        row.authored_by === null || row.authored_by === undefined
+          ? null
+          : String(row.authored_by),
+      pinned:
+        row.pinned === null || row.pinned === undefined
+          ? null
+          : Number(row.pinned),
+    }));
+  } catch (error) {
+    console.warn("pgvector hybrid link search unavailable, using SQLite fallback:", error);
+    return null;
+  }
+}
+
 export async function searchThreadEvidence(opts: {
   threads: SemanticThreadInput[];
   cutoffTs: number;
@@ -312,11 +507,12 @@ export async function searchThreadEvidence(opts: {
   const dims = dimensions();
   const table = tableName();
   const results = new Map<string, SemanticThreadEvidence>();
-  const queryVectors = await embedTexts({
+  const queryVectorsResult = await embedTexts({
     taskId: "embedding.semantic",
     inputs: opts.threads.map((thread) => thread.text),
     dimensions: dims,
   });
+  const queryVectors = queryVectorsResult.vectors;
 
   const settled = await Promise.allSettled(
     opts.threads.map(async (thread, index) => {

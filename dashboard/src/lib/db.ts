@@ -4,6 +4,7 @@ import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search"
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
 import {
   computeSemanticAnalytics,
+  searchHybridLinks,
   searchHybridMessages,
   searchThreadEvidence,
   type SemanticAnalytics,
@@ -3866,6 +3867,33 @@ export function searchLinksFts(
     .all(...params) as LinkRow[];
   db.close();
   return rows;
+}
+
+export async function searchLinks(opts: {
+  query: string;
+  category?: string;
+  days?: number;
+  limit?: number;
+  sort?: string;
+  source?: string;
+  sharedBy?: string;
+  authoredBy?: string;
+  pinned?: boolean;
+}): Promise<LinkRow[]> {
+  const semanticRows = await searchHybridLinks({
+    query: opts.query,
+    category: opts.category,
+    days: opts.days,
+    limit: opts.limit,
+    source: opts.source,
+    sharedBy: opts.sharedBy,
+    authoredBy: opts.authoredBy,
+    pinned: opts.pinned,
+  });
+  if (semanticRows && semanticRows.length > 0) {
+    return semanticRows;
+  }
+  return searchLinksFts(opts.query, opts);
 }
 
 export interface WisdomTopic {

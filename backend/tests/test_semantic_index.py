@@ -174,3 +174,105 @@ def test_search_hybrid_pgvector_parses_rows(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["room_name"] == "AGI"
     assert rows[0]["topics"] == ["retrieval", "chat"]
+
+
+def test_index_link_rows_to_pgvector_executes_upsert(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def executemany(self, sql, payload):
+            captured["sql"] = sql
+            captured["payload"] = payload
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            captured["committed"] = True
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(_url):
+            return FakeConnection()
+
+    monkeypatch.setattr(semantic_index, "_import_psycopg", lambda: FakePsycopg)
+    monkeypatch.setattr(
+        semantic_index,
+        "ensure_link_pgvector_schema",
+        lambda *_args, **_kwargs: captured.setdefault("schema_called", True),
+    )
+    monkeypatch.setattr(
+        semantic_index,
+        "embed_texts",
+        lambda texts, *, dimensions=semantic_index.DEFAULT_DIMENSIONS: [
+            [0.5] * dimensions for _ in texts
+        ],
+    )
+
+    rows = [
+        {
+            "id": 7,
+            "url": "https://wiki.thirdgulfwar.com/",
+            "url_hash": "abc123",
+            "title": "wiki.thirdgulfwar.com",
+            "category": "article",
+            "relevance": "Schuyler's Iran site",
+            "shared_by": "Nat",
+            "source_group": "Show and Tell",
+            "first_seen": "2026-04-23T12:00:00",
+            "last_seen": "2026-04-23T12:05:00",
+            "mention_count": 2,
+            "value_score": 1.7,
+            "report_date": "2026-04-23",
+            "authored_by": "Schuyler",
+            "pinned": 1,
+        }
+    ]
+
+    indexed = semantic_index.index_link_rows_to_pgvector(
+        "postgresql://localhost/test",
+        rows,
+        table="vibez_link_embeddings",
+        dimensions=128,
+    )
+
+    assert indexed == 1
+    assert captured.get("schema_called") is True
+    assert captured.get("committed") is True
+    payload = captured.get("payload")
+    assert isinstance(payload, list) and len(payload) == 1
+    assert payload[0][0] == 7
+    vector_literal = payload[0][-1]
+    assert isinstance(vector_literal, str)
+    assert vector_literal.startswith("[") and vector_literal.endswith("]")
+
+
+def test_index_sqlite_links_skips_batches_without_urls(tmp_db, monkeypatch):
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        semantic_index,
+        "_fetch_sqlite_link_rows",
+        lambda *_args, **_kwargs: captured.setdefault("fetched", True),
+    )
+
+    indexed = semantic_index.index_sqlite_links(
+        tmp_db,
+        "postgresql://localhost/test",
+        source_messages=[{"body": "no links here"}],
+    )
+
+    assert indexed == 0
+    assert captured == {}

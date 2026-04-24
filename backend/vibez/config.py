@@ -64,6 +64,7 @@ class Config:
     google_groups_bootstrap_max_uids: int = 2000
     pgvector_url: str = ""
     pgvector_table: str = "vibez_message_embeddings"
+    pgvector_link_table: str = "vibez_link_embeddings"
     pgvector_dimensions: int = 256
     pgvector_index_on_sync: bool = True
     sync_timeout_ms: int = 30000
@@ -164,6 +165,9 @@ class Config:
             pgvector_url=os.environ.get("VIBEZ_PGVECTOR_URL", ""),
             pgvector_table=os.environ.get(
                 "VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings"
+            ),
+            pgvector_link_table=os.environ.get(
+                "VIBEZ_PGVECTOR_LINK_TABLE", "vibez_link_embeddings"
             ),
             pgvector_dimensions=int(os.environ.get("VIBEZ_PGVECTOR_DIM", "256")),
             pgvector_index_on_sync=os.environ.get(

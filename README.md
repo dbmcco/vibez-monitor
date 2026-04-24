@@ -184,6 +184,7 @@ Enable this when you want semantic retrieval for chat questions and briefing-arc
 ```bash
 VIBEZ_PGVECTOR_URL=postgresql://user:pass@localhost:5432/vibez
 VIBEZ_PGVECTOR_TABLE=vibez_message_embeddings
+VIBEZ_PGVECTOR_LINK_TABLE=vibez_link_embeddings
 VIBEZ_PGVECTOR_DIM=256
 VIBEZ_PGVECTOR_INDEX_ON_SYNC=true
 ```
@@ -197,6 +198,7 @@ backend/.venv/bin/python backend/scripts/pgvector_index.py --lookback-days 180
 3. Keep embeddings current:
 
 - `backend/scripts/run_sync.py` now auto-indexes newly synced/classified rows when `VIBEZ_PGVECTOR_URL` is set.
+- Link vectors are mirrored from the same local SQLite `links` table, so message search and link search stay in the same embedding space.
 
 Where pgvector materially improves output:
 
@@ -233,6 +235,7 @@ VIBEZ_DB_PATH=/data/vibez.db
 VIBEZ_PUSH_API_KEY=your-ingest-key
 # Optional pgvector:
 VIBEZ_PGVECTOR_URL=$DATABASE_URL
+VIBEZ_PGVECTOR_LINK_TABLE=vibez_link_embeddings
 VIBEZ_PGVECTOR_INDEX_ON_SYNC=true
 ```
 
@@ -299,6 +302,17 @@ Required Railway env (dashboard service):
 ```bash
 VIBEZ_PUSH_API_KEY=your-ingest-key
 VIBEZ_ALLOWED_GROUPS=Show and Tell,The vibez (code code code),Off-topic,Agentic Weather Report,Intros <—- start here,Personal Agents 🦞🦀🛫😱,futures and scenarios AGI,Security,#ai-oss,Marketing and Content AGI,Personal workflows,Applied Business AGI,Presentation AGI,decentralized agi,audio intelligence,made-of-meat
+VIBEZ_PGVECTOR_URL=$DATABASE_URL
+VIBEZ_PGVECTOR_LINK_TABLE=vibez_link_embeddings
+```
+
+Optional local env for mirroring embeddings into Railway pgvector:
+
+```bash
+VIBEZ_REMOTE_PGVECTOR_URL=postgresql://user:pass@railway-host:5432/railway
+VIBEZ_REMOTE_PGVECTOR_TABLE=vibez_message_embeddings
+VIBEZ_REMOTE_PGVECTOR_LINK_TABLE=vibez_link_embeddings
+VIBEZ_REMOTE_PGVECTOR_DIM=256
 ```
 
 Run a normal push (new data, last 2 days):
@@ -324,6 +338,7 @@ What this does:
 - Runs local one-shot sync (Beeper + Google Groups).
 - Pushes local messages/classifications into Railway in batches.
 - Pushes locally computed links, daily reports, wisdom tables, and sync-state watermarks into Railway.
+- Mirrors message and link embeddings into Railway Postgres when `VIBEZ_REMOTE_PGVECTOR_URL` is set.
 - Does not ask Railway to run sync, links, wisdom, synthesis, or any other background analysis.
 - Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
 - Applies `VIBEZ_ALLOWED_GROUPS` to both Beeper room titles and Google Group keys, so you can publish only the approved AGI rooms plus `made-of-meat`.
