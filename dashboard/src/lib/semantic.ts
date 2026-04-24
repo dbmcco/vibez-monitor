@@ -1,5 +1,7 @@
 import { Pool } from "pg";
 
+import { embedText, embedTexts } from "./model-router";
+
 export interface SemanticRoomScope {
   mode: "active_groups" | "excluded_groups" | "all";
   activeGroupIds: string[];
@@ -156,44 +158,6 @@ function getPool(): Pool | null {
   return pool;
 }
 
-function fnv1a(input: string, seed: number): number {
-  let h = seed >>> 0;
-  const bytes = Buffer.from(input, "utf8");
-  for (const b of bytes) {
-    h ^= b;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-
-function embedText(text: string, dims = 256): number[] {
-  const vector = new Array<number>(dims).fill(0);
-  const tokens = (text.toLowerCase().match(TOKEN_RE) || []).map((token) =>
-    token.trim(),
-  );
-  if (tokens.length === 0) return vector;
-
-  for (const token of tokens) {
-    const base = 1 / Math.max(1, Math.sqrt(token.length));
-    const idxMain = fnv1a(token, 0x811c9dc5) % dims;
-    const idxSide = fnv1a(token, 0x9e3779b1) % dims;
-    vector[idxMain] += base;
-    vector[idxSide] -= base * 0.35;
-
-    if (token.length >= 5) {
-      for (let i = 0; i < token.length - 2; i += 1) {
-        const tri = token.slice(i, i + 3);
-        const idxTri = fnv1a(tri, 0x85ebca6b) % dims;
-        vector[idxTri] += 0.15;
-      }
-    }
-  }
-
-  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
-  if (norm <= 0) return vector;
-  return vector.map((value) => value / norm);
-}
-
 function vectorLiteral(vector: number[]): string {
   return `[${vector.map((value) => value.toFixed(6)).join(",")}]`;
 }
@@ -249,7 +213,15 @@ export async function searchHybridMessages(opts: {
   const whereParts: string[] = ["m.timestamp >= $1"];
   pushScopeWhere(whereParts, params, opts.roomScope);
 
-  params.push(vectorLiteral(embedText(opts.query || "", dimensions())));
+  params.push(
+    vectorLiteral(
+      await embedText({
+        taskId: "embedding.semantic",
+        input: opts.query || "",
+        dimensions: dimensions(),
+      }),
+    ),
+  );
   const vectorParam = params.length;
   params.push((opts.query || "").trim());
   const queryParam = params.length;
@@ -340,13 +312,18 @@ export async function searchThreadEvidence(opts: {
   const dims = dimensions();
   const table = tableName();
   const results = new Map<string, SemanticThreadEvidence>();
+  const queryVectors = await embedTexts({
+    taskId: "embedding.semantic",
+    inputs: opts.threads.map((thread) => thread.text),
+    dimensions: dims,
+  });
 
   const settled = await Promise.allSettled(
-    opts.threads.map(async (thread) => {
+    opts.threads.map(async (thread, index) => {
       const params: unknown[] = [opts.cutoffTs];
       const whereParts: string[] = ["m.timestamp >= $1"];
       pushScopeWhere(whereParts, params, opts.roomScope);
-      params.push(vectorLiteral(embedText(thread.text, dims)));
+      params.push(vectorLiteral(queryVectors[index] || new Array<number>(dims).fill(0)));
       const vectorParam = params.length;
       params.push(limit);
       const limitParam = params.length;

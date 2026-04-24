@@ -1,19 +1,27 @@
 from __future__ import annotations
 
-import math
-
-import pytest
-
 from vibez import semantic_index
 
 
-def test_embed_text_deterministic_and_normalized():
-    vec_a = semantic_index.embed_text("Agentic architecture and orchestration", dimensions=128)
-    vec_b = semantic_index.embed_text("Agentic architecture and orchestration", dimensions=128)
-    assert vec_a == vec_b
-    assert len(vec_a) == 128
-    norm = math.sqrt(sum(v * v for v in vec_a))
-    assert norm == pytest.approx(1.0, rel=1e-6)
+def test_embed_text_uses_embedding_route(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_embed_texts(task_id: str, texts: list[str], *, dimensions: int | None = None):
+        captured["task_id"] = task_id
+        captured["texts"] = texts
+        captured["dimensions"] = dimensions
+        return [[0.6] * 64]
+
+    monkeypatch.setattr(semantic_index.model_router, "embed_texts", fake_embed_texts)
+
+    vec = semantic_index.embed_text("Agentic architecture and orchestration", dimensions=64)
+
+    assert vec == [0.6] * 64
+    assert captured == {
+        "task_id": "embedding.semantic",
+        "texts": ["Agentic architecture and orchestration"],
+        "dimensions": 64,
+    }
 
 
 def test_embed_text_empty_returns_zero_vector():
@@ -59,6 +67,13 @@ def test_index_rows_to_pgvector_executes_upsert(monkeypatch):
         semantic_index,
         "ensure_pgvector_schema",
         lambda *_args, **_kwargs: captured.setdefault("schema_called", True),
+    )
+    monkeypatch.setattr(
+        semantic_index,
+        "embed_texts",
+        lambda texts, *, dimensions=semantic_index.DEFAULT_DIMENSIONS: [
+            [0.25] * dimensions for _ in texts
+        ],
     )
 
     rows = [
@@ -141,6 +156,11 @@ def test_search_hybrid_pgvector_parses_rows(monkeypatch):
             return FakeConnection()
 
     monkeypatch.setattr(semantic_index, "_import_psycopg", lambda: FakePsycopg)
+    monkeypatch.setattr(
+        semantic_index,
+        "embed_text",
+        lambda _text, *, dimensions=semantic_index.DEFAULT_DIMENSIONS: [0.2] * dimensions,
+    )
 
     rows = semantic_index.search_hybrid_pgvector(
         "postgresql://localhost/test",
@@ -154,4 +174,3 @@ def test_search_hybrid_pgvector_parses_rows(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["room_name"] == "AGI"
     assert rows[0]["topics"] == ["retrieval", "chat"]
-

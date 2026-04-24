@@ -69,6 +69,13 @@ def test_pgvector_index_pipeline_indexes_from_sqlite(monkeypatch, tmp_db):
 
     monkeypatch.setattr(semantic_index, "_import_psycopg", lambda: FakePsycopg)
     monkeypatch.setattr(semantic_index, "ensure_pgvector_schema", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        semantic_index,
+        "embed_texts",
+        lambda texts, *, dimensions=semantic_index.DEFAULT_DIMENSIONS: [
+            [0.5] * dimensions for _ in texts
+        ],
+    )
 
     indexed = index_sqlite_messages(
         tmp_db,

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
 
 from vibez.db import get_connection
+from vibez import model_router
 
 logger = logging.getLogger("vibez.semantic_index")
 
@@ -70,45 +70,57 @@ def _normalize_dimensions(dimensions: int | None) -> int:
     return value
 
 
-def _fnv1a(value: str, seed: int) -> int:
-    h = seed & 0xFFFFFFFF
-    for b in value.encode("utf-8"):
-        h ^= b
-        h = (h * 0x01000193) & 0xFFFFFFFF
-    return h
-
-
 def _tokens(text: str) -> list[str]:
     if not text:
         return []
     return _TOKEN_RE.findall(text.lower())
 
 
-def embed_text(text: str, dimensions: int = DEFAULT_DIMENSIONS) -> list[float]:
-    """Build a deterministic dense vector without external model dependencies."""
+def _zero_vector(dimensions: int) -> list[float]:
     dims = _normalize_dimensions(dimensions)
-    vec = [0.0] * dims
-    tokens = _tokens(text)
-    if not tokens:
-        return vec
+    return [0.0] * dims
 
-    for token in tokens:
-        base = 1.0 / max(1.0, math.sqrt(len(token)))
-        idx_main = _fnv1a(token, 0x811C9DC5) % dims
-        idx_side = _fnv1a(token, 0x9E3779B1) % dims
-        vec[idx_main] += base
-        vec[idx_side] -= base * 0.35
 
-        if len(token) >= 5:
-            for i in range(len(token) - 2):
-                tri = token[i : i + 3]
-                idx_tri = _fnv1a(tri, 0x85EBCA6B) % dims
-                vec[idx_tri] += 0.15
+def _coerce_vector(vector: Sequence[float], dimensions: int) -> list[float]:
+    dims = _normalize_dimensions(dimensions)
+    values = [float(value) for value in vector]
+    if len(values) != dims:
+        raise ValueError(
+            f"embedding dimension mismatch: expected {dims}, got {len(values)}"
+        )
+    return values
 
-    norm = math.sqrt(sum(value * value for value in vec))
-    if norm <= 0:
-        return vec
-    return [value / norm for value in vec]
+
+def embed_texts(
+    texts: Sequence[str],
+    dimensions: int = DEFAULT_DIMENSIONS,
+) -> list[list[float]]:
+    dims = _normalize_dimensions(dimensions)
+    normalized = [str(text or "") for text in texts]
+    if not normalized:
+        return []
+
+    vectors: list[list[float]] = [_zero_vector(dims) for _ in normalized]
+    pending_indexes = [index for index, text in enumerate(normalized) if text.strip()]
+    if not pending_indexes:
+        return vectors
+
+    routed = model_router.embed_texts(
+        "embedding.semantic",
+        [normalized[index] for index in pending_indexes],
+        dimensions=dims,
+    )
+    if len(routed) != len(pending_indexes):
+        raise ValueError(
+            f"embedding response count mismatch: expected {len(pending_indexes)}, got {len(routed)}"
+        )
+    for index, vector in zip(pending_indexes, routed, strict=True):
+        vectors[index] = _coerce_vector(vector, dims)
+    return vectors
+
+
+def embed_text(text: str, dimensions: int = DEFAULT_DIMENSIONS) -> list[float]:
+    return embed_texts([text], dimensions=dimensions)[0]
 
 
 def _vector_literal(vector: Sequence[float]) -> str:
@@ -306,9 +318,10 @@ ON CONFLICT (message_id) DO UPDATE SET
     updated_at = now();
 """
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        embedding_text = _compose_embedding_text(row)
-        embedding = _vector_literal(embed_text(embedding_text, dims))
+    embedding_texts_batch = [_compose_embedding_text(row) for row in rows]
+    embeddings = embed_texts(embedding_texts_batch, dimensions=dims)
+    for row, vector in zip(rows, embeddings, strict=True):
+        embedding = _vector_literal(vector)
         payload.append(
             (
                 row["id"],
@@ -379,7 +392,7 @@ def search_hybrid_pgvector(
     resolved_limit = max(1, min(int(limit), 200))
     cutoff_ts = int((datetime.now() - timedelta(days=lookback_days)).timestamp() * 1000)
     query_text = (query or "").strip()
-    query_vec = _vector_literal(embed_text(query_text, dims))
+    query_vec = _vector_literal(embed_text(query_text, dimensions=dims))
     psycopg = _import_psycopg()
 
     sql = f"""
