@@ -11,8 +11,8 @@
       "dimensions": 256
     },
     "classification.inline": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "json",
       "max_tokens": 256,
       "temperature": 0.1,
@@ -28,72 +28,72 @@
       "timeout_ms": 120000
     },
     "synthesis.daily": {
-      "provider": "openai",
-      "model": "gpt-5.1",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1",
       "mode": "text",
       "max_tokens": 8192,
       "temperature": 0.2,
       "timeout_ms": 120000
     },
     "wisdom.extract": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "json",
       "max_tokens": 2048,
       "temperature": 0.1,
       "timeout_ms": 120000
     },
     "wisdom.summarize": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "text",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 120000
     },
     "links.author_enrichment": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "json",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 30000
     },
     "chat.interactive": {
-      "provider": "openai",
-      "model": "gpt-5.1",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1",
       "mode": "text",
       "max_tokens": 1024,
       "temperature": 0.2,
       "timeout_ms": 60000
     },
     "dashboard.catchup": {
-      "provider": "openai",
-      "model": "gpt-5.1",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1",
       "mode": "json",
       "max_tokens": 4096,
       "temperature": 0.2,
       "timeout_ms": 120000
     },
     "dashboard.topic_analysis": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "json",
       "max_tokens": 1024,
       "temperature": 0.1,
       "timeout_ms": 60000
     },
     "dashboard.wisdom_enhance": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "text",
       "max_tokens": 1024,
       "temperature": 0.2,
       "timeout_ms": 60000
     },
     "dashboard.contributions": {
-      "provider": "openai",
-      "model": "gpt-5-mini",
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1-mini",
       "mode": "json",
       "max_tokens": 1024,
       "temperature": 0.1,

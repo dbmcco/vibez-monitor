@@ -549,13 +549,16 @@ def render_briefing_markdown(
     return "\n".join(lines)
 
 
-async def run_daily_synthesis(config: Config) -> dict[str, Any]:
+async def run_daily_synthesis(config: Config, target_date: str | None = None) -> dict[str, Any]:
     """Run the daily synthesis for the last 24 hours."""
     from vibez.classifier import load_value_config
 
     init_db(config.db_path)
 
-    now = datetime.now()
+    if target_date:
+        now = datetime.strptime(target_date, "%Y-%m-%d") + timedelta(hours=23, minutes=59, seconds=59)
+    else:
+        now = datetime.now()
     start = now - timedelta(hours=24)
     start_ts = int(start.timestamp() * 1000)
     end_ts = int(now.timestamp() * 1000)

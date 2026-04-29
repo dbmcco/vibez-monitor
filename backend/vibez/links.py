@@ -63,7 +63,7 @@ def upsert_links(
         ).fetchone()
         if existing:
             new_count = (existing[1] or 1) + 1
-            days_ago = (datetime.now() - datetime.fromisoformat(existing[2])).days if existing[2] else 0
+            days_ago = (datetime.now() - datetime.fromisoformat(existing[2]).replace(tzinfo=None)).days if existing[2] else 0
             score = compute_value_score(new_count, days_ago)
             if not existing[3] and shared_by:
                 conn.execute(

@@ -82,6 +82,8 @@ def validate_route_requirements(manifest_path: Path | str | None = None) -> None
     for route in load_routes(manifest_path).values():
         if route.provider == "openai" and not os.environ.get("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is required by model routing")
+        if route.provider == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
+            raise RuntimeError("OPENROUTER_API_KEY is required by model routing")
         if route.provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("ANTHROPIC_API_KEY is required by model routing")
         if route.provider == "ollama":
@@ -250,6 +252,34 @@ def _embed_ollama(
     ]
 
 
+def _run_openrouter(
+    route: ModelRoute,
+    *,
+    prompt: str | None,
+    system: str | None,
+    messages: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    from openai import OpenAI
+
+    payload = _build_messages(prompt=prompt, system=system, messages=messages)
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.environ.get("OPENROUTER_API_KEY"),
+        timeout=max(route.timeout_ms / 1000, 1),
+    )
+    response = client.chat.completions.create(
+        model=route.model,
+        messages=payload,
+        max_tokens=route.max_tokens,
+        temperature=route.temperature,
+    )
+    choice = response.choices[0] if response.choices else None
+    return {
+        "text": (choice.message.content or "") if choice else "",
+        "usage": _usage_dict(getattr(response, "usage", None)),
+    }
+
+
 def _run_ollama(
     route: ModelRoute,
     *,
@@ -300,6 +330,8 @@ def generate_text(
         result = _run_anthropic(route, prompt=prompt, system=system, messages=messages)
     elif route.provider == "openai":
         result = _run_openai(route, prompt=prompt, system=system, messages=messages)
+    elif route.provider == "openrouter":
+        result = _run_openrouter(route, prompt=prompt, system=system, messages=messages)
     elif route.provider == "ollama":
         result = _run_ollama(route, prompt=prompt, system=system, messages=messages)
     else:
