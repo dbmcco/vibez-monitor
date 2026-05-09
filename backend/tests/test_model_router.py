@@ -7,6 +7,7 @@ from vibez.model_router import (
     ModelRoute,
     get_route,
     load_routes,
+    resolve_provider_api_key,
     validate_route_requirements,
 )
 
@@ -118,10 +119,26 @@ def test_validate_route_requirements_only_requires_used_provider_keys(
             }
         )
     )
+    monkeypatch.delenv("VIBEZ_ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.setenv("VIBEZ_OPENAI_API_KEY", "vibez-openai-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-openai-test-key")
 
     validate_route_requirements(manifest)
+
+
+def test_resolve_provider_api_key_prefers_vibez_alias(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VIBEZ_OPENAI_API_KEY", "vibez-openai-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-openai-test-key")
+
+    assert resolve_provider_api_key("openai") == "vibez-openai-test-key"
+
+
+def test_resolve_provider_api_key_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("VIBEZ_OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "legacy-openrouter-test-key")
+
+    assert resolve_provider_api_key("openrouter") == "legacy-openrouter-test-key"
 
 
 def test_shared_manifest_contains_required_task_routes():

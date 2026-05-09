@@ -2,11 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
-import { getRoute, loadRoutes } from "./model-router";
+import { getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
+
+const ORIGINAL_ENV = process.env;
 
 describe("model-router", () => {
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
   test("loads the shared routing manifest", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
     const manifestPath = path.join(dir, "model-routing.json");
@@ -55,5 +61,25 @@ describe("model-router", () => {
     expect(() => getRoute("dashboard.catchup", {})).toThrow(
       "unknown model route: dashboard.catchup",
     );
+  });
+
+  test("resolves Vibez provider keys before legacy provider keys", () => {
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_OPENAI_API_KEY: "vibez-openai-test-key",
+      OPENAI_API_KEY: "legacy-openai-test-key",
+    };
+
+    expect(resolveProviderApiKey("openai")).toBe("vibez-openai-test-key");
+  });
+
+  test("falls back to legacy provider keys", () => {
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_OPENROUTER_API_KEY: "",
+      OPENROUTER_API_KEY: "legacy-openrouter-test-key",
+    };
+
+    expect(resolveProviderApiKey("openrouter")).toBe("legacy-openrouter-test-key");
   });
 });

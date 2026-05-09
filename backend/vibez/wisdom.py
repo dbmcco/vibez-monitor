@@ -9,7 +9,6 @@ import hashlib
 import json
 import logging
 import re
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -264,12 +263,12 @@ def _fetch_messages(conn: Any, watermark: int | None) -> list[dict[str, Any]]:
     params: list[Any] = []
 
     if EXCLUDED_ROOMS:
-        placeholders = ",".join("?" for _ in EXCLUDED_ROOMS)
+        placeholders = ",".join("%s" for _ in EXCLUDED_ROOMS)
         where_parts.append(f"room_name NOT IN ({placeholders})")
         params.extend(sorted(EXCLUDED_ROOMS))
 
     if watermark is not None:
-        where_parts.append("timestamp > ?")
+        where_parts.append("timestamp > %s")
         params.append(watermark)
 
     rows = conn.execute(
@@ -312,9 +311,6 @@ def _persist_wisdom_results(
     for attempt in range(1, WISDOM_WRITE_RETRY_ATTEMPTS + 1):
         conn = get_connection(db_path)
         try:
-            conn.execute(f"PRAGMA busy_timeout={WISDOM_WRITE_BUSY_TIMEOUT_MS}")
-            conn.execute("BEGIN IMMEDIATE")
-
             if full_rebuild:
                 conn.execute("DELETE FROM wisdom_recommendations")
                 conn.execute("DELETE FROM wisdom_items")
@@ -325,12 +321,12 @@ def _persist_wisdom_results(
             topic_metadata: dict[str, dict[str, Any]] = {}
 
             for slug, topic in prepared_topics.items():
-                existing = conn.execute("SELECT id FROM wisdom_topics WHERE slug = ?", (slug,)).fetchone()
+                existing = conn.execute("SELECT id FROM wisdom_topics WHERE slug = %s", (slug,)).fetchone()
                 if existing:
                     topic_id = existing[0]
                     conn.execute(
-                        "UPDATE wisdom_topics SET name = ?, summary = ?, message_count = ?, contributor_count = ?, "
-                        "last_active = ?, updated_at = ? WHERE id = ?",
+                        "UPDATE wisdom_topics SET name = %s, summary = %s, message_count = %s, contributor_count = %s, "
+                        "last_active = %s, updated_at = %s WHERE id = %s",
                         (
                             topic["topic_name"],
                             topic["summary"] or None,
@@ -344,7 +340,7 @@ def _persist_wisdom_results(
                 else:
                     cursor = conn.execute(
                         "INSERT INTO wisdom_topics (name, slug, summary, message_count, contributor_count, "
-                        "last_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "last_active, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                         (
                             topic["topic_name"],
                             slug,
@@ -356,7 +352,7 @@ def _persist_wisdom_results(
                             topic["updated_at"],
                         ),
                     )
-                    topic_id = cursor.lastrowid
+                    topic_id = cursor.fetchone()[0]
                     topics_created += 1
 
                 seen_titles: set[str] = set()
@@ -372,7 +368,7 @@ def _persist_wisdom_results(
                         knowledge_type = "opinion"
 
                     existing_item = conn.execute(
-                        "SELECT id FROM wisdom_items WHERE topic_id = ? AND lower(title) = lower(?)",
+                        "SELECT id FROM wisdom_items WHERE topic_id = %s AND lower(title) = lower(%s)",
                         (topic_id, title),
                     ).fetchone()
                     values = (
@@ -386,16 +382,16 @@ def _persist_wisdom_results(
                     )
                     if existing_item:
                         conn.execute(
-                            "UPDATE wisdom_items SET knowledge_type = ?, summary = ?, source_links = ?, "
-                            "source_messages = ?, contributors = ?, confidence = ?, updated_at = ? "
-                            "WHERE id = ?",
+                            "UPDATE wisdom_items SET knowledge_type = %s, summary = %s, source_links = %s, "
+                            "source_messages = %s, contributors = %s, confidence = %s, updated_at = %s "
+                            "WHERE id = %s",
                             (*values, existing_item[0]),
                         )
                     else:
                         conn.execute(
                             "INSERT INTO wisdom_items (topic_id, knowledge_type, title, summary, "
                             "source_links, source_messages, contributors, confidence, created_at, updated_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                             (
                                 topic_id,
                                 knowledge_type,
@@ -416,7 +412,7 @@ def _persist_wisdom_results(
             recommendations_created = 0
             processed_topic_ids = {meta["id"] for meta in topic_metadata.values()}
             if processed_topic_ids:
-                placeholders = ",".join("?" for _ in processed_topic_ids)
+                placeholders = ",".join("%s" for _ in processed_topic_ids)
                 conn.execute(
                     f"DELETE FROM wisdom_recommendations WHERE from_topic_id IN ({placeholders}) OR to_topic_id IN ({placeholders})",
                     [*processed_topic_ids, *processed_topic_ids],
@@ -432,7 +428,7 @@ def _persist_wisdom_results(
                     strength = min(1.0, len(shared) / 5.0)
                     conn.execute(
                         "INSERT INTO wisdom_recommendations (from_topic_id, to_topic_id, strength, reason) "
-                        "VALUES (?, ?, ?, ?)",
+                        "VALUES (%s, %s, %s, %s)",
                         (
                             topic_metadata[slug_a]["id"],
                             topic_metadata[slug_b]["id"],
@@ -443,7 +439,8 @@ def _persist_wisdom_results(
                     recommendations_created += 1
 
             conn.execute(
-                "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('wisdom_last_run', ?)",
+                "INSERT INTO sync_state (key, value) VALUES ('wisdom_last_run', %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                 (str(latest_timestamp),),
             )
             conn.commit()
@@ -452,13 +449,13 @@ def _persist_wisdom_results(
                 "topics_created": topics_created,
                 "recommendations_created": recommendations_created,
             }
-        except sqlite3.OperationalError as exc:
+        except Exception as exc:
             conn.rollback()
-            if "database is locked" not in str(exc).lower() or attempt == WISDOM_WRITE_RETRY_ATTEMPTS:
+            if attempt == WISDOM_WRITE_RETRY_ATTEMPTS:
                 raise
             delay = WISDOM_WRITE_RETRY_DELAY_SECONDS * attempt
             logger.warning(
-                "Wisdom write hit a locked database; retrying in %.1fs (%d/%d)",
+                "Wisdom write failed; retrying in %.1fs (%d/%d)",
                 delay,
                 attempt,
                 WISDOM_WRITE_RETRY_ATTEMPTS,

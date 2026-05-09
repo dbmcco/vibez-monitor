@@ -38,7 +38,7 @@ interface SmartContributionPayload {
   evaluations: SmartContributionEval[];
 }
 
-type ContributionDashboard = ReturnType<typeof getContributionDashboard>;
+type ContributionDashboard = Awaited<ReturnType<typeof getContributionDashboard>>;
 type BaseOpportunity = ContributionDashboard["opportunities"][number];
 type EnhancedOpportunity = BaseOpportunity & {
   semantic_support?: {
@@ -414,12 +414,12 @@ export async function GET(request: NextRequest) {
     const days = parsePositiveInt(request.nextUrl.searchParams.get("days"), 45);
     const limit = parsePositiveInt(request.nextUrl.searchParams.get("limit"), 600);
     const smart = parseBoolean(request.nextUrl.searchParams.get("smart"), true);
-    const dashboardBase = getContributionDashboard({ lookbackDays: days, limit });
+    const dashboardBase = await getContributionDashboard({ lookbackDays: days, limit });
     const cutoffTs = Date.now() - days * 24 * 60 * 60 * 1000;
     const densityById = await scoreSemanticNeighborhood({
       messageIds: dashboardBase.opportunities.slice(0, 120).map((item) => item.id),
       cutoffTs,
-      roomScope: getCurrentRoomScope(),
+      roomScope: await getCurrentRoomScope(),
       neighborLimit: 16,
     });
     const dashboard = mergeSemanticSupport(dashboardBase, densityById);

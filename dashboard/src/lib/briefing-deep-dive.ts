@@ -1,4 +1,4 @@
-import { getDb } from "@/lib/db";
+import { getMessagesByParticipants } from "@/lib/db";
 
 export interface BriefingThread {
   title: string;
@@ -294,46 +294,25 @@ function selectQuotes(
     .slice(0, 3);
 }
 
-function queryParticipantMessages(
+async function queryParticipantMessages(
   participantNames: string[],
   lookbackDays: number,
   limit: number,
   preferredRoom?: string,
-): BriefingDeepDiveQuote[] {
+): Promise<BriefingDeepDiveQuote[]> {
   if (participantNames.length === 0) return [];
-
-  const db = getDb();
-  const cutoffTs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
-  const whereParts = ["m.timestamp >= ?"];
-  const params: unknown[] = [cutoffTs];
-
-  whereParts.push(`LOWER(m.sender_name) IN (${participantNames.map(() => "?").join(", ")})`);
-  params.push(...participantNames);
-
-  if (preferredRoom) {
-    whereParts.push("LOWER(m.room_name) = ?");
-    params.push(preferredRoom.toLowerCase());
-  }
-
-  const rows = db
-    .prepare(
-      `SELECT m.*, c.relevance_score, c.topics, c.entities,
-              c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       WHERE ${whereParts.join(" AND ")}
-       ORDER BY m.timestamp DESC
-       LIMIT ?`,
-    )
-    .all(...params, limit) as BriefingDeepDiveQuote[];
-  db.close();
-  return rows;
+  return getMessagesByParticipants({
+    participantNames,
+    lookbackDays,
+    limit,
+    preferredRoom,
+  });
 }
 
-function fetchThreadCandidateMessages(
+async function fetchThreadCandidateMessages(
   thread: BriefingThread,
   contribution: BriefingContribution | null,
-): BriefingDeepDiveQuote[] {
+): Promise<BriefingDeepDiveQuote[]> {
   const participants = Array.from(
     new Set(
       thread.participants
@@ -343,8 +322,8 @@ function fetchThreadCandidateMessages(
   );
   if (participants.length === 0) return [];
 
-  const roomScoped = queryParticipantMessages(participants, 21, 18, contribution?.channel);
-  const broad = queryParticipantMessages(participants, 21, 36);
+  const roomScoped = await queryParticipantMessages(participants, 21, 18, contribution?.channel);
+  const broad = await queryParticipantMessages(participants, 21, 36);
   const seen = new Set<string>();
   return [...roomScoped, ...broad].filter((message) => {
     if (!message?.id || seen.has(message.id)) return false;
@@ -353,24 +332,26 @@ function fetchThreadCandidateMessages(
   });
 }
 
-export function buildBriefingThreadDeepDiveData(raw: {
+export async function buildBriefingThreadDeepDiveData(raw: {
   briefing_json: string | null;
   contributions: string | null;
   conversation_arcs: string | null;
-}): Record<string, BriefingThreadDeepDive> {
+}): Promise<Record<string, BriefingThreadDeepDive>> {
   const threads = parseJson<BriefingThread[]>(raw.briefing_json, []);
   const contributions = parseJson<BriefingContribution[]>(raw.contributions, []);
   const arcs = parseJson<BriefingConversationArc[]>(raw.conversation_arcs, []);
 
-  const entries = threads.map((thread, index) => {
-    const key = `${thread.title}-${index}`;
-    const contribution = findContributionForThread(thread, contributions);
-    const arc = findConversationArcForThread(thread, arcs);
-    const anchor = contribution?.reply_to || arc?.core_exchange || thread.insights || null;
-    const messages = fetchThreadCandidateMessages(thread, contribution);
-    const quotes = selectQuotes(messages, thread, contribution, arc);
-    return [key, { anchor, quotes }] as const;
-  });
+  const entries = await Promise.all(
+    threads.map(async (thread, index) => {
+      const key = `${thread.title}-${index}`;
+      const contribution = findContributionForThread(thread, contributions);
+      const arc = findConversationArcForThread(thread, arcs);
+      const anchor = contribution?.reply_to || arc?.core_exchange || thread.insights || null;
+      const messages = await fetchThreadCandidateMessages(thread, contribution);
+      const quotes = selectQuotes(messages, thread, contribution, arc);
+      return [key, { anchor, quotes }] as const;
+    }),
+  );
 
   return Object.fromEntries(entries);
 }

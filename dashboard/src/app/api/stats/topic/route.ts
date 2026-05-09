@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ drilldown: null, insights: null }, { status: 400 });
     }
 
-    const drilldown = getTopicDrilldown(topic, days);
+    const drilldown = await getTopicDrilldown(topic, days);
     if (!drilldown) {
       return NextResponse.json({ drilldown: null, insights: null });
     }

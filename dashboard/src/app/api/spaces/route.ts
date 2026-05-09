@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     }
     const minRelevance = Number.parseInt(minRelevanceParam || "", 10);
     const maxMessages = Number.parseInt(maxMessagesParam || "", 10);
-    const spaces = getSpacesDashboard(days, selectedSpace, {
+    const spaces = await getSpacesDashboard(days, selectedSpace, {
       mode,
       query,
       minRelevance: Number.isFinite(minRelevance) ? minRelevance : undefined,

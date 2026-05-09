@@ -12,8 +12,8 @@ export async function GET(request: NextRequest) {
   const contributionOnly = params.get("contributionOnly") === "true";
 
   try {
-    const messages = getMessages({ limit, offset, room, minRelevance, contributionOnly });
-    const rooms = getRooms();
+    const messages = await getMessages({ limit, offset, room, minRelevance, contributionOnly });
+    const rooms = await getRooms();
     return NextResponse.json({ messages, rooms });
   } catch {
     return NextResponse.json({ messages: [], rooms: [] });

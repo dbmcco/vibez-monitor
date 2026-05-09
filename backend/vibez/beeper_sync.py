@@ -178,7 +178,7 @@ def load_cursor(db_path: Path, chat_id: str) -> str | None:
     """Load the last-seen sortKey for a chat."""
     conn = get_connection(db_path)
     row = conn.execute(
-        "SELECT value FROM sync_state WHERE key = ?",
+        "SELECT value FROM sync_state WHERE key = %s",
         (f"beeper_cursor:{chat_id}",),
     ).fetchone()
     conn.close()
@@ -189,7 +189,7 @@ def save_cursor(db_path: Path, chat_id: str, cursor: str) -> None:
     """Save the last-seen sortKey for a chat."""
     conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         (f"beeper_cursor:{chat_id}", cursor),
     )
     conn.commit()
@@ -202,11 +202,11 @@ def save_active_groups(db_path: Path, groups: list[dict]) -> None:
     group_names = [str(g.get("title", "")).strip() for g in groups if str(g.get("title", "")).strip()]
     conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         ("beeper_active_group_ids", json.dumps(group_ids)),
     )
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         ("beeper_active_group_names", json.dumps(group_names)),
     )
     conn.commit()
@@ -257,9 +257,10 @@ def save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
     for msg in messages:
         try:
             cursor = conn.execute(
-                """INSERT OR IGNORE INTO messages
+                """INSERT INTO messages
                    (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO NOTHING""",
                 (msg["id"], msg["room_id"], msg["room_name"], msg["sender_id"],
                  msg["sender_name"], msg["body"], msg["timestamp"], msg["raw_event"]),
             )

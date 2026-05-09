@@ -1,5 +1,4 @@
-import Database from "better-sqlite3";
-import path from "path";
+import { Pool } from "pg";
 import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search";
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
 import {
@@ -10,8 +9,12 @@ import {
   type SemanticAnalytics,
 } from "@/lib/semantic";
 
-const DB_PATH =
-  process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
+
+const pool = new Pool({
+  connectionString:
+    process.env.DATABASE_URL ||
+    "postgresql://braydon@localhost:5432/vibez_monitor",
+});
 
 const DEFAULT_EXCLUDED_GROUPS = [
   "BBC News",
@@ -85,18 +88,24 @@ function normalizeExclusionList(values: string[]): string[] {
     .filter((name) => name.length > 0);
 }
 
-function loadRoomScope(db: Database.Database): RoomScope {
-  const beeperActiveIdsRow = db
-    .prepare("SELECT value FROM sync_state WHERE key = ?")
-    .get("beeper_active_group_ids") as { value: string } | undefined;
+async function loadRoomScope(pool: Pool): Promise<RoomScope> {
+  const { rows: _beeperIds } = await pool.query(
+    "SELECT value FROM sync_state WHERE key = $1",
+    ["beeper_active_group_ids"],
+  );
+  const beeperActiveIdsRow = _beeperIds[0] as { value: string } | undefined;
   const beeperActiveGroupIds = parseJsonStringArray(beeperActiveIdsRow?.value);
-  const beeperActiveNamesRow = db
-    .prepare("SELECT value FROM sync_state WHERE key = ?")
-    .get("beeper_active_group_names") as { value: string } | undefined;
+  const { rows: _beeperNames } = await pool.query(
+    "SELECT value FROM sync_state WHERE key = $1",
+    ["beeper_active_group_names"],
+  );
+  const beeperActiveNamesRow = _beeperNames[0] as { value: string } | undefined;
   const beeperActiveGroupNames = parseJsonStringArray(beeperActiveNamesRow?.value);
-  const googleGroupsRow = db
-    .prepare("SELECT value FROM sync_state WHERE key = ?")
-    .get("google_groups_active_group_keys") as { value: string } | undefined;
+  const { rows: _googleRows } = await pool.query(
+    "SELECT value FROM sync_state WHERE key = $1",
+    ["google_groups_active_group_keys"],
+  );
+  const googleGroupsRow = _googleRows[0] as { value: string } | undefined;
   const googleGroupKeys = parseJsonStringArray(googleGroupsRow?.value);
   const googleGroupIds = googleGroupKeys.map((key) => `googlegroup:${key}`);
 
@@ -133,40 +142,44 @@ function loadRoomScope(db: Database.Database): RoomScope {
   return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
 }
 
-export function getCurrentRoomScope(): RoomScope {
-  const db = getDb();
-  const scope = loadRoomScope(db);
-  db.close();
-  return scope;
+export async function getCurrentRoomScope(): Promise<RoomScope> {
+  return loadRoomScope(pool);
 }
 
-function buildRoomScopeWhere(alias: string, scope: RoomScope): {
+function buildRoomScopeWhere(
+  alias: string,
+  scope: RoomScope,
+  startIndex: number,
+): {
   clause: string;
-  params: string[];
+  params: unknown[];
+  nextIndex: number;
 } {
+  let idx = startIndex;
   if (scope.activeGroupIds.length > 0 || scope.activeGroupNames.length > 0) {
     const parts: string[] = [];
-    const params: string[] = [];
+    const params: unknown[] = [];
     if (scope.activeGroupIds.length > 0) {
-      parts.push(`${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`);
+      const phs = scope.activeGroupIds.map(() => `$${idx++}`);
+      parts.push(`${alias}.room_id IN (${phs.join(", ")})`);
       params.push(...scope.activeGroupIds);
     }
     if (scope.activeGroupNames.length > 0) {
-      parts.push(`LOWER(${alias}.room_name) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
+      const phs = scope.activeGroupNames.map(() => `$${idx++}`);
+      parts.push(`LOWER(${alias}.room_name) IN (${phs.join(", ")})`);
       params.push(...scope.activeGroupNames.map((name) => name.toLowerCase()));
     }
-    return {
-      clause: `(${parts.join(" OR ")})`,
-      params,
-    };
+    return { clause: `(${parts.join(" OR ")})`, params, nextIndex: idx };
   }
   if (scope.excludedGroups.length > 0) {
+    const phs = scope.excludedGroups.map(() => `$${idx++}`);
     return {
-      clause: `LOWER(${alias}.room_name) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      clause: `LOWER(${alias}.room_name) NOT IN (${phs.join(", ")})`,
       params: scope.excludedGroups,
+      nextIndex: idx,
     };
   }
-  return { clause: "", params: [] };
+  return { clause: "", params: [], nextIndex: idx };
 }
 
 function loadUserAliases(): UserAliasMap {
@@ -194,29 +207,31 @@ function normalizeSenderName(raw: string, aliases: UserAliasMap): string {
   return aliases[trimmed.toLowerCase()] || trimmed;
 }
 
-function buildLinkTermMatchScore(alias: string, terms: string[]): {
+function buildLinkTermMatchScore(
+  alias: string,
+  terms: string[],
+  startIndex: number,
+): {
   sql: string;
   params: unknown[];
+  nextIndex: number;
 } {
   const searchable = `lower(coalesce(${alias}.title,'') || ' ' || coalesce(${alias}.relevance,'') || ' ' || coalesce(${alias}.category,'') || ' ' || coalesce(${alias}.url,''))`;
   if (!terms.length) {
-    return { sql: "0", params: [] };
+    return { sql: "0", params: [], nextIndex: startIndex };
   }
 
   const clauses: string[] = [];
   const params: unknown[] = [];
+  let idx = startIndex;
   for (const term of terms) {
-    clauses.push(`CASE WHEN ${searchable} LIKE ? THEN ? ELSE 0 END`);
+    clauses.push(`CASE WHEN ${searchable} LIKE $${idx++} THEN $${idx++} ELSE 0 END`);
     params.push(`%${term.toLowerCase()}%`, term.length);
   }
-  return { sql: clauses.join(" + "), params };
+  return { sql: clauses.join(" + "), params, nextIndex: idx };
 }
 
-export function getDb() {
-  const db = new Database(DB_PATH, { readonly: true });
-  db.pragma("journal_mode = WAL");
-  return db;
-}
+
 
 export interface Message {
   id: string;
@@ -448,16 +463,15 @@ export interface ContributionDashboard {
   sections: ContributionSection[];
 }
 
-export function getMessages(opts: {
+export async function getMessages(opts: {
   limit?: number;
   offset?: number;
   room?: string;
   minRelevance?: number;
   contributionOnly?: boolean;
-}): Message[] {
-  const db = getDb();
-  const scope = loadRoomScope(db);
-  const roomScope = buildRoomScopeWhere("m", scope);
+}): Promise<Message[]> {
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
   const userAliases = loadUserAliases();
   let query = `
     SELECT m.*, c.relevance_score, c.topics, c.entities,
@@ -466,30 +480,31 @@ export function getMessages(opts: {
     LEFT JOIN classifications c ON m.id = c.message_id
     WHERE 1=1
   `;
-  const params: unknown[] = [];
+  let pi = roomScope.nextIndex;
+  const params: unknown[] = [...roomScope.params];
 
   if (roomScope.clause) {
     query += ` AND ${roomScope.clause}`;
-    params.push(...roomScope.params);
   }
   if (opts.room) {
-    query += " AND m.room_name = ?";
+    query += ` AND m.room_name = $${pi++}`;
     params.push(opts.room);
   }
   if (opts.minRelevance) {
-    query += " AND c.relevance_score >= ?";
+    query += ` AND c.relevance_score >= $${pi++}`;
     params.push(opts.minRelevance);
   }
   if (opts.contributionOnly) {
     query += " AND c.contribution_flag = 1";
   }
 
-  query += " ORDER BY m.timestamp DESC LIMIT ? OFFSET ?";
-  params.push(opts.limit || 50, opts.offset || 0);
+  const limit = opts.limit || 50;
+  const offset = opts.offset || 0;
+  query += ` ORDER BY m.timestamp DESC LIMIT $${pi++} OFFSET $${pi++}`;
+  params.push(limit, offset);
 
-  const rows = db.prepare(query).all(...params) as Message[];
-  db.close();
-  return rows.map((row) => ({
+  const { rows } = await pool.query(query, params);
+  return (rows as Message[]).map((row) => ({
     ...row,
     sender_name: normalizeSenderName(row.sender_name, userAliases),
   }));
@@ -594,48 +609,52 @@ interface ContributionDashboardOpts {
   limit?: number;
 }
 
-export function getContributionDashboard(
+export async function getContributionDashboard(
   opts: ContributionDashboardOpts = {},
-): ContributionDashboard {
+): Promise<ContributionDashboard> {
   const resolvedWindow = resolveWindowDays(opts.lookbackDays ?? 45) ?? 45;
   const limit = Math.max(50, Math.min(opts.limit ?? 600, 2000));
   const cutoffTs = Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
 
-  const db = getDb();
-  const scope = loadRoomScope(db);
+  const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
-  const roomScope = buildRoomScopeWhere("m", scope);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
 
-  const whereParts = ["m.timestamp >= ?"];
+  let pi = roomScope.nextIndex;
+  const whereParts = [`m.timestamp >= $${pi++}`];
   const whereParams: unknown[] = [cutoffTs];
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
+    pi = roomScope.nextIndex + 1;
   }
   const whereClause = `WHERE ${whereParts.join(" AND ")}`;
 
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
-              c.relevance_score, c.topics, c.entities, c.contribution_flag,
-              c.contribution_themes, c.contribution_hint, c.alert_level
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       ${whereClause}
-       AND (c.contribution_flag = 1 OR c.alert_level = 'hot' OR (c.contribution_hint IS NOT NULL AND trim(c.contribution_hint) != ''))
-       ORDER BY m.timestamp DESC
-       LIMIT ?`
-    )
-    .all(...whereParams, limit) as ContributionRawRow[];
+  const { rows } = await pool.query(
+    `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+            c.relevance_score, c.topics, c.entities, c.contribution_flag,
+            c.contribution_themes, c.contribution_hint, c.alert_level
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     ${whereClause}
+     AND (c.contribution_flag = 1 OR c.alert_level = 'hot' OR (c.contribution_hint IS NOT NULL AND trim(c.contribution_hint) != ''))
+     ORDER BY m.timestamp DESC
+     LIMIT $${pi++}`,
+    [...whereParams, limit],
+  );
+  const rowsData = rows as ContributionRawRow[];
 
-  const totalRow = db
-    .prepare(`SELECT count(*) as count FROM messages m ${whereClause}`)
-    .get(...whereParams) as { count: number } | undefined;
+  const { rows: totalRows } = await pool.query(
+    `SELECT count(*) as count FROM messages m ${whereClause}`,
+    whereParams,
+  );
+  const totalRow = totalRows[0] as { count: number } | undefined;
 
-  const valueRows = db
-    .prepare("SELECT key, value FROM value_config WHERE key IN ('topics', 'projects')")
-    .all() as { key: string; value: string }[];
-  db.close();
+  const { rows: _vr } = await pool.query(
+    "SELECT key, value FROM value_config WHERE key IN ($1, $2)",
+    ["topics", "projects"],
+  );
+  const valueRows = _vr as { key: string; value: string }[];
 
   const valueLexicon = new Set<string>();
   for (const row of valueRows) {
@@ -652,7 +671,7 @@ export function getContributionDashboard(
   }
   const lexiconTerms = Array.from(valueLexicon);
 
-  const prepped: ContributionPrep[] = rows.map((row) => {
+  const prepped: ContributionPrep[] = rowsData.map((row) => {
     const body = row.body || "";
     const hint = row.contribution_hint || "";
     const text = `${body}\n${hint}`.toLowerCase();
@@ -1069,33 +1088,27 @@ export function getContributionDashboard(
   };
 }
 
-export function getLatestReport(): DailyReport | null {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT 1")
-    .get() as DailyReport | undefined;
-  db.close();
-  return row || null;
+export async function getLatestReport(): Promise<DailyReport | null> {
+  const { rows } = await pool.query(
+    "SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT 1",
+  );
+  return (rows[0] as DailyReport | undefined) || null;
 }
 
-export function getReport(date: string): DailyReport | null {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT * FROM daily_reports WHERE report_date = ?")
-    .get(date) as DailyReport | undefined;
-  db.close();
-  return row || null;
+export async function getReport(date: string): Promise<DailyReport | null> {
+  const { rows } = await pool.query(
+    "SELECT * FROM daily_reports WHERE report_date = $1",
+    [date],
+  );
+  return (rows[0] as DailyReport | undefined) || null;
 }
 
-export function getPreviousReport(beforeDate: string): DailyReport | null {
-  const db = getDb();
-  const row = db
-    .prepare(
-      "SELECT * FROM daily_reports WHERE report_date < ? ORDER BY report_date DESC LIMIT 1",
-    )
-    .get(beforeDate) as DailyReport | undefined;
-  db.close();
-  return row || null;
+export async function getPreviousReport(beforeDate: string): Promise<DailyReport | null> {
+  const { rows } = await pool.query(
+    "SELECT * FROM daily_reports WHERE report_date < $1 ORDER BY report_date DESC LIMIT 1",
+    [beforeDate],
+  );
+  return (rows[0] as DailyReport | undefined) || null;
 }
 
 function computeRecentUpdateWindow(now: Date): {
@@ -1202,18 +1215,18 @@ function pickRecentQuotes(rows: RecentUpdateRow[], userAliases: UserAliasMap): R
     }));
 }
 
-export function getRecentUpdateSnapshot(): RecentUpdateSnapshot {
+export async function getRecentUpdateSnapshot(): Promise<RecentUpdateSnapshot> {
   const now = new Date();
   const { windowStart, windowEnd, nextRefresh } = computeRecentUpdateWindow(now);
   const windowStartTs = windowStart.getTime();
   const windowEndTs = windowEnd.getTime();
 
-  const db = getDb();
-  const scope = loadRoomScope(db);
-  const roomScope = buildRoomScopeWhere("m", scope);
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
   const userAliases = loadUserAliases();
 
-  const whereParts = ["m.timestamp >= ?", "m.timestamp <= ?"];
+  let pi = roomScope.nextIndex;
+  const whereParts = [`m.timestamp >= $${pi++}`, `m.timestamp <= $${pi++}`];
   const whereParams: unknown[] = [windowStartTs, windowEndTs];
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
@@ -1221,23 +1234,22 @@ export function getRecentUpdateSnapshot(): RecentUpdateSnapshot {
   }
   const whereClause = `WHERE ${whereParts.join(" AND ")}`;
 
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
-              c.relevance_score, c.topics
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       ${whereClause}
-       ORDER BY m.timestamp DESC
-       LIMIT 2500`
-    )
-    .all(...whereParams) as RecentUpdateRow[];
-  db.close();
+  const { rows } = await pool.query(
+    `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+            c.relevance_score, c.topics
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     ${whereClause}
+     ORDER BY m.timestamp DESC
+     LIMIT 2500`,
+    whereParams,
+  );
+  const rowsData = rows as RecentUpdateRow[];
 
   const uniqueSenders = new Set<string>();
   const channelCounts = new Map<string, number>();
   const topicCounts = new Map<string, number>();
-  for (const row of rows) {
+  for (const row of rowsData) {
     uniqueSenders.add(normalizeSenderName(row.sender_name || "Unknown", userAliases));
     channelCounts.set(row.room_name, (channelCounts.get(row.room_name) || 0) + 1);
     for (const topic of new Set(parseTopics(row.topics))) {
@@ -1255,8 +1267,8 @@ export function getRecentUpdateSnapshot(): RecentUpdateSnapshot {
     .slice(0, 4)
     .map(([name, count]) => ({ name, count }));
 
-  const quotes = pickRecentQuotes(rows, userAliases);
-  const messageCount = rows.length;
+  const quotes = pickRecentQuotes(rowsData, userAliases);
+  const messageCount = rowsData.length;
   const topTopicLabels = top_topics.slice(0, 3).map((item) => item.topic);
   const topChannelLabels = top_channels.slice(0, 2).map((item) => item.name);
   let summary = "";
@@ -1294,44 +1306,35 @@ export function getRecentUpdateSnapshot(): RecentUpdateSnapshot {
   };
 }
 
-export function getRooms(): string[] {
-  const db = getDb();
-  const scope = loadRoomScope(db);
-  const roomScope = buildRoomScopeWhere("m", scope);
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT m.room_name
-       FROM messages m
-       ${roomScope.clause ? `WHERE ${roomScope.clause}` : ""}
-       ORDER BY m.room_name`
-    )
-    .all(...roomScope.params) as { room_name: string }[];
-  db.close();
-  return rows.map((r) => r.room_name);
+export async function getRooms(): Promise<string[]> {
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
+  const { rows } = await pool.query(
+    `SELECT DISTINCT m.room_name
+     FROM messages m
+     ${roomScope.clause ? `WHERE ${roomScope.clause}` : ""}
+     ORDER BY m.room_name`,
+    roomScope.params,
+  );
+  return (rows as { room_name: string }[]).map((r) => r.room_name);
 }
 
-export function getValueConfig(): Record<string, unknown> {
-  const db = getDb();
-  const rows = db.prepare("SELECT key, value FROM value_config").all() as {
-    key: string;
-    value: string;
-  }[];
-  db.close();
+export async function getValueConfig(): Promise<Record<string, unknown>> {
+  const { rows } = await pool.query("SELECT key, value FROM value_config");
   const config: Record<string, unknown> = {};
   for (const row of rows) {
-    config[row.key] = JSON.parse(row.value);
+    config[(row as { key: string }).key] = JSON.parse((row as { value: string }).value);
   }
   return config;
 }
 
-function searchMessagesKeyword(opts: {
+async function searchMessagesKeyword(opts: {
   query: string;
   lookbackDays?: number;
   limit?: number;
-}): Message[] {
-  const db = getDb();
-  const scope = loadRoomScope(db);
-  const roomScope = buildRoomScopeWhere("m", scope);
+}): Promise<Message[]> {
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
   const userAliases = loadUserAliases();
   const cutoffTs = Date.now() - (opts.lookbackDays || 7) * 24 * 60 * 60 * 1000;
   const keywords = opts.query
@@ -1342,45 +1345,50 @@ function searchMessagesKeyword(opts: {
 
   let rows: Message[];
   if (keywords.length === 0) {
-    const whereParts = ["m.timestamp >= ?"];
+    let pi = roomScope.nextIndex;
+    const whereParts = [`m.timestamp >= $${pi++}`];
     const params: unknown[] = [cutoffTs];
     if (roomScope.clause) {
       whereParts.push(roomScope.clause);
       params.push(...roomScope.params);
     }
-    rows = db
-      .prepare(
-        `SELECT m.*, c.relevance_score, c.topics, c.entities,
-                c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
-         FROM messages m
-         LEFT JOIN classifications c ON m.id = c.message_id
-         WHERE ${whereParts.join(" AND ")}
-         ORDER BY c.relevance_score DESC
-         LIMIT ?`
-      )
-      .all(...params, limit) as Message[];
+
+    const { rows: pgRows } = await pool.query(
+      `SELECT m.*, c.relevance_score, c.topics, c.entities,
+              c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       WHERE ${whereParts.join(" AND ")}
+       ORDER BY c.relevance_score DESC
+       LIMIT $${pi++}`,
+      [...params, limit],
+    );
+    rows = pgRows as Message[];
   } else {
-    const whereParts = ["m.timestamp >= ?"];
+    let pi = roomScope.nextIndex;
+    const whereParts = [`m.timestamp >= $${pi++}`];
     const params: unknown[] = [cutoffTs];
     if (roomScope.clause) {
       whereParts.push(roomScope.clause);
       params.push(...roomScope.params);
     }
-    const keywordParts = keywords.slice(0, 5).map(() => "LOWER(m.body) LIKE ?");
+    const keywordParts = keywords.slice(0, 5).map(() => `LOWER(m.body) LIKE $${pi++}`);
     const keywordParams = keywords.slice(0, 5).map((kw) => `%${kw}%`);
-    rows = db
-      .prepare(
-        `SELECT m.*, c.relevance_score, c.topics, c.entities,
-                c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
-         FROM messages m
-         LEFT JOIN classifications c ON m.id = c.message_id
-         WHERE ${whereParts.join(" AND ")} AND (${keywordParts.join(" OR ")})
-         ORDER BY m.timestamp DESC
-         LIMIT ?`
-      )
-      .all(...params, ...keywordParams, limit) as Message[];
+    const allParams = [...params, ...keywordParams, limit];
+
+    const { rows: pgRows } = await pool.query(
+      `SELECT m.*, c.relevance_score, c.topics, c.entities,
+              c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       WHERE ${whereParts.join(" AND ")} AND (${keywordParts.join(" OR ")})
+       ORDER BY m.timestamp DESC
+       LIMIT $${pi + keywordParams.length}`,
+      allParams,
+    );
+    rows = pgRows as Message[];
   }
-  db.close();
+
   return rows.map((row) => ({
     ...row,
     sender_name: normalizeSenderName(row.sender_name, userAliases),
@@ -1392,10 +1400,8 @@ export async function searchMessages(opts: {
   lookbackDays?: number;
   limit?: number;
 }): Promise<Message[]> {
-  const db = getDb();
-  const scope = loadRoomScope(db);
+  const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
-  db.close();
 
   const semanticRows = await searchHybridMessages({
     query: opts.query,
@@ -1413,13 +1419,11 @@ export async function searchMessages(opts: {
   return searchMessagesKeyword(opts);
 }
 
-export function getLatestBriefingMd(): string | null {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT briefing_md FROM daily_reports ORDER BY report_date DESC LIMIT 1")
-    .get() as { briefing_md: string } | undefined;
-  db.close();
-  return row?.briefing_md || null;
+export async function getLatestBriefingMd(): Promise<string | null> {
+  const { rows } = await pool.query(
+    "SELECT briefing_md FROM daily_reports ORDER BY report_date DESC LIMIT 1",
+  );
+  return (rows[0] as { briefing_md: string } | undefined)?.briefing_md || null;
 }
 
 interface StatBaseAccumulator {
@@ -1905,11 +1909,12 @@ export async function getVibezRadarSnapshot(
   const nowTs = Date.now();
   const windowStartTs = nowTs - resolvedWindowHours * 60 * 60 * 1000;
 
-  const db = getDb();
-  const scope = loadRoomScope(db);
+  const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
-  const roomScope = buildRoomScopeWhere("m", scope);
-  const whereParts = ["m.timestamp >= ?"];
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
+
+  let pi = roomScope.nextIndex;
+  const whereParts = [`m.timestamp >= $${pi++}`];
   const whereParams: unknown[] = [windowStartTs];
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
@@ -1917,19 +1922,18 @@ export async function getVibezRadarSnapshot(
   }
   const whereClause = `WHERE ${whereParts.join(" AND ")}`;
 
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp, c.relevance_score, c.topics
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       ${whereClause}
-       ORDER BY m.timestamp ASC
-       LIMIT 5000`,
-    )
-    .all(...whereParams) as VibezRadarRawRow[];
-  db.close();
+  const { rows } = await pool.query(
+    `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp, c.relevance_score, c.topics
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     ${whereClause}
+     ORDER BY m.timestamp ASC
+     LIMIT 5000`,
+    whereParams,
+  );
+  const rowsData = rows as VibezRadarRawRow[];
 
-  const preparedRows: VibezRadarPreparedRow[] = rows.map((row) => ({
+  const preparedRows: VibezRadarPreparedRow[] = rowsData.map((row) => ({
     id: row.id,
     room_name: row.room_name || "Unknown",
     sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
@@ -2330,23 +2334,22 @@ export async function getStatsDashboard(
   const resolvedWindow = resolveWindowDays(windowDays);
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
-  const db = getDb();
-  const scope = loadRoomScope(db);
+  const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
-  const roomScope = buildRoomScopeWhere("m", scope);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
 
-  const scopedWhereParts: string[] = [];
-  const scopedParams: unknown[] = [];
+  let scopedWhere = "";
+  let scopedParams: unknown[] = [];
   if (roomScope.clause) {
-    scopedWhereParts.push(roomScope.clause);
-    scopedParams.push(...roomScope.params);
+    scopedWhere = `WHERE ${roomScope.clause}`;
+    scopedParams = [...roomScope.params];
   }
-  const scopedWhere = scopedWhereParts.length > 0 ? `WHERE ${scopedWhereParts.join(" AND ")}` : "";
 
+  let pi = roomScope.nextIndex;
   const windowWhereParts: string[] = [];
   const windowParams: unknown[] = [];
   if (cutoffTs !== null) {
-    windowWhereParts.push("m.timestamp >= ?");
+    windowWhereParts.push(`m.timestamp >= $${pi++}`);
     windowParams.push(cutoffTs);
   }
   if (roomScope.clause) {
@@ -2355,15 +2358,15 @@ export async function getStatsDashboard(
   }
   const windowWhere = windowWhereParts.length > 0 ? `WHERE ${windowWhereParts.join(" AND ")}` : "";
 
-  const rows = db
-    .prepare(
-      `SELECT m.timestamp, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       ${windowWhere}
-       ORDER BY m.timestamp ASC`
-    )
-    .all(...windowParams) as {
+  const { rows } = await pool.query(
+    `SELECT m.timestamp, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     ${windowWhere}
+     ORDER BY m.timestamp ASC`,
+    windowParams,
+  );
+  const rowsData = rows as {
     timestamp: number;
     sender_name: string;
     room_name: string;
@@ -2372,15 +2375,16 @@ export async function getStatsDashboard(
     relevance_score: number | null;
   }[];
 
-  const allTopicRows = db
-    .prepare(
-      `SELECT m.timestamp, c.topics
+  const allTopicQuery = scopedWhere
+    ? `SELECT m.timestamp, c.topics
        FROM messages m
        LEFT JOIN classifications c ON m.id = c.message_id
-       ${scopedWhere ? `${scopedWhere} AND c.topics IS NOT NULL` : "WHERE c.topics IS NOT NULL"}`
-    )
-    .all(...scopedParams) as { timestamp: number; topics: string | null }[];
-  db.close();
+       ${scopedWhere} AND c.topics IS NOT NULL`
+    : `SELECT m.timestamp, c.topics
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       WHERE c.topics IS NOT NULL`;
+  const { rows: allTopicRows } = await pool.query(allTopicQuery, scopedParams);
 
   const timelineDays =
     resolvedWindow === null
@@ -2457,7 +2461,7 @@ export async function getStatsDashboard(
     }
   }
 
-  for (const row of rows) {
+  for (const row of rowsData) {
     const ts = row.timestamp;
     const dateKey = dateKeyFromTs(ts);
     timelineMap.set(dateKey, (timelineMap.get(dateKey) || 0) + 1);
@@ -2643,8 +2647,8 @@ export async function getStatsDashboard(
     count: withTopicsMap.get(date) || 0,
   }));
   const avgTopicCoverage =
-    rows.length > 0
-      ? Number((with_topics.reduce((sum, day) => sum + day.count, 0) / rows.length).toFixed(3))
+    rowsData.length > 0
+      ? Number((with_topics.reduce((sum, day) => sum + day.count, 0) / rowsData.length).toFixed(3))
       : 0;
 
   const userStats = Array.from(users.entries())
@@ -2862,7 +2866,7 @@ export async function getStatsDashboard(
       excluded_groups: scope.excludedGroups,
     },
     totals: {
-      messages: rows.length,
+      messages: rowsData.length,
       users: users.size,
       channels: channels.size,
       topics: topics.size,
@@ -2889,7 +2893,7 @@ export async function getStatsDashboard(
         summaries: {
           included_nodes: relationshipNodes.length,
           total_users_in_window: users.size,
-          total_messages: rows.length,
+          total_messages: rowsData.length,
           directed_edges: relationshipEdgeStats.length,
           dm_signal_messages: dmSignalMessages,
         },
@@ -2908,25 +2912,25 @@ export async function getStatsDashboard(
   };
 }
 
-export function getTopicDrilldown(
+export async function getTopicDrilldown(
   topicName: string,
   windowDays: number | null = 90,
-): TopicDrilldown | null {
+): Promise<TopicDrilldown | null> {
   const needle = topicName.trim().toLowerCase();
   if (!needle) return null;
 
   const resolvedWindow = resolveWindowDays(windowDays);
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
-  const db = getDb();
-  const scope = loadRoomScope(db);
+  const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
-  const roomScope = buildRoomScopeWhere("m", scope);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
 
+  let pi = roomScope.nextIndex;
   const windowWhereParts: string[] = ["c.topics IS NOT NULL"];
   const windowParams: unknown[] = [];
   if (cutoffTs !== null) {
-    windowWhereParts.push("m.timestamp >= ?");
+    windowWhereParts.push(`m.timestamp >= $${pi++}`);
     windowParams.push(cutoffTs);
   }
   if (roomScope.clause) {
@@ -2941,15 +2945,15 @@ export function getTopicDrilldown(
     scopedParams.push(...roomScope.params);
   }
 
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.timestamp, m.room_name, m.sender_name, m.body, c.relevance_score, c.topics
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       WHERE ${windowWhereParts.join(" AND ")}
-       ORDER BY m.timestamp ASC`
-    )
-    .all(...windowParams) as {
+  const { rows } = await pool.query(
+    `SELECT m.id, m.timestamp, m.room_name, m.sender_name, m.body, c.relevance_score, c.topics
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     WHERE ${windowWhereParts.join(" AND ")}
+     ORDER BY m.timestamp ASC`,
+    windowParams,
+  );
+  const rowsData = rows as {
     id: string;
     timestamp: number;
     room_name: string;
@@ -2959,18 +2963,16 @@ export function getTopicDrilldown(
     topics: string | null;
   }[];
 
-  const allScopedRows = db
-    .prepare(
-      `SELECT m.timestamp, c.topics
-       FROM messages m
-       LEFT JOIN classifications c ON m.id = c.message_id
-       WHERE ${scopedWhereParts.join(" AND ")}`
-    )
-    .all(...scopedParams) as { timestamp: number; topics: string | null }[];
-  db.close();
+  const { rows: allScopedRows } = await pool.query(
+    `SELECT m.timestamp, c.topics
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     WHERE ${scopedWhereParts.join(" AND ")}`,
+    scopedParams,
+  );
 
   let canonicalTopic = topicName.trim();
-  const topicRows = rows.filter((row) => {
+  const topicRows = rowsData.filter((row) => {
     const messageTopics = parseTopics(row.topics);
     for (const topic of messageTopics) {
       if (topic.toLowerCase() === needle) {
@@ -3043,7 +3045,7 @@ export function getTopicDrilldown(
   else if (prev7 >= last7 + 3) trend = "down";
 
   const topicCounts = new Map<string, number>();
-  for (const row of rows) {
+  for (const row of rowsData) {
     for (const topic of new Set(parseTopics(row.topics))) {
       topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
     }
@@ -3254,11 +3256,11 @@ function sourceLabel(source: SpaceSource): string {
   return "Other";
 }
 
-export function getSpacesDashboard(
+export async function getSpacesDashboard(
   windowDays: number | null = 30,
   selectedSpace: string | null = null,
   options: SpacesDashboardOptions = {},
-): SpacesDashboard {
+): Promise<SpacesDashboard> {
   const publicMode = isPublicModeEnabled();
   const resolvedWindow = resolveWindowDays(windowDays);
   const triageMode: SpaceTriageMode =
@@ -3276,33 +3278,34 @@ export function getSpacesDashboard(
   const queryLike = `%${query.toLowerCase()}%`;
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
-  const db = getDb();
-  const scope = loadRoomScope(db);
+  const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
-  const roomScope = buildRoomScopeWhere("m", scope);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
 
+  let pi = roomScope.nextIndex;
   const whereParts: string[] = [];
   const whereParams: unknown[] = [];
   if (cutoffTs !== null) {
-    whereParts.push("m.timestamp >= ?");
+    whereParts.push(`m.timestamp >= $${pi++}`);
     whereParams.push(cutoffTs);
   }
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
   }
-  whereParts.push("LOWER(m.room_id) LIKE ?");
+  whereParts.push(`LOWER(m.room_id) LIKE $${pi++}`);
   whereParams.push(`${GOOGLE_GROUPS_ROOM_ID_PREFIX}%`);
   const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+  let mpi = pi;
 
-  const rows = db
-    .prepare(
-      `SELECT m.room_id, m.room_name, m.sender_name, m.timestamp
-       FROM messages m
-       ${whereClause}
-       ORDER BY m.timestamp DESC`
-    )
-    .all(...whereParams) as {
+  const { rows } = await pool.query(
+    `SELECT m.room_id, m.room_name, m.sender_name, m.timestamp
+     FROM messages m
+     ${whereClause}
+     ORDER BY m.timestamp DESC`,
+    whereParams,
+  );
+  const rowsData = rows as {
     room_id: string;
     room_name: string;
     sender_name: string;
@@ -3321,7 +3324,7 @@ export function getSpacesDashboard(
     }
   >();
   const allPeople = new Set<string>();
-  for (const row of rows) {
+  for (const row of rowsData) {
     const roomId = String(row.room_id || "").trim();
     const roomName = String(row.room_name || "Unknown").trim() || "Unknown";
     const source: SpaceSource = "google_groups";
@@ -3363,7 +3366,7 @@ export function getSpacesDashboard(
     {
       source: "google_groups",
       label: "Google Groups",
-      messages: rows.length,
+      messages: rowsData.length,
       rooms: spaces.length,
       people: allPeople.size,
     },
@@ -3384,34 +3387,34 @@ export function getSpacesDashboard(
   let recent_messages: SpaceRecentMessage[] = [];
 
   if (selectedRoomId) {
-    const messageWhereParts = [...whereParts, "m.room_id = ?"];
+    const messageWhereParts = [...whereParts, `m.room_id = $${mpi++}`];
     const messageParams = [...whereParams, selectedRoomId];
     if (query) {
-      messageWhereParts.push("(LOWER(m.body) LIKE ? OR LOWER(m.sender_name) LIKE ?)");
+      messageWhereParts.push(`(LOWER(m.body) LIKE $${mpi++} OR LOWER(m.sender_name) LIKE $${mpi++})`);
       messageParams.push(queryLike, queryLike);
     }
     if (triageMode === "focus") {
       messageWhereParts.push(
-        "(COALESCE(c.relevance_score, 0) >= ? OR COALESCE(c.contribution_flag, 0) = 1 OR c.alert_level = 'hot')",
+        `(COALESCE(c.relevance_score, 0) >= $${mpi++} OR COALESCE(c.contribution_flag, 0) = 1 OR c.alert_level = 'hot')`,
       );
       messageParams.push(minRelevance);
     } else if (minRelevance > 0) {
-      messageWhereParts.push("COALESCE(c.relevance_score, 0) >= ?");
+      messageWhereParts.push(`COALESCE(c.relevance_score, 0) >= $${mpi++}`);
       messageParams.push(minRelevance);
     }
 
-    const ranked = db
-      .prepare(
-        `SELECT m.id, m.timestamp, m.room_id, m.room_name, m.sender_name, m.body,
-                c.relevance_score, c.contribution_flag, c.alert_level, c.topics
-         FROM messages m
-         LEFT JOIN classifications c ON m.id = c.message_id
-         WHERE ${messageWhereParts.join(" AND ")}
-         ORDER BY m.timestamp DESC
-         LIMIT 600`
-      )
-      .all(...messageParams)
-      .map((row) => {
+    const { rows: rankedRows } = await pool.query(
+      `SELECT m.id, m.timestamp, m.room_id, m.room_name, m.sender_name, m.body,
+              c.relevance_score, c.contribution_flag, c.alert_level, c.topics
+       FROM messages m
+       LEFT JOIN classifications c ON m.id = c.message_id
+       WHERE ${messageWhereParts.join(" AND ")}
+       ORDER BY m.timestamp DESC
+       LIMIT 600`,
+      messageParams,
+    );
+    const ranked = rankedRows
+      .map((row: unknown) => {
         const typed = row as {
           id: string;
           timestamp: number;
@@ -3557,10 +3560,8 @@ export function getSpacesDashboard(
       .slice(0, 8);
   }
 
-  db.close();
-
   return {
-    window_days: resolvedWindow ?? Math.max(30, Math.ceil(rows.length / 200)),
+    window_days: resolvedWindow ?? Math.max(30, Math.ceil(rowsData.length / 200)),
     generated_at: new Date().toISOString(),
     scope: {
       mode: scope.mode,
@@ -3568,7 +3569,7 @@ export function getSpacesDashboard(
       excluded_groups: scope.excludedGroups,
     },
     totals: {
-      messages: rows.length,
+      messages: rowsData.length,
       rooms: spaces.length,
       people: allPeople.size,
     },
@@ -3637,41 +3638,43 @@ function sourceFromUrl(url: string): string {
 }
 
 const SORT_MAP: Record<string, string> = {
-  trending: "CAST(mention_count AS REAL) / MAX(1, julianday('now') - julianday(last_seen) + 1) DESC, last_seen DESC",
-  value: "value_score DESC, last_seen DESC",
-  recent: "last_seen DESC",
-  shared: "mention_count DESC, value_score DESC",
-  oldest: "first_seen ASC",
+  trending: "CAST(mention_count AS FLOAT) / GREATEST(1, EXTRACT(EPOCH FROM (NOW() - last_seen::timestamptz)) / 86400.0 + 1) DESC NULLS LAST, last_seen DESC NULLS LAST",
+  value: "value_score DESC NULLS LAST, last_seen DESC NULLS LAST",
+  recent: "last_seen DESC NULLS LAST",
+  shared: "mention_count DESC NULLS LAST, value_score DESC NULLS LAST",
+  oldest: "first_seen ASC NULLS LAST",
 };
 
-export function getLinkStats(opts: { days?: number }): LinkStats {
-  const db = getDb();
+export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> {
+  let pi = 1;
   const where: string[] = [];
   const params: unknown[] = [];
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push("last_seen >= ?");
+    where.push(`last_seen >= $${pi++}`);
     params.push(cutoff);
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-  const total = (db.prepare(`SELECT COUNT(*) as c FROM links ${whereSql}`).get(...params) as { c: number }).c;
+  const { rows: totalRows } = await pool.query(`SELECT COUNT(*) as c FROM links ${whereSql}`, params);
+  const total = (totalRows[0] as { c: number }).c;
 
-  const catRows = db.prepare(
-    `SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`
-  ).all(...params) as { category: string; cnt: number }[];
+  const { rows: catRows } = await pool.query(
+    `SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`,
+    params,
+  );
 
-  const sharerRows = db.prepare(
-    `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql} AND shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`.replace("AND shared_by", where.length ? "AND shared_by" : "WHERE shared_by")
-  ).all(...params) as { shared_by: string; cnt: number }[];
+  const sharerSql = `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql}${where.length ? " AND" : " WHERE"} shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`;
+  const { rows: sharerRows } = await pool.query(sharerSql, params);
 
   // For sources, we need to compute from URLs — do it in JS
-  const urlRows = db.prepare(
-    `SELECT url FROM links ${whereSql}`
-  ).all(...params) as { url: string }[];
+  const { rows: urlRows } = await pool.query(
+    `SELECT url FROM links ${whereSql}`,
+    params,
+  );
 
   const sourceCounts: Record<string, number> = {};
-  for (const r of urlRows) {
+  for (const r of urlRows as { url: string }[]) {
     const s = sourceFromUrl(r.url);
     sourceCounts[s] = (sourceCounts[s] || 0) + 1;
   }
@@ -3679,21 +3682,19 @@ export function getLinkStats(opts: { days?: number }): LinkStats {
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
 
-  const authorRows = db.prepare(
-    `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql} AND authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`.replace("AND authored_by", where.length ? "AND authored_by" : "WHERE authored_by")
-  ).all(...params) as { authored_by: string; cnt: number }[];
+  const authorSql = `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql}${where.length ? " AND" : " WHERE"} authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`;
+  const { rows: authorRows } = await pool.query(authorSql, params);
 
-  db.close();
   return {
     total,
     sources,
-    sharers: sharerRows.map(r => ({ name: r.shared_by, count: r.cnt })),
-    categories: catRows.map(r => ({ name: r.category || "uncategorized", count: r.cnt })),
-    authors: authorRows.map(r => ({ name: r.authored_by, count: r.cnt })),
+    sharers: (sharerRows as { shared_by: string; cnt: number }[]).map((r: { shared_by: string; cnt: number }) => ({ name: r.shared_by, count: r.cnt })),
+    categories: (catRows as { category: string; cnt: number }[]).map((r: { category: string; cnt: number }) => ({ name: r.category || "uncategorized", count: r.cnt })),
+    authors: (authorRows as { authored_by: string; cnt: number }[]).map((r: { authored_by: string; cnt: number }) => ({ name: r.authored_by, count: r.cnt })),
   };
 }
 
-export function getLinks(opts: {
+export async function getLinks(opts: {
   category?: string;
   days?: number;
   limit?: number;
@@ -3702,17 +3703,17 @@ export function getLinks(opts: {
   sharedBy?: string;
   authoredBy?: string;
   pinned?: boolean;
-}): LinkRow[] {
-  const db = getDb();
+}): Promise<LinkRow[]> {
+  let pi = 1;
   const where: string[] = [];
   const params: unknown[] = [];
   if (opts.category) {
-    where.push("category = ?");
+    where.push(`category = $${pi++}`);
     params.push(opts.category);
   }
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push("last_seen >= ?");
+    where.push(`last_seen >= $${pi++}`);
     params.push(cutoff);
   }
   if (opts.source && opts.source !== "all") {
@@ -3731,18 +3732,18 @@ export function getLinks(opts: {
     };
     const pat = patterns[opts.source];
     if (pat) {
-      where.push("url LIKE ?");
+      where.push(`url LIKE $${pi++}`);
       params.push(pat);
     }
   }
   if (opts.sharedBy) {
-    where.push("shared_by LIKE ?");
+    where.push(`shared_by LIKE $${pi++}`);
     params.push(`%${opts.sharedBy}%`);
   }
   if (opts.authoredBy === "any") {
     where.push("authored_by IS NOT NULL AND authored_by <> ''");
   } else if (opts.authoredBy) {
-    where.push("authored_by LIKE ?");
+    where.push(`authored_by LIKE $${pi++}`);
     params.push(`%${opts.authoredBy}%`);
   }
   if (opts.pinned) {
@@ -3752,46 +3753,48 @@ export function getLinks(opts: {
   const orderBy = SORT_MAP[opts.sort || "value"] || SORT_MAP.value;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
-  const rows = db
-    .prepare(
-      `SELECT id, url, url_hash, title, category, relevance, shared_by,
-              source_group, first_seen, last_seen, mention_count, value_score,
-              report_date, authored_by, pinned
-       FROM links ${whereSql}
-       ORDER BY ${orderBy}
-       LIMIT ?`
-    )
-    .all(...params) as LinkRow[];
-  db.close();
-  return rows;
+  const { rows } = await pool.query(
+    `SELECT id, url, url_hash, title, category, relevance, shared_by,
+            source_group, first_seen, last_seen, mention_count, value_score,
+            report_date, authored_by, pinned
+     FROM links ${whereSql}
+     ORDER BY ${orderBy}
+     LIMIT $${pi++}`,
+    params,
+  );
+  return rows as LinkRow[];
 }
 
-export function searchLinksFts(
+export async function searchLinksFts(
   query: string,
   opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string; authoredBy?: string }
-): LinkRow[] {
+): Promise<LinkRow[]> {
   const ftsQuery = buildLinksFtsQuery(query);
   const terms = normalizeLinkSearchTerms(query);
   if (!ftsQuery || !terms.length) return getLinks(opts);
 
-  const db = getDb();
-
-  // Check if FTS table exists (DB is readonly — can't create it here)
-  const ftsExists = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='links_fts'")
-    .get();
+  // Check if FTS table exists
+  const { rows: ftsCheck } = await pool.query(
+    "SELECT table_name FROM information_schema.tables WHERE table_name = $1",
+    ["links_fts"],
+  );
+  const ftsExists = ftsCheck.length > 0;
 
   if (ftsExists) {
-    const matchScore = buildLinkTermMatchScore("l", terms);
+    const matchScore = buildLinkTermMatchScore("l", terms, 1);
+    let pi = matchScore.nextIndex;
     const where: string[] = [];
-    const params: unknown[] = [...matchScore.params, ftsQuery];
+    const params: unknown[] = [...matchScore.params];
+    const ftsTsvector = "to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,''))";
+    const ftsQueryParam = `plainto_tsquery('english', $${pi++})`;
+    params.push(ftsQuery);
     if (opts.category) {
-      where.push("l.category = ?");
+      where.push(`l.category = $${pi++}`);
       params.push(opts.category);
     }
     if (opts.days) {
       const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-      where.push("l.last_seen >= ?");
+      where.push(`l.last_seen >= $${pi++}`);
       params.push(cutoff);
     }
     if (opts.source && opts.source !== "all") {
@@ -3801,72 +3804,73 @@ export function searchLinksFts(
         reddit: "%reddit.com%", hackernews: "%news.ycombinator.com%",
         linkedin: "%linkedin.com%", notion: "%notion.so%", gdocs: "%docs.google.com%",
       };
-      if (patterns[opts.source]) { where.push("l.url LIKE ?"); params.push(patterns[opts.source]); }
+      if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
     }
-    if (opts.sharedBy) { where.push("l.shared_by LIKE ?"); params.push(`%${opts.sharedBy}%`); }
+    if (opts.sharedBy) { where.push(`l.shared_by LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
     if (opts.authoredBy === "any") {
       where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
     } else if (opts.authoredBy) {
-      where.push("l.authored_by LIKE ?"); params.push(`%${opts.authoredBy}%`);
+      where.push(`l.authored_by LIKE $${pi++}`); params.push(`%${opts.authoredBy}%`);
     }
     const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
     const limit = Math.min(Math.max(1, opts.limit || 50), 200);
     params.push(limit);
 
-    const rows = db
-      .prepare(
-        `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
-                l.shared_by, l.source_group, l.first_seen, l.last_seen,
-                l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
-                (${matchScore.sql}) AS term_match_score
-         FROM links_fts f
-         JOIN links l ON f.rowid = l.id
-         WHERE links_fts MATCH ?
-         ${extraWhere}
-         ORDER BY term_match_score DESC, rank, l.value_score DESC
-         LIMIT ?`
-      )
-      .all(...params) as LinkRow[];
-    db.close();
-    return rows;
+    const { rows } = await pool.query(
+      `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
+              l.shared_by, l.source_group, l.first_seen, l.last_seen,
+              l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
+              (${matchScore.sql}) AS term_match_score,
+              ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
+       FROM links l
+       WHERE ${ftsTsvector} @@ ${ftsQueryParam}
+       ${extraWhere}
+       ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
+       LIMIT $${pi++}`,
+      params,
+    );
+    return rows as LinkRow[];
   }
 
   // Fallback: LIKE-based search when FTS table hasn't been built yet
+  let pi = 1;
   const where: string[] = [];
   const params: unknown[] = [];
-  const likeClauses = terms.map(() =>
-    "(title LIKE ? OR relevance LIKE ? OR category LIKE ? OR url LIKE ?)"
-  );
+  const likeClauses = terms.map(() => {
+    const clause = `(title LIKE $${pi} OR relevance LIKE $${pi + 2} OR category LIKE $${pi + 1} OR url LIKE $${pi + 3})`;
+    pi += 4;
+    return clause;
+  });
+  pi = 1;
   where.push(`(${likeClauses.join(" OR ")})`);
   for (const t of terms) {
     const p = `%${t}%`;
     params.push(p, p, p, p);
+    pi += 4;
   }
   if (opts.category) {
-    where.push("category = ?");
+    where.push(`category = $${pi++}`);
     params.push(opts.category);
   }
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push("last_seen >= ?");
+    where.push(`last_seen >= $${pi++}`);
     params.push(cutoff);
   }
   const whereSql = `WHERE ${where.join(" AND ")}`;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
 
-  const rows = db
-    .prepare(
-      `SELECT id, url, url_hash, title, category, relevance, shared_by,
-              source_group, first_seen, last_seen, mention_count, value_score,
-              report_date, authored_by, pinned
-       FROM links ${whereSql}
-       ORDER BY value_score DESC, last_seen DESC
-       LIMIT ?`
-    )
-    .all(...params) as LinkRow[];
-  db.close();
-  return rows;
+  const { rows } = await pool.query(
+    `SELECT id, url, url_hash, title, category, relevance, shared_by,
+            source_group, first_seen, last_seen, mention_count, value_score,
+            report_date, authored_by, pinned
+     FROM links ${whereSql}
+     ORDER BY value_score DESC, last_seen DESC
+     LIMIT $${pi++}`,
+    params,
+  );
+  return rows as LinkRow[];
 }
 
 export async function searchLinks(opts: {
@@ -3957,34 +3961,27 @@ function getTopWisdomContributors(rows: { contributors: string }[]): { name: str
     .slice(0, 15);
 }
 
-export function getWisdomTopics(): WisdomTopic[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT id, name, slug, summary, message_count, contributor_count, last_active
-       FROM wisdom_topics
-       ORDER BY message_count DESC, contributor_count DESC, name ASC`
-    )
-    .all() as WisdomTopic[];
-  db.close();
-  return rows;
+export async function getWisdomTopics(): Promise<WisdomTopic[]> {
+  const { rows } = await pool.query(
+    `SELECT id, name, slug, summary, message_count, contributor_count, last_active
+     FROM wisdom_topics
+     ORDER BY message_count DESC, contributor_count DESC, name ASC`
+  );
+  return rows as WisdomTopic[];
 }
 
-export function getWisdomItemsByType(knowledgeType?: string): Record<string, WisdomItemWithTopic[]> {
-  const db = getDb();
+export async function getWisdomItemsByType(knowledgeType?: string): Promise<Record<string, WisdomItemWithTopic[]>> {
   const normalizedType = knowledgeType?.trim();
-  const where = normalizedType ? "WHERE wi.knowledge_type = ?" : "";
+  const where = normalizedType ? "WHERE wi.knowledge_type = $1" : "";
   const params = normalizedType ? [normalizedType] : [];
-  const rows = db
-    .prepare(
-      `SELECT wi.*, wt.name AS topic_name, wt.slug AS topic_slug
-       FROM wisdom_items wi
-       JOIN wisdom_topics wt ON wi.topic_id = wt.id
-       ${where}
-       ORDER BY wi.confidence DESC, wi.id DESC`
-    )
-    .all(...params) as WisdomItemWithTopic[];
-  db.close();
+  const { rows } = await pool.query(
+    `SELECT wi.*, wt.name AS topic_name, wt.slug AS topic_slug
+     FROM wisdom_items wi
+     JOIN wisdom_topics wt ON wi.topic_id = wt.id
+     ${where}
+     ORDER BY wi.confidence DESC, wi.id DESC`,
+    params,
+  );
 
   const grouped: Record<string, WisdomItemWithTopic[]> = {};
   for (const row of rows) {
@@ -3994,85 +3991,186 @@ export function getWisdomItemsByType(knowledgeType?: string): Record<string, Wis
   return grouped;
 }
 
-export function getWisdomItemsByTopic(topicSlug?: string): WisdomTopicDetail | WisdomTopic[] | null {
-  const db = getDb();
+export async function getWisdomItemsByTopic(topicSlug?: string): Promise<WisdomTopicDetail | WisdomTopic[] | null> {
   const normalizedSlug = topicSlug?.trim();
   if (!normalizedSlug) {
-    const topics = db
-      .prepare(
-        `SELECT id, name, slug, summary, message_count, contributor_count, last_active
-         FROM wisdom_topics
-         ORDER BY message_count DESC, contributor_count DESC, name ASC`
-      )
-      .all() as WisdomTopic[];
-    db.close();
-    return topics;
-  }
-
-  const topic = db
-    .prepare(
+    const { rows } = await pool.query(
       `SELECT id, name, slug, summary, message_count, contributor_count, last_active
        FROM wisdom_topics
-       WHERE slug = ?`
-    )
-    .get(normalizedSlug) as WisdomTopic | undefined;
+       ORDER BY message_count DESC, contributor_count DESC, name ASC`
+    );
+    return rows as WisdomTopic[];
+  }
+
+  const { rows: topicRows } = await pool.query(
+    `SELECT id, name, slug, summary, message_count, contributor_count, last_active
+     FROM wisdom_topics
+     WHERE slug = $1`,
+    [normalizedSlug],
+  );
+  const topic = topicRows[0] as WisdomTopic | undefined;
   if (!topic) {
-    db.close();
     return null;
   }
 
-  const items = db
-    .prepare(
-      `SELECT id, topic_id, knowledge_type, title, summary, source_links, source_messages, contributors, confidence
-       FROM wisdom_items
-       WHERE topic_id = ?
-       ORDER BY confidence DESC, id DESC`
-    )
-    .all(topic.id) as WisdomItem[];
-  db.close();
-  return { ...topic, items };
+  const { rows: items } = await pool.query(
+    `SELECT id, topic_id, knowledge_type, title, summary, source_links, source_messages, contributors, confidence
+     FROM wisdom_items
+     WHERE topic_id = $1
+     ORDER BY confidence DESC, id DESC`,
+    [topic.id],
+  );
+  return { ...topic, items: items as WisdomItem[] };
 }
 
-export function getWisdomRecommendations(topicId: number): WisdomRecommendation[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT wr.id, wr.from_topic_id, wr.to_topic_id, wr.strength, wr.reason,
-              wt.name AS topic_name, wt.slug AS topic_slug
-       FROM wisdom_recommendations wr
-       JOIN wisdom_topics wt ON wt.id = CASE
-         WHEN wr.from_topic_id = ? THEN wr.to_topic_id
-         ELSE wr.from_topic_id
-       END
-       WHERE wr.from_topic_id = ? OR wr.to_topic_id = ?
-       ORDER BY wr.strength DESC, wt.name ASC`
-    )
-    .all(topicId, topicId, topicId) as WisdomRecommendation[];
-  db.close();
-  return rows;
+export async function getWisdomRecommendations(topicId: number): Promise<WisdomRecommendation[]> {
+  const { rows } = await pool.query(
+    `SELECT wr.id, wr.from_topic_id, wr.to_topic_id, wr.strength, wr.reason,
+            wt.name AS topic_name, wt.slug AS topic_slug
+     FROM wisdom_recommendations wr
+     JOIN wisdom_topics wt ON wt.id = CASE
+       WHEN wr.from_topic_id = $1 THEN wr.to_topic_id
+       ELSE wr.from_topic_id
+     END
+     WHERE wr.from_topic_id = $2 OR wr.to_topic_id = $3
+     ORDER BY wr.strength DESC, wt.name ASC`,
+    [topicId, topicId, topicId],
+  );
+  return rows as WisdomRecommendation[];
 }
 
-export function getWisdomStats(): WisdomStats {
-  const db = getDb();
-  const total_topics = (db.prepare("SELECT COUNT(*) AS c FROM wisdom_topics").get() as { c: number }).c;
-  const total_items = (db.prepare("SELECT COUNT(*) AS c FROM wisdom_items").get() as { c: number }).c;
-  const type_counts = db
-    .prepare(
-      `SELECT knowledge_type AS type, COUNT(*) AS count
-       FROM wisdom_items
-       GROUP BY knowledge_type
-       ORDER BY count DESC, type ASC`
-    )
-    .all() as { type: string; count: number }[];
-  const contributorRows = db
-    .prepare("SELECT contributors FROM wisdom_items WHERE contributors IS NOT NULL AND contributors <> ''")
-    .all() as { contributors: string }[];
-  db.close();
-
+export async function getWisdomStats(): Promise<WisdomStats> {
+  const { rows: tcRows } = await pool.query("SELECT COUNT(*) AS c FROM wisdom_topics");
+  const total_topics = (tcRows[0] as { c: number }).c;
+  const { rows: tiRows } = await pool.query("SELECT COUNT(*) AS c FROM wisdom_items");
+  const total_items = (tiRows[0] as { c: number }).c;
+  const { rows: typeCounts } = await pool.query(
+    `SELECT knowledge_type AS type, COUNT(*) AS count
+     FROM wisdom_items
+     GROUP BY knowledge_type
+     ORDER BY count DESC, type ASC`,
+  );
+  const { rows: contributorRows } = await pool.query(
+    "SELECT contributors FROM wisdom_items WHERE contributors IS NOT NULL AND contributors <> ''",
+  );
   return {
     total_topics,
     total_items,
-    type_counts,
-    top_contributors: getTopWisdomContributors(contributorRows),
+    type_counts: typeCounts as { type: string; count: number }[],
+    top_contributors: getTopWisdomContributors(contributorRows as { contributors: string }[]),
   };
+}
+
+export async function getMessagesByIds(
+  ids: string[],
+): Promise<{
+  id: string;
+  room_id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+}[]> {
+  if (ids.length === 0) return [];
+  const userAliases = loadUserAliases();
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+  const { rows } = await pool.query(
+    `SELECT m.id, m.room_id, m.room_name, m.sender_name, m.body, m.timestamp, c.relevance_score
+     FROM messages m
+     LEFT JOIN classifications c ON c.message_id = m.id
+     WHERE m.id IN (${placeholders})`,
+    ids,
+  );
+  return (rows as {
+    id: string;
+    room_id: string;
+    room_name: string;
+    sender_name: string;
+    body: string;
+    timestamp: number;
+    relevance_score: number | null;
+  }[]).map((row) => ({
+    ...row,
+    sender_name: normalizeSenderName(row.sender_name, userAliases),
+  }));
+}
+
+export async function getMessagesByParticipants(opts: {
+  participantNames: string[];
+  lookbackDays: number;
+  limit: number;
+  preferredRoom?: string;
+}): Promise<{
+  id: string;
+  room_id: string;
+  room_name: string;
+  sender_name: string;
+  body: string;
+  timestamp: number;
+  relevance_score: number | null;
+  topics: string | null;
+  entities: string | null;
+  contribution_flag: number | null;
+  contribution_themes: string | null;
+  contribution_hint: string | null;
+  alert_level: string | null;
+}[]> {
+  const { participantNames, lookbackDays, limit, preferredRoom } = opts;
+  if (participantNames.length === 0) return [];
+
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 1);
+  const userAliases = loadUserAliases();
+  const cutoffTs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+
+  let pi = roomScope.nextIndex;
+  const whereParts = [`m.timestamp >= $${pi++}`];
+  const params: unknown[] = [cutoffTs];
+
+  whereParts.push(
+    `LOWER(m.sender_name) IN (${participantNames.map(() => `$${pi++}`).join(", ")})`,
+  );
+  params.push(...participantNames.map((n) => n.toLowerCase()));
+
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+
+  if (preferredRoom) {
+    whereParts.push(`LOWER(m.room_name) = $${pi++}`);
+    params.push(preferredRoom.toLowerCase());
+  }
+
+  params.push(limit);
+  const { rows } = await pool.query(
+    `SELECT m.*, c.relevance_score, c.topics, c.entities,
+            c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     WHERE ${whereParts.join(" AND ")}
+     ORDER BY m.timestamp DESC
+     LIMIT $${pi++}`,
+    params,
+  );
+
+  return (rows as {
+    id: string;
+    room_id: string;
+    room_name: string;
+    sender_name: string;
+    body: string;
+    timestamp: number;
+    relevance_score: number | null;
+    topics: string | null;
+    entities: string | null;
+    contribution_flag: number | null;
+    contribution_themes: string | null;
+    contribution_hint: string | null;
+    alert_level: string | null;
+  }[]).map((row) => ({
+    ...row,
+    sender_name: normalizeSenderName(row.sender_name, userAliases),
+  }));
 }

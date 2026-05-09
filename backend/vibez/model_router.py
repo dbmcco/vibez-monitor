@@ -10,6 +10,12 @@ from typing import Any
 
 import httpx
 
+PROVIDER_CREDENTIAL_ENVS = {
+    "openai": ("VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "anthropic": ("VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+    "openrouter": ("VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+}
+
 
 @dataclass(frozen=True)
 class ModelRoute:
@@ -78,14 +84,22 @@ def get_route(task_id: str, manifest_path: Path | str | None = None) -> ModelRou
     return routes[task_id]
 
 
+def resolve_provider_api_key(provider: str) -> str:
+    """Resolve a model provider key from Vibez-specific env first, then legacy."""
+    for env_name in PROVIDER_CREDENTIAL_ENVS.get(provider, ()):
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    return ""
+
+
 def validate_route_requirements(manifest_path: Path | str | None = None) -> None:
     for route in load_routes(manifest_path).values():
-        if route.provider == "openai" and not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError("OPENAI_API_KEY is required by model routing")
-        if route.provider == "openrouter" and not os.environ.get("OPENROUTER_API_KEY"):
-            raise RuntimeError("OPENROUTER_API_KEY is required by model routing")
-        if route.provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
-            raise RuntimeError("ANTHROPIC_API_KEY is required by model routing")
+        if route.provider in PROVIDER_CREDENTIAL_ENVS and not resolve_provider_api_key(
+            route.provider
+        ):
+            preferred_env = PROVIDER_CREDENTIAL_ENVS[route.provider][0]
+            raise RuntimeError(f"{preferred_env} is required by model routing")
         if route.provider == "ollama":
             continue
 
@@ -155,7 +169,7 @@ def _run_anthropic(
     import anthropic
 
     payload = _build_messages(prompt=prompt, system=None, messages=messages)
-    with anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) as client:
+    with anthropic.Anthropic(api_key=resolve_provider_api_key("anthropic")) as client:
         response = client.messages.create(
             model=route.model,
             max_tokens=route.max_tokens,
@@ -184,7 +198,7 @@ def _run_openai(
 
     payload = _build_messages(prompt=prompt, system=system, messages=messages)
     client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
+        api_key=resolve_provider_api_key("openai"),
         timeout=max(route.timeout_ms / 1000, 1),
     )
     response = client.responses.create(
@@ -208,7 +222,7 @@ def _embed_openai(
     from openai import OpenAI
 
     client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
+        api_key=resolve_provider_api_key("openai"),
         timeout=max(route.timeout_ms / 1000, 1),
     )
     kwargs: dict[str, Any] = {
@@ -264,7 +278,7 @@ def _run_openrouter(
     payload = _build_messages(prompt=prompt, system=system, messages=messages)
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ.get("OPENROUTER_API_KEY"),
+        api_key=resolve_provider_api_key("openrouter"),
         timeout=max(route.timeout_ms / 1000, 1),
     )
     response = client.chat.completions.create(

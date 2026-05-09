@@ -59,7 +59,7 @@ def upsert_links(
             continue
         h = _url_hash(url)
         existing = conn.execute(
-            "SELECT id, mention_count, first_seen, shared_by FROM links WHERE url_hash = ?", (h,)
+            "SELECT id, mention_count, first_seen, shared_by FROM links WHERE url_hash = %s", (h,)
         ).fetchone()
         if existing:
             new_count = (existing[1] or 1) + 1
@@ -67,14 +67,14 @@ def upsert_links(
             score = compute_value_score(new_count, days_ago)
             if not existing[3] and shared_by:
                 conn.execute(
-                    """UPDATE links SET mention_count = ?, last_seen = ?, value_score = ?,
-                       report_date = ?, shared_by = ? WHERE id = ?""",
+                    """UPDATE links SET mention_count = %s, last_seen = %s, value_score = %s,
+                       report_date = %s, shared_by = %s WHERE id = %s""",
                     (new_count, now, score, report_date, shared_by, existing[0]),
                 )
             else:
                 conn.execute(
-                    """UPDATE links SET mention_count = ?, last_seen = ?, value_score = ?,
-                       report_date = ? WHERE id = ?""",
+                    """UPDATE links SET mention_count = %s, last_seen = %s, value_score = %s,
+                       report_date = %s WHERE id = %s""",
                     (new_count, now, score, report_date, existing[0]),
                 )
         else:
@@ -83,55 +83,46 @@ def upsert_links(
                 """INSERT INTO links (url, url_hash, title, category, relevance,
                    shared_by, source_group, first_seen, last_seen, mention_count,
                    value_score, report_date)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s)""",
                 (url, h, link.get("title", ""), link.get("category", ""),
                  link.get("relevance", ""), shared_by, source_group,
                  now, now, score, report_date),
             )
             inserted += 1
-        # Sync FTS index for this row
-        _sync_fts_row(conn, h)
+        # Sync tsvector index for this row
+        _sync_search_tsv(conn, h)
     conn.commit()
     conn.close()
     return inserted
 
 
-def _ensure_fts(conn):
-    """Create FTS5 virtual table for link search if not exists."""
-    conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS links_fts USING fts5(
-            title, relevance, category, url
-        )
-    """)
-    # Rebuild if empty
-    count = conn.execute("SELECT count(*) FROM links_fts").fetchone()[0]
+def _ensure_search_tsv(conn):
+    """Ensure search_tsv column and GIN index exist for full-text search."""
+    conn.execute("ALTER TABLE links ADD COLUMN IF NOT EXISTS search_tsv tsvector")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_links_search_tsv ON links USING GIN (search_tsv)")
+    count = conn.execute("SELECT count(*) FROM links WHERE search_tsv IS NOT NULL").fetchone()[0]
     if count == 0:
         conn.execute("""
-            INSERT INTO links_fts(rowid, title, relevance, category, url)
-            SELECT id, coalesce(title,''), coalesce(relevance,''),
-                   coalesce(category,''), coalesce(url,'')
-            FROM links
+            UPDATE links SET search_tsv =
+              setweight(to_tsvector('english', coalesce(title,'')), 'A') ||
+              setweight(to_tsvector('english', coalesce(relevance,'')), 'B') ||
+              setweight(to_tsvector('english', coalesce(category,'')), 'B') ||
+              setweight(to_tsvector('english', coalesce(url,'')), 'C')
         """)
         conn.commit()
 
 
-def _sync_fts_row(conn, url_hash: str):
-    """Sync a single link row into FTS index by url_hash."""
-    conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS links_fts USING fts5(
-            title, relevance, category, url
-        )
-    """)
-    row = conn.execute(
-        "SELECT id, coalesce(title,''), coalesce(relevance,''), coalesce(category,''), coalesce(url,'') "
-        "FROM links WHERE url_hash = ?", (url_hash,)
-    ).fetchone()
-    if row:
-        link_id = row[0]
-        conn.execute("DELETE FROM links_fts WHERE rowid = ?", (link_id,))
-        conn.execute(
-            "INSERT INTO links_fts(rowid, title, relevance, category, url) VALUES (?, ?, ?, ?, ?)",
-            (link_id, row[1], row[2], row[3], row[4]))
+def _sync_search_tsv(conn, url_hash: str):
+    """Sync a single link row's search_tsv column by url_hash."""
+    conn.execute(
+        """UPDATE links SET search_tsv =
+           setweight(to_tsvector('english', coalesce(title,'')), 'A') ||
+           setweight(to_tsvector('english', coalesce(relevance,'')), 'B') ||
+           setweight(to_tsvector('english', coalesce(category,'')), 'B') ||
+           setweight(to_tsvector('english', coalesce(url,'')), 'C')
+           WHERE url_hash = %s""",
+        (url_hash,),
+    )
 
 
 def _normalize_link_search_term(raw: str) -> str:
@@ -141,13 +132,13 @@ def _normalize_link_search_term(raw: str) -> str:
     return term.replace("'", "")
 
 
-def _build_links_fts_query(query: str) -> tuple[str, list[str]]:
+def _build_links_ts_query(query: str) -> tuple[str, list[str]]:
     terms: list[str] = []
     for raw in query.strip().split():
         normalized = _normalize_link_search_term(raw)
         if normalized and normalized not in terms:
             terms.append(normalized)
-    return " OR ".join(f'"{term}"' for term in terms), terms
+    return " ".join(terms), terms
 
 
 def _build_term_match_score_sql(alias: str, terms: list[str]) -> tuple[str, list[Any]]:
@@ -158,7 +149,7 @@ def _build_term_match_score_sql(alias: str, terms: list[str]) -> tuple[str, list
     clauses: list[str] = []
     params: list[Any] = []
     for term in terms:
-        clauses.append(f"CASE WHEN {searchable} LIKE ? THEN ? ELSE 0 END")
+        clauses.append(f"CASE WHEN {searchable} LIKE %s THEN %s ELSE 0 END")
         params.extend([f"%{term.lower()}%", len(term)])
     if not clauses:
         return "0", []
@@ -176,11 +167,11 @@ def get_links(
     where: list[str] = []
     params: list[Any] = []
     if category:
-        where.append("category = ?")
+        where.append("category = %s")
         params.append(category)
     if days is not None:
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        where.append("last_seen >= ?")
+        where.append("last_seen >= %s")
         params.append(cutoff)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     params.append(min(max(1, limit), 200))
@@ -190,7 +181,7 @@ def get_links(
                    report_date
             FROM links {where_sql}
             ORDER BY value_score DESC, last_seen DESC
-            LIMIT ?""",
+            LIMIT %s""",
         params,
     ).fetchall()
     conn.close()
@@ -300,7 +291,7 @@ def upsert_message_links(
         context = " | ".join(data["snippets"][:3])
         senders = ", ".join(sorted(data["senders"]))
         existing = conn.execute(
-            "SELECT id, mention_count, first_seen, title, relevance, shared_by FROM links WHERE url_hash = ?",
+            "SELECT id, mention_count, first_seen, title, relevance, shared_by FROM links WHERE url_hash = %s",
             (h,),
         ).fetchone()
 
@@ -325,22 +316,22 @@ def upsert_message_links(
             no_shared_by = not existing[5] and senders
             if no_relevance and no_shared_by:
                 conn.execute(
-                    "UPDATE links SET mention_count=?, last_seen=?, value_score=?, relevance=?, shared_by=? WHERE id=?",
+                    "UPDATE links SET mention_count=%s, last_seen=%s, value_score=%s, relevance=%s, shared_by=%s WHERE id=%s",
                     (new_count, latest_iso, score, context, senders, existing[0]),
                 )
             elif no_relevance:
                 conn.execute(
-                    "UPDATE links SET mention_count=?, last_seen=?, value_score=?, relevance=? WHERE id=?",
+                    "UPDATE links SET mention_count=%s, last_seen=%s, value_score=%s, relevance=%s WHERE id=%s",
                     (new_count, latest_iso, score, context, existing[0]),
                 )
             elif no_shared_by:
                 conn.execute(
-                    "UPDATE links SET mention_count=?, last_seen=?, value_score=?, shared_by=? WHERE id=?",
+                    "UPDATE links SET mention_count=%s, last_seen=%s, value_score=%s, shared_by=%s WHERE id=%s",
                     (new_count, latest_iso, score, senders, existing[0]),
                 )
             else:
                 conn.execute(
-                    "UPDATE links SET mention_count=?, last_seen=?, value_score=? WHERE id=?",
+                    "UPDATE links SET mention_count=%s, last_seen=%s, value_score=%s WHERE id=%s",
                     (new_count, latest_iso, score, existing[0]),
                 )
         else:
@@ -349,13 +340,13 @@ def upsert_message_links(
                 """INSERT INTO links (url, url_hash, title, category, relevance,
                    shared_by, source_group, first_seen, last_seen, mention_count,
                    value_score, report_date)
-                   VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, '')""",
+                   VALUES (%s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, '')""",
                 (url, h, domain, context, senders,
                  ", ".join(sorted(data["rooms"])),
                  earliest_iso, latest_iso, data["count"], score),
             )
             inserted += 1
-        _sync_fts_row(conn, h)
+        _sync_search_tsv(conn, h)
     conn.commit()
     conn.close()
     return inserted
@@ -367,7 +358,7 @@ def _load_links_refresh_watermark(
     state_key: str = "links_last_refresh_ts",
 ) -> int | None:
     row = conn.execute(
-        "SELECT value FROM sync_state WHERE key = ?",
+        "SELECT value FROM sync_state WHERE key = %s",
         (state_key,),
     ).fetchone()
     if not row:
@@ -385,7 +376,7 @@ def _save_links_refresh_watermark(
     state_key: str = "links_last_refresh_ts",
 ) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         (state_key, str(timestamp_ms)),
     )
 
@@ -424,22 +415,22 @@ def refresh_message_links(
             for row in rows
             if str(row[0] or "").strip()
         }
-        fts_exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='links_fts'"
+        search_tsv_exists = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'links' AND column_name = 'search_tsv'"
         ).fetchone()
-        if fts_exists:
-            conn.execute("DELETE FROM links_fts")
+        if search_tsv_exists:
+            conn.execute("UPDATE links SET search_tsv = NULL")
         conn.execute("DELETE FROM links")
         conn.commit()
 
-    where: list[str] = ["body LIKE '%http%'"]
+    where: list[str] = ["body LIKE '%%http%%'"]
     params: list[Any] = []
     if EXCLUDED_ROOMS:
-        placeholders = ",".join("?" for _ in EXCLUDED_ROOMS)
+        placeholders = ",".join("%s" for _ in EXCLUDED_ROOMS)
         where.append(f"room_name NOT IN ({placeholders})")
         params.extend(sorted(EXCLUDED_ROOMS))
     if watermark is not None:
-        where.append("timestamp > ?")
+        where.append("timestamp > %s")
         params.append(watermark)
 
     rows = conn.execute(
@@ -479,7 +470,7 @@ def refresh_message_links(
     if full_rebuild and preserved_metadata:
         for url_hash, metadata in preserved_metadata.items():
             current = conn.execute(
-                "SELECT id, title, category, relevance, authored_by, pinned FROM links WHERE url_hash = ?",
+                "SELECT id, title, category, relevance, authored_by, pinned FROM links WHERE url_hash = %s",
                 (url_hash,),
             ).fetchone()
             if not current:
@@ -505,10 +496,10 @@ def refresh_message_links(
             new_pinned = 1 if pinned or metadata["pinned"] else 0
 
             conn.execute(
-                "UPDATE links SET title = ?, category = ?, relevance = ?, authored_by = ?, pinned = ? WHERE id = ?",
+                "UPDATE links SET title = %s, category = %s, relevance = %s, authored_by = %s, pinned = %s WHERE id = %s",
                 (new_title, new_category, new_relevance, new_authored_by, new_pinned, link_id),
             )
-            _sync_fts_row(conn, url_hash)
+            _sync_search_tsv(conn, url_hash)
     if latest_timestamp:
         _save_links_refresh_watermark(conn, latest_timestamp, state_key=state_key)
     conn.commit()
@@ -529,44 +520,43 @@ def search_links_fts(
     days: int | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Search links using FTS5 full-text search."""
+    """Search links using PostgreSQL full-text search."""
     conn = get_connection(db_path)
-    _ensure_fts(conn)
+    _ensure_search_tsv(conn)
     q = query.strip()
     if not q:
         conn.close()
         return get_links(db_path, category=category, days=days, limit=limit)
 
-    fts_query, terms = _build_links_fts_query(q)
+    ts_query, terms = _build_links_ts_query(q)
     if not terms:
         conn.close()
         return get_links(db_path, category=category, days=days, limit=limit)
     match_score_sql, match_score_params = _build_term_match_score_sql("l", terms)
 
     where: list[str] = []
-    params: list[Any] = []
+    where_params: list[Any] = []
     if category:
-        where.append("l.category = ?")
-        params.append(category)
+        where.append("l.category = %s")
+        where_params.append(category)
     if days is not None:
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        where.append("l.last_seen >= ?")
-        params.append(cutoff)
+        where.append("l.last_seen >= %s")
+        where_params.append(cutoff)
     extra_where = f"AND {' AND '.join(where)}" if where else ""
-    params.append(min(max(1, limit), 200))
+    limit_param = min(max(1, limit), 200)
 
     rows = conn.execute(
         f"""SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
                    l.shared_by, l.source_group, l.first_seen, l.last_seen,
                    l.mention_count, l.value_score, l.report_date,
                    ({match_score_sql}) AS term_match_score
-            FROM links_fts f
-            JOIN links l ON f.rowid = l.id
-            WHERE links_fts MATCH ?
+            FROM links l
+            WHERE l.search_tsv @@ plainto_tsquery('english', %s)
             {extra_where}
-            ORDER BY term_match_score DESC, rank, l.value_score DESC
-            LIMIT ?""",
-        (*match_score_params, fts_query, *params),
+            ORDER BY term_match_score DESC, ts_rank(l.search_tsv, plainto_tsquery('english', %s)) DESC, l.value_score DESC
+            LIMIT %s""",
+        (*match_score_params, ts_query, *where_params, ts_query, limit_param),
     ).fetchall()
     conn.close()
     return [

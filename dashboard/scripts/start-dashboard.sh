@@ -37,7 +37,7 @@ if [ -f "$ENV_FILE" ]; then
   done <"$ENV_FILE"
 fi
 
-export VIBEZ_DB_PATH="${VIBEZ_DB_PATH:-$ROOT_DIR/vibez.db}"
+export VIBEZ_DATABASE_URL="${VIBEZ_DATABASE_URL:-${DATABASE_URL:-postgresql://braydon@localhost:5432/vibez_monitor}}"
 cd "$DASHBOARD_DIR"
 
 # Prefer PATH node, then common Homebrew fallback.
@@ -48,11 +48,6 @@ fi
 if [ -z "$NODE_BIN" ]; then
   echo "node not found on PATH. Install Node.js and retry." >&2
   exit 1
-fi
-
-if ! "$NODE_BIN" -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); db.close();' >/dev/null 2>&1; then
-  echo "Detected native module mismatch; rebuilding better-sqlite3 for $("$NODE_BIN" -v)." >&2
-  npm rebuild better-sqlite3 >/dev/null
 fi
 
 BUILD_ID_FILE="$DASHBOARD_DIR/.next/BUILD_ID"

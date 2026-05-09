@@ -7,7 +7,7 @@ const DB_PATH = process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vib
 
 export async function GET() {
   try {
-    const config = getValueConfig();
+    const config = await getValueConfig();
     return NextResponse.json({ config });
   } catch {
     return NextResponse.json({ config: {} });

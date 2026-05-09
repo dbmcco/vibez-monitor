@@ -199,7 +199,7 @@ def parse_group_email(
 def _load_uid_cursor(db_path: Path, mailbox: str) -> int | None:
     conn = get_connection(db_path)
     row = conn.execute(
-        "SELECT value FROM sync_state WHERE key = ?",
+        "SELECT value FROM sync_state WHERE key = %s",
         (f"google_groups_uid_cursor:{mailbox}",),
     ).fetchone()
     conn.close()
@@ -214,7 +214,7 @@ def _load_uid_cursor(db_path: Path, mailbox: str) -> int | None:
 def _save_uid_cursor(db_path: Path, mailbox: str, uid: int) -> None:
     conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         (f"google_groups_uid_cursor:{mailbox}", str(uid)),
     )
     conn.commit()
@@ -224,7 +224,7 @@ def _save_uid_cursor(db_path: Path, mailbox: str, uid: int) -> None:
 def _save_active_groups(db_path: Path, groups: set[str]) -> None:
     conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         ("google_groups_active_group_keys", json.dumps(sorted(groups))),
     )
     conn.commit()
@@ -238,9 +238,10 @@ def _save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
     count = 0
     for msg in messages:
         cursor = conn.execute(
-            """INSERT OR IGNORE INTO messages
+            """INSERT INTO messages
                (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (id) DO NOTHING""",
             (
                 msg["id"],
                 msg["room_id"],

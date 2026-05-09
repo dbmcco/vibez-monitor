@@ -1,12 +1,13 @@
 import Link from "next/link";
 import {
   getCurrentRoomScope,
-  getDb,
   getLatestReport,
   getPreviousReport,
   getRecentUpdateSnapshot,
   getReport,
   getVibezRadarSnapshot,
+  getMessagesByIds,
+  searchMessages,
   type RecentUpdateSnapshot,
   type VibezRadarSnapshot,
 } from "@/lib/db";
@@ -57,7 +58,7 @@ interface EvidenceCard {
 }
 
 type SearchParams = Record<string, string | string[] | undefined>;
-type RoomScope = ReturnType<typeof getCurrentRoomScope>;
+type RoomScope = Awaited<ReturnType<typeof getCurrentRoomScope>>;
 
 const STOPWORDS = new Set([
   "about",
@@ -328,49 +329,10 @@ function formatTs(timestamp: number): string {
   }
 }
 
-function buildRoomScopeWhere(scope: RoomScope, alias: string): { clause: string; params: string[] } {
-  if (scope.activeGroupIds.length > 0 || scope.activeGroupNames.length > 0) {
-    const parts: string[] = [];
-    const params: string[] = [];
-    if (scope.activeGroupIds.length > 0) {
-      parts.push(`${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`);
-      params.push(...scope.activeGroupIds);
-    }
-    if (scope.activeGroupNames.length > 0) {
-      parts.push(`LOWER(${alias}.room_name) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`);
-      params.push(...scope.activeGroupNames.map((name) => name.toLowerCase()));
-    }
-    return {
-      clause: `(${parts.join(" OR ")})`,
-      params,
-    };
-  }
-  if (scope.excludedGroups.length > 0) {
-    return {
-      clause: `LOWER(${alias}.room_name) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
-      params: scope.excludedGroups,
-    };
-  }
-  return { clause: "", params: [] };
-}
-
-function loadMessagesByIds(ids: string[]): Map<string, ThreadEvidenceMessage> {
+async function loadMessagesByIds(ids: string[]): Promise<Map<string, ThreadEvidenceMessage>> {
   if (ids.length === 0) return new Map();
-  const db = getDb();
-  try {
-    const placeholders = ids.map(() => "?").join(", ");
-    const rows = db
-      .prepare(
-        `SELECT m.id, m.room_id, m.room_name, m.sender_name, m.body, m.timestamp, c.relevance_score
-         FROM messages m
-         LEFT JOIN classifications c ON c.message_id = m.id
-         WHERE m.id IN (${placeholders})`,
-      )
-      .all(...ids) as ThreadEvidenceMessage[];
-    return new Map(rows.map((row) => [row.id, row]));
-  } finally {
-    db.close();
-  }
+  const rows = await getMessagesByIds(ids);
+  return new Map(rows.map((row) => [row.id, row]));
 }
 
 function scoreThreadEvidence(
@@ -417,57 +379,28 @@ function selectEvidenceQuotes(
     .slice(0, 3);
 }
 
-function findKeywordEvidence(
+async function findKeywordEvidence(
   record: FocusThreadRecord,
   cutoffTs: number,
-  scope: RoomScope,
-): ThreadEvidenceMessage[] {
+  _scope: RoomScope,
+): Promise<ThreadEvidenceMessage[]> {
   if (record.keywords.length === 0) return [];
 
-  const db = getDb();
-  try {
-    const roomScope = buildRoomScopeWhere(scope, "m");
-    const whereParts = ["m.timestamp >= ?"];
-    const params: unknown[] = [cutoffTs];
-    if (roomScope.clause) {
-      whereParts.push(roomScope.clause);
-      params.push(...roomScope.params);
-    }
+  const lookbackDays = Math.ceil((Date.now() - cutoffTs) / (24 * 60 * 60 * 1000));
+  const messages = await searchMessages({
+    query: record.keywords.slice(0, 6).join(" "),
+    lookbackDays,
+    limit: 160,
+  });
 
-    const keywordParts = record.keywords
-      .slice(0, 6)
-      .map(
-        () =>
-          "(LOWER(m.body) LIKE ? OR LOWER(COALESCE(c.topics, '')) LIKE ? OR LOWER(COALESCE(c.entities, '')) LIKE ?)",
-      );
-    for (const keyword of record.keywords.slice(0, 6)) {
-      const likeValue = `%${keyword}%`;
-      params.push(likeValue, likeValue, likeValue);
-    }
-    params.push(160);
-
-    const rows = db
-      .prepare(
-        `SELECT m.id, m.room_id, m.room_name, m.sender_name, m.body, m.timestamp, c.relevance_score
-         FROM messages m
-         LEFT JOIN classifications c ON c.message_id = m.id
-         WHERE ${whereParts.join(" AND ")} AND (${keywordParts.join(" OR ")})
-         ORDER BY COALESCE(c.relevance_score, 0) DESC, m.timestamp DESC
-         LIMIT ?`,
-      )
-      .all(...params) as ThreadEvidenceMessage[];
-
-    return selectEvidenceQuotes(rows, record);
-  } finally {
-    db.close();
-  }
+  return selectEvidenceQuotes(messages, record);
 }
 
 async function buildFocusThreadEvidence(
   focusThreads: Thread[],
   reportDate: string,
 ): Promise<FocusThreadEvidence[]> {
-  const scope = getCurrentRoomScope();
+  const scope = await getCurrentRoomScope();
   const cutoffTs = semanticCutoffTs(reportDate);
   const records: FocusThreadRecord[] = focusThreads.map((thread, index) => ({
     key: `thread-${index}`,
@@ -489,22 +422,26 @@ async function buildFocusThreadEvidence(
       Array.from(semanticMatches.values()).flatMap((result) => result.message_ids),
     ),
   );
-  const messagesById = loadMessagesByIds(semanticIds);
+  const messagesById = await loadMessagesByIds(semanticIds);
 
-  return records.map((record) => {
-    const semanticQuotes =
-      semanticMatches
-        .get(record.key)
-        ?.message_ids.map((id) => messagesById.get(id))
-        .filter((message): message is ThreadEvidenceMessage => Boolean(message)) || [];
-    const keywordQuotes = findKeywordEvidence(record, cutoffTs, scope);
-    const quotes = selectEvidenceQuotes([...semanticQuotes, ...keywordQuotes], record);
-    return {
-      key: record.key,
-      thread: record.thread,
-      quotes,
-    };
-  });
+  const results = await Promise.all(
+    records.map(async (record) => {
+      const semanticQuotes =
+        semanticMatches
+          .get(record.key)
+          ?.message_ids.map((id) => messagesById.get(id))
+          .filter((message): message is ThreadEvidenceMessage => Boolean(message)) || [];
+      const keywordQuotes = await findKeywordEvidence(record, cutoffTs, scope);
+      const quotes = selectEvidenceQuotes([...semanticQuotes, ...keywordQuotes], record);
+      return {
+        key: record.key,
+        thread: record.thread,
+        quotes,
+      };
+    }),
+  );
+
+  return results;
 }
 
 export default async function TrendCoveragePage({
@@ -514,16 +451,16 @@ export default async function TrendCoveragePage({
 }) {
   const resolvedSearchParams = (searchParams ? await searchParams : {}) as SearchParams;
   const date = resolveDateParam(resolvedSearchParams.date);
-  const report = date ? getReport(date) : getLatestReport();
-  const latestReport = date ? getLatestReport() : report;
+  const report = date ? await getReport(date) : await getLatestReport();
+  const latestReport = date ? await getLatestReport() : report;
   const isLatestReport = Boolean(latestReport && report && latestReport.report_date === report.report_date);
-  const previousReport = report ? getPreviousReport(report.report_date) : null;
-  const recentUpdate = isLatestReport ? getRecentUpdateSnapshot() : null;
+  const previousReport = report ? await getPreviousReport(report.report_date) : null;
+  const recentUpdate = isLatestReport ? await getRecentUpdateSnapshot() : null;
   const radar = await getVibezRadarSnapshot(report, 48);
   const semanticBriefing =
     isLatestReport && report
       ? await computeSemanticAnalytics({
-          roomScope: getCurrentRoomScope(),
+          roomScope: await getCurrentRoomScope(),
           cutoffTs: semanticCutoffTs(report.report_date),
           lookbackDays: SEMANTIC_LOOKBACK_DAYS,
           maxClusters: 8,

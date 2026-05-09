@@ -8,21 +8,41 @@ from vibez.config import Config, read_beeper_token
 
 def test_config_loads_from_env(tmp_path):
     env = {
-        "OPENAI_API_KEY": "sk-openai-test-key",
-        "ANTHROPIC_API_KEY": "sk-test-key",
+        "VIBEZ_OPENAI_API_KEY": "vibez-openai-test-key",
+        "VIBEZ_ANTHROPIC_API_KEY": "vibez-anthropic-test-key",
+        "OPENAI_API_KEY": "legacy-openai-test-key",
+        "ANTHROPIC_API_KEY": "legacy-anthropic-test-key",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
         "MATRIX_HOMESERVER": "https://matrix.beeper.com",
         "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
     }
     with patch.dict(os.environ, env, clear=False):
         cfg = Config.from_env()
-    assert cfg.openai_api_key == "sk-openai-test-key"
-    assert cfg.anthropic_api_key == "sk-test-key"
+    assert cfg.openai_api_key == "vibez-openai-test-key"
+    assert cfg.anthropic_api_key == "vibez-anthropic-test-key"
     assert cfg.matrix_homeserver == "https://matrix.beeper.com"
+
+
+def test_config_falls_back_to_legacy_model_provider_keys(tmp_path):
+    env = {
+        "VIBEZ_OPENAI_API_KEY": "",
+        "VIBEZ_ANTHROPIC_API_KEY": "",
+        "OPENAI_API_KEY": "legacy-openai-test-key",
+        "ANTHROPIC_API_KEY": "legacy-anthropic-test-key",
+        "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
+        "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
+    }
+    with patch.dict(os.environ, env, clear=True):
+        cfg = Config.from_env()
+
+    assert cfg.openai_api_key == "legacy-openai-test-key"
+    assert cfg.anthropic_api_key == "legacy-anthropic-test-key"
 
 
 def test_config_defaults(tmp_path):
     env = {
+        "VIBEZ_OPENAI_API_KEY": "",
+        "VIBEZ_ANTHROPIC_API_KEY": "",
         "OPENAI_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
         "VIBEZ_DB_PATH": str(tmp_path / "test.db"),

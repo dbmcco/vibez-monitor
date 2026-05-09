@@ -15,12 +15,12 @@ export async function GET(request: NextRequest) {
     const params = request.nextUrl.searchParams;
 
     if (params.get("stats") === "1") {
-      return NextResponse.json(getWisdomStats());
+      return NextResponse.json(await getWisdomStats());
     }
 
     if (params.has("type")) {
       const knowledgeType = params.get("type")?.trim() || undefined;
-      return NextResponse.json({ items: getWisdomItemsByType(knowledgeType) });
+      return NextResponse.json({ items: await getWisdomItemsByType(knowledgeType) });
     }
 
     if (params.has("topic")) {
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
       if (!topicSlug) {
         return NextResponse.json({ error: "topic is required" }, { status: 400 });
       }
-      const topic = getWisdomItemsByTopic(topicSlug);
+      const topic = await getWisdomItemsByTopic(topicSlug);
       if (!topic) {
         return NextResponse.json({ error: "Topic not found" }, { status: 404 });
       }
@@ -40,10 +40,10 @@ export async function GET(request: NextRequest) {
       if (!Number.isFinite(topicId)) {
         return NextResponse.json({ recommendations: [], error: "Invalid topic id" }, { status: 400 });
       }
-      return NextResponse.json({ recommendations: getWisdomRecommendations(topicId) });
+      return NextResponse.json({ recommendations: await getWisdomRecommendations(topicId) });
     }
 
-    return NextResponse.json({ topics: getWisdomTopics() });
+    return NextResponse.json({ topics: await getWisdomTopics() });
   } catch (err) {
     console.error("Wisdom API error:", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

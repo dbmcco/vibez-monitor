@@ -8,7 +8,7 @@ import re
 import hashlib
 import html
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -288,6 +288,14 @@ def _import_psycopg():
     return psycopg
 
 
+def _to_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date_type)):
+        return value.isoformat()
+    return str(value)
+
+
 def ensure_pgvector_schema(
     pg_url: str,
     *,
@@ -401,57 +409,59 @@ CREATE TABLE IF NOT EXISTS {table_name} (
         conn.commit()
 
 
-def _fetch_sqlite_rows(
-    db_path: Path,
+def _fetch_pg_rows(
     *,
     message_ids: Sequence[str] | None = None,
     since_ts: int | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    conn = get_connection(db_path)
-    where_parts: list[str] = []
-    params: list[Any] = []
-    if since_ts is not None:
-        where_parts.append("m.timestamp >= ?")
-        params.append(int(since_ts))
-    if message_ids:
-        placeholders = ",".join("?" for _ in message_ids)
-        where_parts.append(f"m.id IN ({placeholders})")
-        params.extend(message_ids)
-    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    limit_sql = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    conn = get_connection()
+    try:
+        where_parts: list[str] = []
+        params: list[Any] = []
+        if since_ts is not None:
+            where_parts.append("m.timestamp >= %s")
+            params.append(int(since_ts))
+        if message_ids:
+            placeholders = ",".join("%s" for _ in message_ids)
+            where_parts.append(f"m.id IN ({placeholders})")
+            params.extend(message_ids)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        limit_sql = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
 
-    cursor = conn.execute(
-        f"""SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name,
-                   m.body, m.timestamp, c.relevance_score, c.topics, c.entities,
-                   c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
-            FROM messages m
-            LEFT JOIN classifications c ON m.id = c.message_id
-            {where_sql}
-            ORDER BY m.timestamp DESC
-            {limit_sql}""",
-        params,
-    )
-    rows = [
-        {
-            "id": row[0],
-            "room_id": row[1],
-            "room_name": row[2],
-            "sender_id": row[3],
-            "sender_name": row[4],
-            "body": row[5],
-            "timestamp": row[6],
-            "relevance_score": row[7],
-            "topics": row[8] if row[8] else "[]",
-            "entities": row[9] if row[9] else "[]",
-            "contribution_flag": row[10],
-            "contribution_themes": row[11] if row[11] else "[]",
-            "contribution_hint": row[12],
-            "alert_level": row[13],
-        }
-        for row in cursor.fetchall()
-    ]
-    conn.close()
+        cur = conn.cursor()
+        cur.execute(
+            f"""SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name,
+                       m.body, m.timestamp, c.relevance_score, c.topics, c.entities,
+                       c.contribution_flag, c.contribution_themes, c.contribution_hint, c.alert_level
+                FROM messages m
+                LEFT JOIN classifications c ON m.id = c.message_id
+                {where_sql}
+                ORDER BY m.timestamp DESC
+                {limit_sql}""",
+            params,
+        )
+        rows = [
+            {
+                "id": row[0],
+                "room_id": row[1],
+                "room_name": row[2],
+                "sender_id": row[3],
+                "sender_name": row[4],
+                "body": row[5],
+                "timestamp": row[6],
+                "relevance_score": row[7],
+                "topics": row[8] if row[8] else "[]",
+                "entities": row[9] if row[9] else "[]",
+                "contribution_flag": row[10],
+                "contribution_themes": row[11] if row[11] else "[]",
+                "contribution_hint": row[12],
+                "alert_level": row[13],
+            }
+            for row in cur.fetchall()
+        ]
+    finally:
+        conn.close()
     return rows
 
 
@@ -469,57 +479,59 @@ def _link_hashes_from_messages(messages: Sequence[dict[str, Any]]) -> list[str]:
     return sorted(hashes)
 
 
-def _fetch_sqlite_link_rows(
-    db_path: Path,
+def _fetch_pg_link_rows(
     *,
     url_hashes: Sequence[str] | None = None,
     since_iso: str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    conn = get_connection(db_path)
-    where_parts: list[str] = []
-    params: list[Any] = []
-    if since_iso is not None:
-        where_parts.append("last_seen >= ?")
-        params.append(since_iso)
-    if url_hashes:
-        placeholders = ",".join("?" for _ in url_hashes)
-        where_parts.append(f"url_hash IN ({placeholders})")
-        params.extend(url_hashes)
-    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    limit_sql = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
+    conn = get_connection()
+    try:
+        where_parts: list[str] = []
+        params: list[Any] = []
+        if since_iso is not None:
+            where_parts.append("last_seen >= %s")
+            params.append(since_iso)
+        if url_hashes:
+            placeholders = ",".join("%s" for _ in url_hashes)
+            where_parts.append(f"url_hash IN ({placeholders})")
+            params.extend(url_hashes)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        limit_sql = f"LIMIT {int(limit)}" if limit and limit > 0 else ""
 
-    cursor = conn.execute(
-        f"""SELECT id, url, url_hash, title, category, relevance, shared_by,
-                   source_group, first_seen, last_seen, mention_count, value_score,
-                   report_date, authored_by, pinned
-            FROM links
-            {where_sql}
-            ORDER BY last_seen DESC
-            {limit_sql}""",
-        params,
-    )
-    rows = [
-        {
-            "id": row[0],
-            "url": row[1],
-            "url_hash": row[2],
-            "title": row[3] or "",
-            "category": row[4] or "",
-            "relevance": row[5] or "",
-            "shared_by": row[6] or "",
-            "source_group": row[7] or "",
-            "first_seen": row[8],
-            "last_seen": row[9],
-            "mention_count": row[10] or 0,
-            "value_score": row[11] or 0,
-            "report_date": row[12],
-            "authored_by": row[13] or "",
-            "pinned": bool(row[14] or 0),
-        }
-        for row in cursor.fetchall()
-    ]
-    conn.close()
+        cur = conn.cursor()
+        cur.execute(
+            f"""SELECT id, url, url_hash, title, category, relevance, shared_by,
+                       source_group, first_seen, last_seen, mention_count, value_score,
+                       report_date, authored_by, pinned
+                FROM links
+                {where_sql}
+                ORDER BY last_seen DESC
+                {limit_sql}""",
+            params,
+        )
+        rows = [
+            {
+                "id": row[0],
+                "url": row[1],
+                "url_hash": row[2],
+                "title": row[3] or "",
+                "category": row[4] or "",
+                "relevance": row[5] or "",
+                "shared_by": row[6] or "",
+                "source_group": row[7] or "",
+                "first_seen": _to_iso(row[8]),
+                "last_seen": _to_iso(row[9]),
+                "mention_count": row[10] or 0,
+                "value_score": row[11] or 0,
+                "report_date": _to_iso(row[12]),
+                "authored_by": row[13] or "",
+                "pinned": bool(row[14] or 0),
+            }
+            for row in cur.fetchall()
+        ]
+    finally:
+        conn.close()
     return rows
 
 
@@ -605,8 +617,7 @@ ON CONFLICT (message_id) DO UPDATE SET
     return len(payload)
 
 
-def index_sqlite_messages(
-    db_path: Path,
+def index_messages(
     pg_url: str,
     *,
     table: str = DEFAULT_TABLE,
@@ -615,12 +626,11 @@ def index_sqlite_messages(
     lookback_days: int | None = None,
     limit: int | None = None,
 ) -> int:
-    """Read rows from SQLite and upsert them into pgvector."""
+    """Read rows from Postgres and upsert them into pgvector."""
     since_ts = None
     if lookback_days is not None and lookback_days > 0:
         since_ts = int((datetime.now() - timedelta(days=lookback_days)).timestamp() * 1000)
-    rows = _fetch_sqlite_rows(
-        db_path,
+    rows = _fetch_pg_rows(
         message_ids=message_ids,
         since_ts=since_ts,
         limit=limit,
@@ -718,8 +728,7 @@ ON CONFLICT (link_id) DO UPDATE SET
     return len(payload)
 
 
-def index_sqlite_links(
-    db_path: Path,
+def index_links(
     pg_url: str,
     *,
     table: str = DEFAULT_LINK_TABLE,
@@ -729,6 +738,7 @@ def index_sqlite_links(
     lookback_days: int | None = None,
     limit: int | None = None,
 ) -> int:
+    """Read rows from Postgres and upsert them into pgvector."""
     resolved_hashes = list(url_hashes or ())
     if source_messages and not resolved_hashes:
         resolved_hashes = _link_hashes_from_messages(source_messages)
@@ -737,8 +747,7 @@ def index_sqlite_links(
     since_iso = None
     if lookback_days is not None and lookback_days > 0:
         since_iso = (datetime.now() - timedelta(days=lookback_days)).isoformat()
-    rows = _fetch_sqlite_link_rows(
-        db_path,
+    rows = _fetch_pg_link_rows(
         url_hashes=resolved_hashes or None,
         since_iso=since_iso,
         limit=limit,

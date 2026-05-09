@@ -26,7 +26,6 @@ enough context to answer, say so clearly."""
 
 
 def search_messages(
-    db_path: Path,
     query: str,
     lookback_days: int = 7,
     limit: int = 50,
@@ -48,10 +47,10 @@ def search_messages(
             )
         except Exception:
             logger.exception(
-                "pgvector search failed; falling back to SQLite keyword search"
+                "pgvector search failed; falling back to Postgres keyword search"
             )
 
-    conn = get_connection(db_path)
+    conn = get_connection()
     cutoff_ts = int((datetime.now() - timedelta(days=lookback_days)).timestamp() * 1000)
 
     # Split query into keywords for LIKE matching
@@ -59,14 +58,15 @@ def search_messages(
 
     if not keywords:
         # Fall back to recent high-relevance messages
-        cursor = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """SELECT m.room_name, m.sender_name, m.body, m.timestamp,
                       c.relevance_score, c.topics, c.contribution_hint
                FROM messages m
                LEFT JOIN classifications c ON m.id = c.message_id
-               WHERE m.timestamp >= ?
+               WHERE m.timestamp >= %s
                ORDER BY c.relevance_score DESC NULLS LAST
-               LIMIT ?""",
+               LIMIT %s""",
             (cutoff_ts, limit),
         )
     else:
@@ -74,21 +74,22 @@ def search_messages(
         where_parts = []
         params: list[Any] = [cutoff_ts]
         for kw in keywords[:5]:
-            where_parts.append("LOWER(m.body) LIKE ?")
+            where_parts.append("LOWER(m.body) LIKE %s")
             params.append(f"%{kw}%")
 
-        cursor = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             f"""SELECT m.room_name, m.sender_name, m.body, m.timestamp,
                        c.relevance_score, c.topics, c.contribution_hint
                 FROM messages m
                 LEFT JOIN classifications c ON m.id = c.message_id
-                WHERE m.timestamp >= ? AND ({' OR '.join(where_parts)})
+                WHERE m.timestamp >= %s AND ({' OR '.join(where_parts)})
                 ORDER BY m.timestamp DESC
-                LIMIT ?""",
+                LIMIT %s""",
             (*params, limit),
         )
 
-    rows = cursor.fetchall()
+    rows = cur.fetchall()
     conn.close()
     return [
         {
@@ -101,13 +102,14 @@ def search_messages(
     ]
 
 
-def get_recent_summary(db_path: Path) -> str:
+def get_recent_summary() -> str:
     """Get the latest daily report summary for context."""
-    conn = get_connection(db_path)
-    cursor = conn.execute(
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
         "SELECT briefing_md, report_date FROM daily_reports ORDER BY report_date DESC LIMIT 1"
     )
-    row = cursor.fetchone()
+    row = cur.fetchone()
     conn.close()
     if row and row[0]:
         return f"Latest briefing ({row[1]}):\n{row[0][:2000]}"
@@ -121,16 +123,15 @@ async def chat(config: Config, question: str, lookback_days: int = 7) -> str:
 
     # Search for relevant messages
     messages = search_messages(
-        config.db_path,
         question,
         lookback_days,
-        pg_url=config.pgvector_url,
+        pg_url=config.database_url,
         pg_table=config.pgvector_table,
         pg_dimensions=config.pgvector_dimensions,
     )
 
     # Get latest briefing for high-level context
-    briefing_context = get_recent_summary(config.db_path)
+    briefing_context = get_recent_summary()
 
     # Load dossier for profile context
     dossier = load_dossier(config.dossier_path)

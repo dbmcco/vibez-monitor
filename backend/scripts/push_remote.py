@@ -1,7 +1,7 @@
-"""Push local vibez SQLite rows into a remote vibez deployment.
+"""Push local vibez Postgres rows into a remote vibez deployment.
 
 This script is intended for local-to-cloud sync:
-1) local machine ingests Beeper Desktop API + Google Groups into local vibez.db
+1) local machine ingests Beeper Desktop API + Google Groups into local Postgres
 2) this script batches recent rows and upserts them into remote /api/admin/push
 """
 
@@ -11,7 +11,6 @@ import argparse
 import json
 import os
 import re
-import sqlite3
 import sys
 import urllib.error
 import urllib.parse
@@ -21,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+
+from vibez.db import get_connection
 
 DEFAULT_ANALYSIS_SYNC_STATE_KEYS = (
     "beeper_active_group_ids",
@@ -37,11 +38,6 @@ _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Push local vibez data into a remote vibez deployment."
-    )
-    parser.add_argument(
-        "--db-path",
-        default="",
-        help="Path to local vibez.db (defaults to VIBEZ_DB_PATH or ./vibez.db)",
     )
     parser.add_argument(
         "--remote-url",
@@ -86,15 +82,6 @@ def clamp_batch_size(raw: int) -> int:
     return raw
 
 
-def resolve_db_path(raw: str) -> Path:
-    if raw:
-        return Path(raw).expanduser().resolve()
-    env_path = os.environ.get("VIBEZ_DB_PATH", "").strip()
-    if env_path:
-        return Path(env_path).expanduser().resolve()
-    return Path("./vibez.db").resolve()
-
-
 def resolve_cutoff_ts(lookback_days: int) -> int | None:
     if lookback_days <= 0:
         return None
@@ -132,15 +119,14 @@ def load_allowed_groups() -> set[str]:
 
 
 def fetch_records(
-    db_path: Path,
     cutoff_ts: int | None,
     allowed_groups: set[str],
     excluded_groups: set[str],
 ) -> list[dict[str, Any]]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.execute(
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
         """
         SELECT
             m.id,
@@ -160,12 +146,13 @@ def fetch_records(
             c.alert_level
         FROM messages m
         LEFT JOIN classifications c ON c.message_id = m.id
-        WHERE (? IS NULL OR m.timestamp >= ?)
+        WHERE (%s IS NULL OR m.timestamp >= %s)
         ORDER BY m.timestamp ASC
         """,
         (cutoff_ts, cutoff_ts),
     )
-    rows = cursor.fetchall()
+    columns = [desc.name for desc in cur.description]
+    rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
     conn.close()
 
     records: list[dict[str, Any]] = []
@@ -201,21 +188,21 @@ def fetch_records(
 
 
 def fetch_sync_state(
-    db_path: Path,
     allowed_groups: set[str],
     excluded_groups: set[str],
 ) -> dict[str, str]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute(
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
         f"""
         SELECT key, value
         FROM sync_state
-        WHERE key IN ({",".join("?" for _ in DEFAULT_ANALYSIS_SYNC_STATE_KEYS)})
+        WHERE key IN ({",".join("%s" for _ in DEFAULT_ANALYSIS_SYNC_STATE_KEYS)})
         """,
         DEFAULT_ANALYSIS_SYNC_STATE_KEYS,
     )
-    rows = cursor.fetchall()
+    rows = cur.fetchall()
     conn.close()
     state = {str(key): str(value) for key, value in rows}
     if not allowed_groups and not excluded_groups:
@@ -253,12 +240,14 @@ def fetch_sync_state(
     return state
 
 
-def _fetch_rows(db_path: Path, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(query, params).fetchall()
+def _fetch_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(query, params)
+    columns = [desc.name for desc in cur.description]
+    rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
     conn.close()
-    return [dict(row) for row in rows]
+    return rows
 
 
 def _validate_ident(raw: str, label: str) -> str:
@@ -284,7 +273,7 @@ def fetch_message_embeddings(
     *,
     cutoff_ts: int | None = None,
 ) -> list[dict[str, Any]]:
-    pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip()
+    pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip() or os.environ.get("VIBEZ_DATABASE_URL", "").strip()
     if not pg_url:
         return []
     table = _validate_ident(
@@ -326,7 +315,7 @@ def fetch_link_embeddings(
     *,
     cutoff_ts: int | None = None,
 ) -> list[dict[str, Any]]:
-    pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip()
+    pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip() or os.environ.get("VIBEZ_DATABASE_URL", "").strip()
     if not pg_url:
         return []
     table = _validate_ident(
@@ -362,9 +351,8 @@ def fetch_link_embeddings(
             return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
 
 
-def fetch_links(db_path: Path) -> list[dict[str, Any]]:
+def fetch_links() -> list[dict[str, Any]]:
     return _fetch_rows(
-        db_path,
         """
         SELECT url, url_hash, title, category, relevance, shared_by, source_group,
                first_seen, last_seen, mention_count, value_score, report_date, authored_by, pinned
@@ -374,9 +362,8 @@ def fetch_links(db_path: Path) -> list[dict[str, Any]]:
     )
 
 
-def fetch_daily_reports(db_path: Path) -> list[dict[str, Any]]:
+def fetch_daily_reports() -> list[dict[str, Any]]:
     return _fetch_rows(
-        db_path,
         """
         SELECT report_date, briefing_md, briefing_json, contributions, trends,
                daily_memo, conversation_arcs, stats, generated_at
@@ -386,9 +373,8 @@ def fetch_daily_reports(db_path: Path) -> list[dict[str, Any]]:
     )
 
 
-def fetch_wisdom_topics(db_path: Path) -> list[dict[str, Any]]:
+def fetch_wisdom_topics() -> list[dict[str, Any]]:
     return _fetch_rows(
-        db_path,
         """
         SELECT name, slug, summary, message_count, contributor_count,
                last_active, created_at, updated_at
@@ -398,9 +384,8 @@ def fetch_wisdom_topics(db_path: Path) -> list[dict[str, Any]]:
     )
 
 
-def fetch_wisdom_items(db_path: Path) -> list[dict[str, Any]]:
+def fetch_wisdom_items() -> list[dict[str, Any]]:
     return _fetch_rows(
-        db_path,
         """
         SELECT wt.slug AS topic_slug, wi.knowledge_type, wi.title, wi.summary,
                wi.source_links, wi.source_messages, wi.contributors, wi.confidence,
@@ -412,9 +397,8 @@ def fetch_wisdom_items(db_path: Path) -> list[dict[str, Any]]:
     )
 
 
-def fetch_wisdom_recommendations(db_path: Path) -> list[dict[str, Any]]:
+def fetch_wisdom_recommendations() -> list[dict[str, Any]]:
     return _fetch_rows(
-        db_path,
         """
         SELECT source.slug AS from_topic_slug, target.slug AS to_topic_slug,
                wr.strength, wr.reason
@@ -524,7 +508,6 @@ def push_analysis_tables(
     remote_url: str,
     push_key: str,
     access_cookie: str,
-    db_path: Path,
     sync_state: dict[str, str],
     batch_size: int,
     *,
@@ -535,11 +518,11 @@ def push_analysis_tables(
     resolved_allowed = allowed_groups or set()
     resolved_excluded = excluded_groups or set()
     sections: list[tuple[str, list[dict[str, Any]]]] = [
-        ("links", fetch_links(db_path)),
-        ("daily_reports", fetch_daily_reports(db_path)),
-        ("wisdom_topics", fetch_wisdom_topics(db_path)),
-        ("wisdom_items", fetch_wisdom_items(db_path)),
-        ("wisdom_recommendations", fetch_wisdom_recommendations(db_path)),
+        ("links", fetch_links()),
+        ("daily_reports", fetch_daily_reports()),
+        ("wisdom_topics", fetch_wisdom_topics()),
+        ("wisdom_items", fetch_wisdom_items()),
+        ("wisdom_recommendations", fetch_wisdom_recommendations()),
         (
             "message_embeddings",
             fetch_message_embeddings(
@@ -587,11 +570,6 @@ def main() -> int:
     load_dotenv()
     args = parse_args()
 
-    db_path = resolve_db_path(args.db_path)
-    if not db_path.exists():
-        print(f"Local db not found: {db_path}", file=sys.stderr)
-        return 2
-
     remote_url = (args.remote_url or os.environ.get("VIBEZ_REMOTE_URL", "")).strip()
     access_code = (args.access_code or os.environ.get("VIBEZ_ACCESS_CODE", "")).strip()
     push_key = (args.push_key or os.environ.get("VIBEZ_PUSH_API_KEY", "")).strip()
@@ -615,11 +593,10 @@ def main() -> int:
     cutoff_ts = resolve_cutoff_ts(args.lookback_days)
     allowed_groups = load_allowed_groups()
     excluded_groups = load_excluded_groups()
-    records = fetch_records(db_path, cutoff_ts, allowed_groups, excluded_groups)
-    sync_state = fetch_sync_state(db_path, allowed_groups, excluded_groups)
+    records = fetch_records(cutoff_ts, allowed_groups, excluded_groups)
+    sync_state = fetch_sync_state(allowed_groups, excluded_groups)
 
     window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"
-    print(f"Local DB: {db_path}")
     print(f"Window: {window_label}")
     if allowed_groups:
         print(f"Allowed groups: {', '.join(sorted(allowed_groups))}")
@@ -651,7 +628,6 @@ def main() -> int:
         remote_url=remote_url,
         push_key=push_key,
         access_cookie=access_cookie,
-        db_path=db_path,
         sync_state=sync_state if not records else {},
         batch_size=batch_size,
         cutoff_ts=cutoff_ts,

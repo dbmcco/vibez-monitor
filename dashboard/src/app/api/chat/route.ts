@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
     const messages = await searchMessages({ query: question, lookbackDays });
 
     // Get latest briefing for high-level context
-    const briefing = getLatestBriefingMd();
+    const briefing = await getLatestBriefingMd();
 
     // Load dossier context
     const dossierContext = loadDossierContext(subjectName, subjectPossessive);

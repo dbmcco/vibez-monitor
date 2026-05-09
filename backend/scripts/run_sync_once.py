@@ -47,7 +47,7 @@ def initialize_beeper_cursors(config: Config, groups: list[dict]) -> None:
         group_id = str(group.get("id", "")).strip()
         if not group_id:
             continue
-        if load_cursor(config.db_path, group_id) is not None:
+        if load_cursor(config.database_url, group_id) is not None:
             continue
 
         encoded = urllib.parse.quote(group_id, safe="")
@@ -59,7 +59,7 @@ def initialize_beeper_cursors(config: Config, groups: list[dict]) -> None:
             )
             items = data.get("items", [])
             if items:
-                save_cursor(config.db_path, group_id, items[0]["sortKey"])
+                save_cursor(config.database_url, group_id, items[0]["sortKey"])
         except Exception:
             logging.getLogger("vibez.sync_once").warning(
                 "Could not initialize cursor for group id=%s",
@@ -69,11 +69,11 @@ def initialize_beeper_cursors(config: Config, groups: list[dict]) -> None:
 
 async def classify_and_index(config: Config, messages: list[dict]) -> None:
     from vibez.classifier import classify_messages
-    from vibez.semantic_index import index_sqlite_links, index_sqlite_messages
+    from vibez.semantic_index import index_links, index_messages
 
     await classify_messages(config, messages)
 
-    if not (config.pgvector_url and config.pgvector_index_on_sync):
+    if not (config.database_url and config.pgvector_index_on_sync):
         return
 
     message_ids = [
@@ -84,9 +84,7 @@ async def classify_and_index(config: Config, messages: list[dict]) -> None:
     if not message_ids:
         return
 
-    indexed = index_sqlite_messages(
-        config.db_path,
-        config.pgvector_url,
+    indexed = index_messages(
         table=config.pgvector_table,
         dimensions=config.pgvector_dimensions,
         message_ids=message_ids,
@@ -96,9 +94,7 @@ async def classify_and_index(config: Config, messages: list[dict]) -> None:
             "Indexed %d messages into pgvector",
             indexed,
         )
-    indexed_links = index_sqlite_links(
-        config.db_path,
-        config.pgvector_url,
+    indexed_links = index_links(
         table=config.pgvector_link_table,
         dimensions=config.pgvector_dimensions,
         source_messages=messages,
@@ -144,9 +140,9 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    init_db(config.db_path)
+    init_db(config.database_url)
     logger.info("Running one-shot sync job")
-    logger.info("Database: %s", config.db_path)
+    logger.info("Database: %s", config.database_url)
 
     all_new_messages: list[dict] = []
 
@@ -155,10 +151,10 @@ async def main() -> None:
         check_token_health(config.beeper_api_url, config.beeper_api_token)
         groups = get_whatsapp_groups(config.beeper_api_url, config.beeper_api_token)
         logger.info("Beeper groups in scope: %d", len(groups))
-        save_beeper_active_groups(config.db_path, groups)
+        save_beeper_active_groups(config.database_url, groups)
         initialize_beeper_cursors(config, groups)
         beeper_messages = beeper_poll_once(
-            config.db_path,
+            config.database_url,
             config.beeper_api_url,
             config.beeper_api_token,
             groups,
@@ -176,9 +172,9 @@ async def main() -> None:
             config.google_groups_bootstrap_days,
             config.google_groups_bootstrap_max_uids,
         )
-        save_google_active_groups(config.db_path, google_groups)
+        save_google_active_groups(config.database_url, google_groups)
         parsed_messages = google_poll_once(
-            db_path=config.db_path,
+            db_path=config.database_url,
             host=config.google_groups_imap_host,
             port=config.google_groups_imap_port,
             user=config.google_groups_imap_user,
@@ -188,7 +184,7 @@ async def main() -> None:
             bootstrap_days=config.google_groups_bootstrap_days,
             bootstrap_max_uids=config.google_groups_bootstrap_max_uids,
         )
-        saved = save_google_messages(config.db_path, parsed_messages)
+        saved = save_google_messages(config.database_url, parsed_messages)
         if saved:
             publish_event(
                 "vibez.messages.synced",

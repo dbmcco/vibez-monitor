@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     // Stats-only request
     if (params.get("stats") === "1") {
       const days = params.has("days") ? parseInt(params.get("days")!, 10) : undefined;
-      const stats = getLinkStats({ days });
+      const stats = await getLinkStats({ days });
       return NextResponse.json(stats);
     }
 
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const pinned = params.get("pinned") === "1" ? true : undefined;
 
     const opts = { category, days, limit, sort, source, sharedBy, authoredBy, pinned };
-    const links = q ? await searchLinks({ query: q, ...opts }) : getLinks(opts);
+    const links = q ? await searchLinks({ query: q, ...opts }) : await getLinks(opts);
 
     return NextResponse.json({ links, total: links.length });
   } catch (err) {

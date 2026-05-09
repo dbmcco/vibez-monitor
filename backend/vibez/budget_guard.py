@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from datetime import date, timezone, datetime
 from pathlib import Path
+
+from vibez.db import get_connection
 
 logger = logging.getLogger("vibez.budget_guard")
 
@@ -24,20 +25,20 @@ _DEFAULT_OUTPUT = 15.00
 
 BUDGET_SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_budget (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     call_date DATE NOT NULL,
     model TEXT NOT NULL,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     estimated_cost_usd REAL NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_api_budget_date ON api_budget (call_date);
 """
 
 
 def ensure_table(db_path: Path) -> None:
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(db_path)
     conn.executescript(BUDGET_SCHEMA)
     conn.commit()
     conn.close()
@@ -55,9 +56,9 @@ def record_usage(
     output_tokens: int,
 ) -> float:
     cost = estimate_cost(model, input_tokens, output_tokens)
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(db_path)
     conn.execute(
-        "INSERT INTO api_budget (call_date, model, input_tokens, output_tokens, estimated_cost_usd) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO api_budget (call_date, model, input_tokens, output_tokens, estimated_cost_usd) VALUES (%s, %s, %s, %s, %s)",
         (date.today().isoformat(), model, input_tokens, output_tokens, cost),
     )
     conn.commit()
@@ -67,9 +68,9 @@ def record_usage(
 
 def daily_spend(db_path: Path, target_date: date | None = None) -> float:
     target = (target_date or date.today()).isoformat()
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(db_path)
     row = conn.execute(
-        "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_budget WHERE call_date = ?",
+        "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_budget WHERE call_date = %s",
         (target,),
     ).fetchone()
     conn.close()

@@ -1,4 +1,4 @@
-"""Backfill or refresh pgvector embeddings from vibez SQLite data."""
+"""Backfill or refresh pgvector embeddings from vibez Postgres data."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vibez.config import Config
-from vibez.semantic_index import index_sqlite_links, index_sqlite_messages
+from vibez.semantic_index import index_links, index_messages
 
 
 def main() -> int:
@@ -17,15 +17,9 @@ def main() -> int:
         description="Index vibez messages into Postgres pgvector table."
     )
     parser.add_argument(
-        "--db-path",
-        type=Path,
-        default=None,
-        help="Path to vibez.db (defaults to config VIBEZ_DB_PATH)",
-    )
-    parser.add_argument(
         "--pg-url",
         default="",
-        help="Postgres URL (defaults to VIBEZ_PGVECTOR_URL)",
+        help="Postgres URL (defaults to VIBEZ_DATABASE_URL)",
     )
     parser.add_argument(
         "--table",
@@ -53,7 +47,7 @@ def main() -> int:
         "--limit",
         type=int,
         default=0,
-        help="Limit rows imported from SQLite (0 = no limit)",
+        help="Limit rows imported from Postgres (0 = no limit)",
     )
     parser.add_argument(
         "--kind",
@@ -64,8 +58,7 @@ def main() -> int:
     args = parser.parse_args()
 
     config = Config.from_env()
-    db_path = args.db_path or config.db_path
-    pg_url = args.pg_url or config.pgvector_url
+    pg_url = args.pg_url or config.database_url
     table = args.table or config.pgvector_table
     link_table = args.link_table or config.pgvector_link_table
     dimensions = args.dimensions or config.pgvector_dimensions
@@ -74,7 +67,7 @@ def main() -> int:
 
     if not pg_url:
         print(
-            "Missing pgvector URL. Set VIBEZ_PGVECTOR_URL or pass --pg-url.",
+            "Missing database URL. Set VIBEZ_DATABASE_URL or pass --pg-url.",
             file=sys.stderr,
         )
         return 2
@@ -82,18 +75,14 @@ def main() -> int:
     indexed_messages = 0
     indexed_links = 0
     if args.kind in {"messages", "both"}:
-        indexed_messages = index_sqlite_messages(
-            db_path,
-            pg_url,
+        indexed_messages = index_messages(
             table=table,
             dimensions=dimensions,
             lookback_days=lookback,
             limit=limit,
         )
     if args.kind in {"links", "both"}:
-        indexed_links = index_sqlite_links(
-            db_path,
-            pg_url,
+        indexed_links = index_links(
             table=link_table,
             dimensions=dimensions,
             lookback_days=lookback,
@@ -101,7 +90,7 @@ def main() -> int:
         )
     print(
         f"Indexed {indexed_messages} messages into {table} and "
-        f"{indexed_links} links into {link_table} from {db_path} (dim={dimensions})."
+        f"{indexed_links} links into {link_table} (dim={dimensions})."
     )
     return 0
 

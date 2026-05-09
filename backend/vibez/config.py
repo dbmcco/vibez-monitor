@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vibez.model_router import resolve_provider_api_key
 from vibez.profile import (
     DEFAULT_SUBJECT_NAME,
     get_dossier_path,
@@ -83,6 +84,14 @@ class Config:
     )
 
     @property
+    def database_url(self) -> str:
+        return (
+            os.environ.get("VIBEZ_DATABASE_URL", "")
+            or os.environ.get("VIBEZ_PGVECTOR_URL", "")
+            or "postgresql://localhost:5432/vibez"
+        )
+
+    @property
     def google_groups_enabled(self) -> bool:
         return bool(
             self.google_groups_imap_user
@@ -120,8 +129,8 @@ class Config:
         )
 
         return cls(
-            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            openai_api_key=resolve_provider_api_key("openai"),
+            anthropic_api_key=resolve_provider_api_key("anthropic"),
             db_path=db_path,
             model_routing_path=Path(
                 os.environ.get("VIBEZ_MODEL_ROUTING_PATH", "config/model-routing.json")

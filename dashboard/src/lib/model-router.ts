@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 export interface ModelRoute {
-  provider: "openai" | "anthropic" | "ollama";
+  provider: "openai" | "anthropic" | "openrouter" | "ollama";
   model: string;
   mode: "text" | "json" | "embedding";
   max_tokens: number;
@@ -37,6 +37,11 @@ export interface ModelEmbeddingResult {
 }
 
 const ROUTE_CACHE = new Map<string, Record<string, ModelRoute>>();
+const PROVIDER_CREDENTIAL_ENVS = {
+  openai: ["VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"],
+  anthropic: ["VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
+  openrouter: ["VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+} as const;
 
 export function defaultManifestPath(): string {
   return process.env.VIBEZ_MODEL_ROUTING_PATH ||
@@ -76,12 +81,22 @@ export function getRoute(
   return route;
 }
 
-function validateRouteRequirements(route: ModelRoute): void {
-  if (route.provider === "openai" && !process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY not configured");
+export function resolveProviderApiKey(
+  provider: keyof typeof PROVIDER_CREDENTIAL_ENVS,
+): string {
+  for (const envName of PROVIDER_CREDENTIAL_ENVS[provider]) {
+    const value = process.env[envName];
+    if (value) return value;
   }
-  if (route.provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY not configured");
+  return "";
+}
+
+function validateRouteRequirements(route: ModelRoute): void {
+  if (route.provider in PROVIDER_CREDENTIAL_ENVS) {
+    const provider = route.provider as keyof typeof PROVIDER_CREDENTIAL_ENVS;
+    if (!resolveProviderApiKey(provider)) {
+      throw new Error(`${PROVIDER_CREDENTIAL_ENVS[provider][0]} not configured`);
+    }
   }
   if (route.provider === "ollama") {
     return;
@@ -163,7 +178,7 @@ async function runAnthropicRoute(
       role: message.role === "assistant" ? "assistant" : "user",
       content: message.content,
     }));
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = new Anthropic({ apiKey: resolveProviderApiKey("anthropic") });
   const response = await client.messages.create({
     model: route.model,
     max_tokens: route.max_tokens,
@@ -186,7 +201,7 @@ async function runOpenAIRoute(
   payload: ModelMessage[],
 ): Promise<ModelTextResult> {
   const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+    apiKey: resolveProviderApiKey("openai"),
     timeout: route.timeout_ms,
   });
   const response = await client.responses.create({
@@ -209,7 +224,7 @@ async function runOpenAIEmbeddingRoute(
   dimensions?: number,
 ): Promise<ModelEmbeddingResult> {
   const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+    apiKey: resolveProviderApiKey("openai"),
     timeout: route.timeout_ms,
   });
   const response = await client.embeddings.create({

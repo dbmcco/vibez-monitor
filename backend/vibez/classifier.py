@@ -130,8 +130,8 @@ def get_recent_context(db_path: Path, room_id: str, before_ts: int, limit: int =
     conn = get_connection(db_path)
     cursor = conn.execute(
         """SELECT sender_name, body FROM messages
-           WHERE room_id = ? AND timestamp < ?
-           ORDER BY timestamp DESC LIMIT ?""",
+           WHERE room_id = %s AND timestamp < %s
+           ORDER BY timestamp DESC LIMIT %s""",
         (room_id, before_ts, limit),
     )
     rows = cursor.fetchall()
@@ -143,9 +143,17 @@ def save_classification(db_path: Path, message_id: str, classification: dict[str
     """Save a classification result to the database."""
     conn = get_connection(db_path)
     conn.execute(
-        """INSERT OR REPLACE INTO classifications
+        """INSERT INTO classifications
            (message_id, relevance_score, topics, entities, contribution_flag, contribution_themes, contribution_hint, alert_level)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (message_id) DO UPDATE SET
+             relevance_score = EXCLUDED.relevance_score,
+             topics = EXCLUDED.topics,
+             entities = EXCLUDED.entities,
+             contribution_flag = EXCLUDED.contribution_flag,
+             contribution_themes = EXCLUDED.contribution_themes,
+             contribution_hint = EXCLUDED.contribution_hint,
+             alert_level = EXCLUDED.alert_level""",
         (
             message_id,
             classification["relevance_score"],

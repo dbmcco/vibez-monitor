@@ -25,12 +25,12 @@ export async function GET(request: NextRequest) {
   try {
     const publicMode = isPublicMode();
     const date = request.nextUrl.searchParams.get("date");
-    const report = date ? getReport(date) : getLatestReport();
-    const previous_report = report ? getPreviousReport(report.report_date) : null;
-    const recent_update = getRecentUpdateSnapshot();
+    const report = date ? await getReport(date) : await getLatestReport();
+    const previous_report = report ? await getPreviousReport(report.report_date) : null;
+    const recent_update = await getRecentUpdateSnapshot();
     const radar = await getVibezRadarSnapshot(report, 48);
     const thread_deep_dive = report
-      ? buildBriefingThreadDeepDiveData({
+      ? await buildBriefingThreadDeepDiveData({
           briefing_json: report.briefing_json,
           contributions: publicMode ? null : report.contributions,
           conversation_arcs: report.conversation_arcs,
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     const semantic_briefing =
       !date || date.length === 0
         ? await computeSemanticAnalytics({
-            roomScope: getCurrentRoomScope(),
+            roomScope: await getCurrentRoomScope(),
             cutoffTs: Date.now() - 14 * 24 * 60 * 60 * 1000,
             lookbackDays: 14,
             maxClusters: 8,

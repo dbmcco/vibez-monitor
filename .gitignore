@@ -19,3 +19,4 @@ hot_alerts.json
 *.log
 *.pid
 .DS_Store
+vibez.db*

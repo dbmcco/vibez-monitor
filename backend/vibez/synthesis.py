@@ -147,7 +147,7 @@ def get_day_messages(db_path: Path, start_ts: int, end_ts: int) -> list[dict[str
                   c.contribution_themes
            FROM messages m
            LEFT JOIN classifications c ON m.id = c.message_id
-           WHERE m.timestamp >= ? AND m.timestamp < ?
+           WHERE m.timestamp >= %s AND m.timestamp < %s
            ORDER BY m.timestamp ASC""",
         (start_ts, end_ts),
     )
@@ -178,11 +178,11 @@ def get_subject_messages(
     if not aliases:
         return []
     conn = get_connection(db_path)
-    placeholders = ", ".join("?" for _ in aliases)
+    placeholders = ", ".join("%s" for _ in aliases)
     cursor = conn.execute(
         f"""SELECT room_name, body, timestamp FROM messages
            WHERE lower(sender_name) IN ({placeholders})
-             AND timestamp >= ? AND timestamp < ?
+             AND timestamp >= %s AND timestamp < %s
            ORDER BY timestamp DESC LIMIT 20""",
         (*aliases, start_ts, end_ts),
     )
@@ -452,9 +452,17 @@ def save_daily_report(db_path: Path, report_date: str, report: dict[str, Any], b
     """Save the daily synthesis report."""
     conn = get_connection(db_path)
     conn.execute(
-        """INSERT OR REPLACE INTO daily_reports
+        """INSERT INTO daily_reports
            (report_date, briefing_md, briefing_json, contributions, trends, daily_memo, conversation_arcs, stats)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (report_date) DO UPDATE SET
+               briefing_md = EXCLUDED.briefing_md,
+               briefing_json = EXCLUDED.briefing_json,
+               contributions = EXCLUDED.contributions,
+               trends = EXCLUDED.trends,
+               daily_memo = EXCLUDED.daily_memo,
+               conversation_arcs = EXCLUDED.conversation_arcs,
+               stats = EXCLUDED.stats""",
         (report_date, briefing_md, json.dumps(report.get("briefing", [])),
          json.dumps(report.get("contributions", [])),
          json.dumps(report.get("trends", {})),

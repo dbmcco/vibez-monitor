@@ -49,14 +49,14 @@ async def main():
         sys.exit(1)
 
     logger.info("Starting vibez-monitor sync service")
-    logger.info("Database: %s", config.db_path)
+    logger.info("Database: %s", config.database_url)
     if beeper_enabled:
         logger.info("Beeper API: %s (poll=%ds)", config.beeper_api_url, config.poll_interval)
     else:
         logger.info("Beeper sync disabled (BEEPER_API_TOKEN missing)")
     if google_enabled:
         logger.info(
-            "Google Groups IMAP: %s:%d mailbox=%s (poll=%ds) groups=%s bootstrap_days=%d bootstrap_cap=%d",
+            "Google Groups IMAP: %s:%s mailbox=%s (poll=%ds) groups=%s bootstrap_days=%d bootstrap_cap=%d",
             config.google_groups_imap_host,
             config.google_groups_imap_port,
             config.google_groups_imap_mailbox,
@@ -69,7 +69,7 @@ async def main():
         logger.warning(
             "Google Groups list ids set but IMAP credentials missing; source disabled."
         )
-    if config.pgvector_url:
+    if config.database_url:
         logger.info(
             "pgvector indexing enabled (table=%s, dim=%d)",
             config.pgvector_table,
@@ -78,11 +78,11 @@ async def main():
 
     # Classify new messages inline as they arrive
     from vibez.classifier import classify_messages
-    from vibez.semantic_index import index_sqlite_links, index_sqlite_messages
+    from vibez.semantic_index import index_links, index_messages
 
     async def on_messages(messages):
         await classify_messages(config, messages)
-        if not (config.pgvector_url and config.pgvector_index_on_sync):
+        if not (config.database_url and config.pgvector_index_on_sync):
             return
         message_ids = [
             str(msg.get("id"))
@@ -92,9 +92,7 @@ async def main():
         if not message_ids:
             return
         try:
-            indexed = index_sqlite_messages(
-                config.db_path,
-                config.pgvector_url,
+            indexed = index_messages(
                 table=config.pgvector_table,
                 dimensions=config.pgvector_dimensions,
                 message_ids=message_ids,
@@ -104,9 +102,7 @@ async def main():
         except Exception:
             logger.exception("Failed to index sync batch into pgvector")
         try:
-            indexed_links = index_sqlite_links(
-                config.db_path,
-                config.pgvector_url,
+            indexed_links = index_links(
                 table=config.pgvector_link_table,
                 dimensions=config.pgvector_dimensions,
                 source_messages=messages,
@@ -131,7 +127,7 @@ async def main():
                 run_source_with_restart(
                     "Beeper",
                     lambda: sync_loop(
-                        db_path=config.db_path,
+                        db_path=config.database_url,
                         api_base=config.beeper_api_url,
                         api_token=config.beeper_api_token,
                         poll_interval=config.poll_interval,
@@ -146,7 +142,7 @@ async def main():
                 run_source_with_restart(
                     "Google Groups",
                     lambda: google_groups_sync_loop(
-                        db_path=config.db_path,
+                        db_path=config.database_url,
                         host=config.google_groups_imap_host,
                         port=config.google_groups_imap_port,
                         user=config.google_groups_imap_user,
