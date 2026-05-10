@@ -622,12 +622,12 @@ export async function getContributionDashboard(
 
   let pi = roomScope.nextIndex;
   const whereParts = [`m.timestamp >= $${pi++}`];
-  const whereParams: unknown[] = [cutoffTs];
+  const whereParams: unknown[] = [];
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
-    pi = roomScope.nextIndex + 1;
   }
+  whereParams.push(cutoffTs);
   const whereClause = `WHERE ${whereParts.join(" AND ")}`;
 
   const { rows } = await pool.query(
@@ -1227,11 +1227,12 @@ export async function getRecentUpdateSnapshot(): Promise<RecentUpdateSnapshot> {
 
   let pi = roomScope.nextIndex;
   const whereParts = [`m.timestamp >= $${pi++}`, `m.timestamp <= $${pi++}`];
-  const whereParams: unknown[] = [windowStartTs, windowEndTs];
+  const whereParams: unknown[] = [];
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
   }
+  whereParams.push(windowStartTs, windowEndTs);
   const whereClause = `WHERE ${whereParts.join(" AND ")}`;
 
   const { rows } = await pool.query(
@@ -1347,11 +1348,12 @@ async function searchMessagesKeyword(opts: {
   if (keywords.length === 0) {
     let pi = roomScope.nextIndex;
     const whereParts = [`m.timestamp >= $${pi++}`];
-    const params: unknown[] = [cutoffTs];
+    const params: unknown[] = [];
     if (roomScope.clause) {
       whereParts.push(roomScope.clause);
       params.push(...roomScope.params);
     }
+    params.push(cutoffTs);
 
     const { rows: pgRows } = await pool.query(
       `SELECT m.*, c.relevance_score, c.topics, c.entities,
@@ -1367,11 +1369,12 @@ async function searchMessagesKeyword(opts: {
   } else {
     let pi = roomScope.nextIndex;
     const whereParts = [`m.timestamp >= $${pi++}`];
-    const params: unknown[] = [cutoffTs];
+    const params: unknown[] = [];
     if (roomScope.clause) {
       whereParts.push(roomScope.clause);
       params.push(...roomScope.params);
     }
+    params.push(cutoffTs);
     const keywordParts = keywords.slice(0, 5).map(() => `LOWER(m.body) LIKE $${pi++}`);
     const keywordParams = keywords.slice(0, 5).map((kw) => `%${kw}%`);
     const allParams = [...params, ...keywordParams, limit];
@@ -1915,11 +1918,12 @@ export async function getVibezRadarSnapshot(
 
   let pi = roomScope.nextIndex;
   const whereParts = [`m.timestamp >= $${pi++}`];
-  const whereParams: unknown[] = [windowStartTs];
+  const whereParams: unknown[] = [];
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
   }
+  whereParams.push(windowStartTs);
   const whereClause = `WHERE ${whereParts.join(" AND ")}`;
 
   const { rows } = await pool.query(
@@ -2348,13 +2352,13 @@ export async function getStatsDashboard(
   let pi = roomScope.nextIndex;
   const windowWhereParts: string[] = [];
   const windowParams: unknown[] = [];
-  if (cutoffTs !== null) {
-    windowWhereParts.push(`m.timestamp >= $${pi++}`);
-    windowParams.push(cutoffTs);
-  }
   if (roomScope.clause) {
     windowWhereParts.push(roomScope.clause);
     windowParams.push(...roomScope.params);
+  }
+  if (cutoffTs !== null) {
+    windowWhereParts.push(`m.timestamp >= $${pi++}`);
+    windowParams.push(cutoffTs);
   }
   const windowWhere = windowWhereParts.length > 0 ? `WHERE ${windowWhereParts.join(" AND ")}` : "";
 
@@ -2929,13 +2933,13 @@ export async function getTopicDrilldown(
   let pi = roomScope.nextIndex;
   const windowWhereParts: string[] = ["c.topics IS NOT NULL"];
   const windowParams: unknown[] = [];
-  if (cutoffTs !== null) {
-    windowWhereParts.push(`m.timestamp >= $${pi++}`);
-    windowParams.push(cutoffTs);
-  }
   if (roomScope.clause) {
     windowWhereParts.push(roomScope.clause);
     windowParams.push(...roomScope.params);
+  }
+  if (cutoffTs !== null) {
+    windowWhereParts.push(`m.timestamp >= $${pi++}`);
+    windowParams.push(cutoffTs);
   }
 
   const scopedWhereParts: string[] = ["c.topics IS NOT NULL"];
@@ -3285,13 +3289,13 @@ export async function getSpacesDashboard(
   let pi = roomScope.nextIndex;
   const whereParts: string[] = [];
   const whereParams: unknown[] = [];
-  if (cutoffTs !== null) {
-    whereParts.push(`m.timestamp >= $${pi++}`);
-    whereParams.push(cutoffTs);
-  }
   if (roomScope.clause) {
     whereParts.push(roomScope.clause);
     whereParams.push(...roomScope.params);
+  }
+  if (cutoffTs !== null) {
+    whereParts.push(`m.timestamp >= $${pi++}`);
+    whereParams.push(cutoffTs);
   }
   whereParts.push(`LOWER(m.room_id) LIKE $${pi++}`);
   whereParams.push(`${GOOGLE_GROUPS_ROOM_ID_PREFIX}%`);
@@ -4126,17 +4130,17 @@ export async function getMessagesByParticipants(opts: {
 
   let pi = roomScope.nextIndex;
   const whereParts = [`m.timestamp >= $${pi++}`];
-  const params: unknown[] = [cutoffTs];
+  const params: unknown[] = [];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+  params.push(cutoffTs);
 
   whereParts.push(
     `LOWER(m.sender_name) IN (${participantNames.map(() => `$${pi++}`).join(", ")})`,
   );
   params.push(...participantNames.map((n) => n.toLowerCase()));
-
-  if (roomScope.clause) {
-    whereParts.push(roomScope.clause);
-    params.push(...roomScope.params);
-  }
 
   if (preferredRoom) {
     whereParts.push(`LOWER(m.room_name) = $${pi++}`);
