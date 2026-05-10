@@ -278,7 +278,7 @@ def _compact_text(value: Any, max_chars: int) -> str:
     clipped = text[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:-")
     if not clipped:
         clipped = text[:max_chars].rstrip(" ,;:-")
-    return clipped + "..."
+    return clipped
 
 
 def make_pithy_report(report: dict[str, Any]) -> dict[str, Any]:

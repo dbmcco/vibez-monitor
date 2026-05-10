@@ -54,7 +54,7 @@ def _get_pool() -> Any:
     if _pool is not None:
         return _pool
     url = os.environ.get("VIBEZ_DATABASE_URL") or os.environ.get("VIBEZ_PGVECTOR_URL") or DEFAULT_DATABASE_URL
-    _pool = _ConnectionPool(url, min_size=1, max_size=8, open=True)
+    _pool = _ConnectionPool(url, min_size=1, max_size=16, open=True, timeout=30, max_lifetime=3600)
     _pool_url = url
     logger.info("Postgres pool created (min=1, max=8) for %s", url.split("@")[-1] if "@" in url else url)
     return _pool
@@ -67,11 +67,29 @@ class _PoolConnection:
     def __init__(self, raw: Any, pool: Any) -> None:
         self._raw = raw
         self._pool = pool
+        self._closed = False
+
+    def __del__(self) -> None:
+        if not self._closed and self._raw is not None:
+            try:
+                self._raw.execute("ROLLBACK")
+            except Exception:
+                pass
+            try:
+                self._pool.putconn(self._raw)
+            except Exception:
+                try:
+                    self._raw.close()
+                except Exception:
+                    pass
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._raw, name)
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         try:
             self._raw.execute("ROLLBACK")
         except Exception:
