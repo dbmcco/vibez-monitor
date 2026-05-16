@@ -98,6 +98,12 @@ interface AtlasSnapshot {
 }
 
 interface AtlasEditorialReport {
+  issue: {
+    date: string;
+    title: string;
+    subtitle: string;
+    edition_label: string;
+  };
   headline: string;
   dek: string;
   what_happened: string[];
@@ -110,6 +116,18 @@ interface AtlasEditorialReport {
     paragraphs: string[];
     evidence_refs: string[];
   };
+  articles: AtlasEditorialArticle[];
+  briefs: Array<{
+    title: string;
+    text: string;
+    evidence_refs: string[];
+  }>;
+  crosscurrents: Array<{
+    title: string;
+    text: string;
+    channels: string[];
+    evidence_refs: string[];
+  }>;
   themes: Array<{
     title: string;
     analysis: string;
@@ -121,6 +139,26 @@ interface AtlasEditorialReport {
     why_it_matters: string;
   }>;
   generated_at: string;
+}
+
+interface AtlasEditorialArticle {
+  role: "lead" | "secondary";
+  title: string;
+  slug: string;
+  dek: string;
+  summary: string;
+  body: string[];
+  actions: string[];
+  evidence_refs: string[];
+  link_refs: string[];
+  channels: string[];
+  image: {
+    kind: "generated" | "link" | "chat" | "none";
+    prompt?: string;
+    url?: string;
+    alt?: string;
+  };
+  related_article_slugs: string[];
 }
 
 type Lens = "themes" | "rooms" | "evidence" | "diagnostics";
@@ -222,7 +260,6 @@ export default function AtlasPage() {
         editorialError={editorialError}
         windowHours={windowHours}
         onWindowHoursChange={handleWindowHoursChange}
-        onOpenCitation={setSelectedCitationRef}
       />
 
       <section className="vibe-panel rounded-xl p-4">
@@ -317,38 +354,41 @@ function NarrativeReport({
   editorialError,
   windowHours,
   onWindowHoursChange,
-  onOpenCitation,
 }: {
   atlas: AtlasSnapshot;
   editorialReport: AtlasEditorialReport | null;
   editorialError: string | null;
   windowHours: number;
   onWindowHoursChange: (hours: number) => void;
-  onOpenCitation: (ref: string) => void;
 }) {
   const report = editorialReport;
+  const leadArticle = report?.articles.find((article) => article.role === "lead") || report?.articles[0] || null;
+  const sideArticles = report?.articles.filter((article) => article.slug !== leadArticle?.slug).slice(0, 4) || [];
   return (
-    <section className="vibe-panel rounded-xl p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="max-w-4xl">
-          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
-            {atlas.narrative.title}
-          </p>
-          <h2 className="vibe-title mt-2 text-3xl text-slate-100 sm:text-4xl">
-            {report?.headline || "Analysis is unavailable"}
-          </h2>
-          <p className="mt-3 text-base leading-7 text-slate-200">
-            {report?.dek ||
-              `The Atlas evidence loaded, but the editorial analysis did not. ${editorialError || "Try again after the report model is available."}`}
-          </p>
+    <section className="vibe-panel rounded-xl bg-[#f8f4ea] p-4 text-slate-950 sm:p-6">
+      <div className="border-b-4 border-double border-slate-900 pb-4 text-center">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+          <span>{report?.issue.edition_label || atlas.narrative.title}</span>
+          <span>|</span>
+          <span>{report?.issue.date || atlas.window.end.slice(0, 10)}</span>
         </div>
-        <div className="flex gap-2">
+        <h2 className="mt-2 font-serif text-4xl font-black tracking-normal text-slate-950 sm:text-6xl">
+          {report?.issue.title || "The Vibez Atlas"}
+        </h2>
+        <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-slate-700 sm:text-base">
+          {report?.issue.subtitle ||
+            report?.dek ||
+            `The Atlas evidence loaded, but the editorial analysis did not. ${editorialError || "Try again after the report model is available."}`}
+        </p>
+        <div className="mt-4 flex justify-center gap-2">
           {[48, 168].map((hours) => (
             <button
               key={hours}
               onClick={() => onWindowHoursChange(hours)}
-              className={`rounded-md px-3 py-1.5 text-sm ${
-                windowHours === hours ? "vibe-button" : "vibe-chip"
+              className={`rounded border px-3 py-1.5 text-sm ${
+                windowHours === hours
+                  ? "border-slate-900 bg-slate-900 text-[#f8f4ea]"
+                  : "border-slate-400 bg-transparent text-slate-800 hover:border-slate-900"
               }`}
             >
               {hours === 48 ? "48h" : "Week"}
@@ -357,67 +397,63 @@ function NarrativeReport({
         </div>
       </div>
 
-      {report ? (
+      {report && leadArticle ? (
         <>
-          <article className="mt-6 rounded-lg border border-slate-700/70 bg-slate-950/35 p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Main topic
-            </p>
-            <h3 className="vibe-title mt-2 text-2xl text-slate-100">
-              {report.main_topic.title}
-            </h3>
-            <div className="mt-4 space-y-3">
-              {report.main_topic.paragraphs.map((paragraph, index) => (
-                <p key={index} className="text-sm leading-relaxed text-slate-300">
-                  {paragraph}
-                </p>
+          <div className="mt-6 grid gap-5 lg:grid-cols-[0.9fr_1.35fr_0.9fr]">
+            <div className="space-y-5 lg:border-r lg:border-slate-300 lg:pr-5">
+              {sideArticles.slice(0, 2).map((article) => (
+                <NewspaperArticleCard
+                  key={article.slug}
+                  article={article}
+                  issueDate={report.issue.date}
+                  compact
+                />
               ))}
             </div>
-            <CitationList
-              atlas={atlas}
-              refs={report.main_topic.evidence_refs}
-              onOpenCitation={onOpenCitation}
+            <NewspaperArticleCard
+              article={leadArticle}
+              issueDate={report.issue.date}
+              lead
             />
-          </article>
-
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
-            <ReportSection title="What happened" items={report.what_happened} />
-            <ReportSection title="What it means" items={report.what_it_means} />
-            <ReportSection title="Why it matters" items={report.why_care} />
-            <ReportSection title="What is valuable here" items={report.valuable} />
-          </div>
-
-          <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_0.85fr]">
-            <ReportSection title="What to do next" items={report.actions} emphasis />
-            <ThemeBrief report={report} atlas={atlas} onOpenCitation={onOpenCitation} />
-          </div>
-
-          {report.evidence.length > 0 && (
-            <div className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Evidence that earns its place
-              </p>
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                {report.evidence.map((item) => (
-                  <button
-                    key={item.ref}
-                    onClick={() => onOpenCitation(item.ref)}
-                    className="rounded border border-slate-700/70 bg-slate-950/35 p-3 text-left hover:border-cyan-400/45"
-                  >
-                    <span className="block text-sm font-semibold text-slate-100">
-                      {item.label}
-                    </span>
-                    <span className="mt-2 block text-sm leading-relaxed text-slate-300">
-                      {item.why_it_matters}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <div className="space-y-5 lg:border-l lg:border-slate-300 lg:pl-5">
+              {sideArticles.slice(2, 4).map((article) => (
+                <NewspaperArticleCard
+                  key={article.slug}
+                  article={article}
+                  issueDate={report.issue.date}
+                  compact
+                />
+              ))}
+              {sideArticles.length < 3 && (
+                <div className="border border-slate-300 bg-white/35 p-4">
+                  <h3 className="font-serif text-xl font-bold text-slate-950">
+                    Evidence Desk
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">
+                    The matrix, citations, stats, and links sit below the fold.
+                  </p>
+                </div>
+              )}
             </div>
-          )}
+          </div>
+
+          <div className="mt-6 border-t-2 border-slate-900 pt-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <NewspaperList title="Briefs" items={report.briefs.map((brief) => brief.text)} />
+              <NewspaperList
+                title="Crosscurrents"
+                items={report.crosscurrents.map((item) => `${item.title}: ${item.text}`)}
+              />
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <NewspaperList title="What to do next" items={report.actions} />
+            <NewspaperList title="Why it matters" items={report.why_care} />
+          </div>
         </>
       ) : (
-        <div className="mt-5 rounded-lg border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-relaxed text-amber-100">
+        <div className="mt-5 rounded border border-amber-700/30 bg-amber-100 p-4 text-sm leading-relaxed text-amber-950">
           The data is here, but the editorial layer failed. Atlas is showing diagnostics below
           instead of filling the gap with fake narrative.
         </div>
@@ -426,74 +462,74 @@ function NarrativeReport({
   );
 }
 
-function ReportSection({
-  title,
-  items,
-  emphasis = false,
+function NewspaperArticleCard({
+  article,
+  issueDate,
+  lead = false,
+  compact = false,
 }: {
-  title: string;
-  items: string[];
-  emphasis?: boolean;
+  article: AtlasEditorialArticle;
+  issueDate: string;
+  lead?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <div className={`rounded-lg border p-4 ${
-      emphasis
-        ? "border-cyan-400/35 bg-cyan-400/10"
-        : "border-slate-700/70 bg-slate-900/35"
+    <article className={lead ? "" : "border-b border-slate-300 pb-4 last:border-b-0"}>
+      <ImageBlock article={article} lead={lead} />
+      <p className="mt-3 text-[11px] font-bold uppercase tracking-[0.16em] text-amber-800">
+        {lead ? "Lead Story" : "Article"}
+      </p>
+      <h3 className={`mt-1 font-serif font-black leading-none text-slate-950 ${
+        lead ? "text-4xl sm:text-5xl" : "text-2xl"
+      }`}>
+        {article.title}
+      </h3>
+      <p className={`mt-3 leading-7 text-slate-700 ${compact ? "text-sm" : "text-base"}`}>
+        {article.summary || article.dek}
+      </p>
+      <Link
+        href={`/atlas/issues/${issueDate}/${article.slug}`}
+        className="mt-3 inline-flex border border-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-900 hover:text-[#f8f4ea]"
+      >
+        Read full article
+      </Link>
+    </article>
+  );
+}
+
+function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: boolean }) {
+  if (article.image.url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={article.image.url}
+        alt={article.image.alt || article.title}
+        className={`w-full border border-slate-300 object-cover ${lead ? "h-64" : "h-32"}`}
+      />
+    );
+  }
+  return (
+    <div className={`flex w-full items-center justify-center border border-slate-300 bg-slate-200 text-center text-xs uppercase tracking-wide text-slate-500 ${
+      lead ? "h-64" : "h-32"
     }`}>
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</p>
-      <div className="mt-3 space-y-2">
-        {items.map((item, index) => (
-          <p key={index} className="text-sm leading-relaxed text-slate-300">
-            {item}
-          </p>
-        ))}
-      </div>
+      {article.image.kind === "generated" ? "Editorial image prompt ready" : "Article image"}
     </div>
   );
 }
 
-function ThemeBrief({
-  report,
-  atlas,
-  onOpenCitation,
-}: {
-  report: AtlasEditorialReport;
-  atlas: AtlasSnapshot;
-  onOpenCitation: (ref: string) => void;
-}) {
-  if (report.themes.length === 0) {
-    return (
-      <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Themes
-        </p>
-        <p className="mt-3 text-sm leading-relaxed text-slate-300">
-          The report did not name a durable theme. Use the evidence tabs below before making a call.
-        </p>
-      </aside>
-    );
-  }
-
+function NewspaperList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
   return (
-    <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Themes
-      </p>
-      <div className="mt-3 space-y-4">
-        {report.themes.map((theme) => (
-          <div key={theme.title}>
-            <h3 className="vibe-title text-lg text-slate-100">{theme.title}</h3>
-            <p className="mt-2 text-sm leading-relaxed text-slate-300">{theme.analysis}</p>
-            <CitationList
-              atlas={atlas}
-              refs={theme.evidence_refs}
-              onOpenCitation={onOpenCitation}
-            />
-          </div>
+    <section className="border border-slate-300 bg-white/35 p-4">
+      <h3 className="font-serif text-2xl font-bold text-slate-950">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {items.map((item, index) => (
+          <p key={index} className="text-sm leading-6 text-slate-700">
+            {item}
+          </p>
         ))}
       </div>
-    </aside>
+    </section>
   );
 }
 

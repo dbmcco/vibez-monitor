@@ -81,6 +81,7 @@ describe("atlas editorial report", () => {
 
     expect(promptText).toContain("daily newspaper issue");
     expect(promptText).toContain("Do not reduce the day to one theme");
+    expect(promptText).toContain("MUST include 3 to 6 articles");
     expect(promptText).toContain("What happened?");
     expect(promptText).toContain("What does this mean?");
     expect(promptText).toContain("Why should I care?");
@@ -154,6 +155,23 @@ describe("atlas editorial report", () => {
             link_refs: [],
             channels: ["Tools"],
           },
+          {
+            role: "secondary",
+            title: "Durable records become the archive",
+            dek: "The links and citations need a long-lived home.",
+            summary: "The third article explains why the record itself matters.",
+            body: [
+              "A third story completes the front page.",
+              "It follows the evidence system rather than the people.",
+              "The durable record changes how the group can learn.",
+              "The value is continuity.",
+              "The next move is to preserve the source trail.",
+            ],
+            actions: ["Save the source trail."],
+            evidence_refs: ["vibez:message:m1"],
+            link_refs: ["vibez:link:11"],
+            channels: ["Agents", "Tools"],
+          },
         ],
         briefs: [
           {
@@ -181,7 +199,7 @@ describe("atlas editorial report", () => {
       title: "The Vibez Atlas",
       edition_label: "Daily Edition",
     });
-    expect(report.articles).toHaveLength(2);
+    expect(report.articles).toHaveLength(3);
     expect(report.articles[0]).toMatchObject({
       role: "lead",
       slug: "evaluation-becomes-the-work",

@@ -185,6 +185,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
       content: [
         "Write the latest Atlas report from this evidence pack as a daily newspaper issue.",
         "Do not reduce the day to one theme unless the evidence truly supports that. Prefer one lead story plus several first-class side stories.",
+        "You MUST include 3 to 6 articles: exactly one lead article plus at least two secondary articles.",
         "Answer these questions plainly:",
         "1. What happened?",
         "2. What does this mean?",
@@ -231,6 +232,32 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                   prompt: "editorial image prompt grounded in the article",
                 },
                 related_article_slugs: ["related article title or slug"],
+              },
+              {
+                role: "secondary",
+                title: "left-side article title",
+                dek: "one sentence article deck",
+                summary: "two sentence article card summary",
+                body: ["five or more paragraphs for the full article page"],
+                actions: ["concrete next action"],
+                evidence_refs: ["vibez:message:..."],
+                link_refs: ["vibez:link:..."],
+                channels: ["channel name"],
+                image: { kind: "generated", prompt: "editorial image prompt" },
+                related_article_slugs: [],
+              },
+              {
+                role: "secondary",
+                title: "right-side article title",
+                dek: "one sentence article deck",
+                summary: "two sentence article card summary",
+                body: ["five or more paragraphs for the full article page"],
+                actions: ["concrete next action"],
+                evidence_refs: ["vibez:message:..."],
+                link_refs: ["vibez:link:..."],
+                channels: ["channel name"],
+                image: { kind: "generated", prompt: "editorial image prompt" },
+                related_article_slugs: [],
               },
             ],
             briefs: [
@@ -381,6 +408,10 @@ function readArticles(
     .map((item, index) => readArticle(item, index, allowedRefs))
     .filter((item): item is AtlasEditorialArticle => Boolean(item))
     .slice(0, 6);
+
+  if (rawItems.length > 0 && articles.length < 3) {
+    throw new Error("atlas editorial report requires at least three newspaper articles");
+  }
 
   if (articles.length === 0) {
     articles.push({

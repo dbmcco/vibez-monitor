@@ -51,12 +51,18 @@ export async function generateAtlasDeeperDive(
       query,
       lookbackDays: Math.ceil(hours / 24),
       limit: 20,
+    }).catch((error) => {
+      console.warn("atlas deeper-dive message retrieval failed:", error);
+      return [];
     }),
     deps.searchLinks({
       query,
       days: 7,
       limit: 12,
       sort: "value",
+    }).catch((error) => {
+      console.warn("atlas deeper-dive link retrieval failed:", error);
+      return [];
     }),
   ]);
   const retrievalMode = deps.isSemanticEnabled() ? "semantic" : "keyword_fallback";
