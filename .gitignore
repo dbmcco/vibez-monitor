@@ -20,3 +20,4 @@ hot_alerts.json
 *.pid
 .DS_Store
 vibez.db*
+.workgraph

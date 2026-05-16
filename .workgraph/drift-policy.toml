@@ -1,6 +1,6 @@
 schema = 1
 mode = "redirect"
-order = ["coredrift", "specdrift", "datadrift", "archdrift", "depsdrift", "uxdrift", "therapydrift", "yagnidrift", "redrift"]
+order = ["coredrift", "specdrift", "datadrift", "archdrift", "depsdrift", "uxdrift", "therapydrift", "fixdrift", "yagnidrift", "redrift"]
 
 [recursion]
 cooldown_seconds = 1800
@@ -8,8 +8,191 @@ max_auto_actions_per_hour = 2
 require_new_evidence = true
 max_auto_depth = 2
 
+[contracts]
+auto_ensure = true
+
+[updates]
+enabled = true
+check_interval_seconds = 21600
+create_followup = false
+
+[loop_safety]
+max_redrift_depth = 2
+max_ready_drift_followups = 20
+block_followup_creation = true
+
+[enforcement]
+enabled = false
+block_on_critical = true
+warn_on_error = true
+max_unresolved_warnings = 10
+
+[reporting]
+central_repo = ""
+auto_report = true
+include_knowledge = true
+
+[factory]
+enabled = false
+cycle_seconds = 90
+plan_only = true
+max_repos_per_cycle = 5
+max_actions_per_cycle = 12
+emit_followups = false
+max_followups_per_repo = 2
+write_decision_ledger = true
+hard_stop_on_failed_verification = true
+
+[model]
+planner_profile = "default"
+worker_profile = "default"
+temperature = 0.2
+adversarial_prompts = true
+max_tool_rounds = 6
+
+[sourcedrift]
+enabled = true
+interval_seconds = 21600
+max_deltas_per_cycle = 20
+auto_create_followups = true
+allow_auto_integrate = false
+
+[syncdrift]
+enabled = true
+allow_rebase = true
+allow_merge = true
+allow_destructive_sync = false
+require_clean_before_pr = true
+
+[stalledrift]
+enabled = true
+open_without_progress_minutes = 120
+max_auto_unblock_actions = 3
+auto_split_large_tasks = true
+
+[servicedrift]
+enabled = true
+restart_budget_per_cycle = 4
+restart_cooldown_seconds = 180
+escalate_after_consecutive_failures = 3
+
+[federatedrift]
+enabled = true
+open_draft_prs = true
+auto_update_existing_drafts = true
+allow_auto_merge = false
+required_checks = ["drifts", "tests", "lint"]
+
+[secdrift]
+enabled = true
+interval_seconds = 14400
+max_findings_per_repo = 40
+scan_max_files = 320
+scan_max_file_bytes = 262144
+run_pentest = false
+allow_network_scans = false
+target_urls = []
+emit_review_tasks = true
+max_review_tasks_per_repo = 3
+hard_stop_on_critical = false
+
+[qadrift]
+enabled = true
+interval_seconds = 21600
+max_findings_per_repo = 40
+emit_review_tasks = true
+max_review_tasks_per_repo = 3
+include_playwright = true
+include_test_health = true
+include_workgraph_health = true
+
+[sessiondriver]
+enabled = true
+require_session_driver = true
+allow_cli_fallback = false
+max_dispatch_per_repo = 2
+worker_timeout_seconds = 1800
+drift_failure_threshold = 3
+
+[speedriftd]
+enabled = true
+default_mode = "observe"
+default_lease_ttl_seconds = 0
+interval_seconds = 30
+max_concurrent_workers = 2
+respect_manual_claims = true
+manual_owner_policy = "hold"
+heartbeat_stale_after_seconds = 300
+output_stale_after_seconds = 600
+worker_timeout_seconds = 1800
+retry_cooldown_seconds = 180
+max_retries_per_task = 2
+
+[plandrift]
+enabled = true
+interval_seconds = 14400
+max_findings_per_repo = 40
+emit_review_tasks = true
+max_review_tasks_per_repo = 3
+require_integration_tests = true
+require_e2e_tests = true
+require_failure_loopbacks = true
+require_continuation_edges = true
+continuation_runtime = "double-shot-latte"
+orchestration_runtime = "claude-session-driver"
+review_loop_mode = "trycycle-inspired"
+fresh_reviewer_required = true
+review_rounds = 2
+allow_tmux_fallback = true
+hard_stop_on_critical = false
+
+[northstardrift]
+enabled = true
+emit_review_tasks = true
+emit_operator_prompts = true
+daily_rollup = true
+weekly_trends = true
+score_window = "1d"
+comparison_window = "7d"
+dirty_repo_blocks_auto_mutation = true
+max_auto_interventions_per_cycle = 3
+max_review_tasks_per_repo = 2
+require_metric_evidence = true
+history_points = 18
+weekly_rollup_weeks = 8
+latent_repo_floor_score = 68.0
+target_gap_watch = 5.0
+target_gap_critical = 12.0
+dirty_repo_review_task_mode = "workgraph-only"
+
+[northstardrift.targets]
+overall = 82.0
+continuity = 85.0
+autonomy = 82.0
+quality = 80.0
+coordination = 78.0
+self_improvement = 76.0
+
+[northstardrift.alignment]
+statement = ""
+keywords = []
+anti_patterns = []
+last_reviewed = ""
+review_interval_days = 30
+alignment_model = "haiku"
+alignment_threshold_proceed = 0.7
+alignment_threshold_pause = 0.4
+decision_category = "alignment"
+
+[autonomy.default]
+level = "observe"
+can_push = false
+can_open_pr = false
+can_merge = false
+max_actions_per_cycle = 1
+
 [attractor]
-target = "production-ready"
+target = "onboarded"
 
 [attractor.breakers]
 max_passes = 3
