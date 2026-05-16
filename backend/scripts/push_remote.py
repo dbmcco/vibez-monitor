@@ -15,13 +15,13 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
-from vibez.db import get_connection
+from vibez.db import close_db_connection, get_connection
 
 DEFAULT_ANALYSIS_SYNC_STATE_KEYS = (
     "beeper_active_group_ids",
@@ -245,9 +245,26 @@ def _fetch_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]
     cur = conn.cursor()
     cur.execute(query, params)
     columns = [desc.name for desc in cur.description]
-    rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+    rows = [dict_from_row(columns, row) for row in cur.fetchall()]
     conn.close()
     return rows
+
+
+def to_jsonable(value: Any) -> Any:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: to_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def dict_from_row(columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        key: to_jsonable(value)
+        for key, value in zip(columns, row, strict=True)
+    }
 
 
 def _validate_ident(raw: str, label: str) -> str:
@@ -306,7 +323,7 @@ def fetch_message_embeddings(
         with conn.cursor() as cur:
             cur.execute(sql, params)
             columns = [desc.name for desc in cur.description]
-            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+            return [dict_from_row(columns, row) for row in cur.fetchall()]
 
 
 def fetch_link_embeddings(
@@ -348,7 +365,7 @@ def fetch_link_embeddings(
         with conn.cursor() as cur:
             cur.execute(sql, params)
             columns = [desc.name for desc in cur.description]
-            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+            return [dict_from_row(columns, row) for row in cur.fetchall()]
 
 
 def fetch_links() -> list[dict[str, Any]]:
@@ -607,6 +624,7 @@ def main() -> int:
 
     if args.dry_run:
         print("Dry run only; no remote writes.")
+        close_db_connection()
         return 0
 
     access_cookie = login_access_cookie(remote_url, access_code)
@@ -638,6 +656,7 @@ def main() -> int:
         f"Push complete: {len(records)} records over {batches} message batches "
         f"(remote messages_written={messages_written})."
     )
+    close_db_connection()
     return 0
 
 
