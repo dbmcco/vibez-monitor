@@ -1,4 +1,6 @@
 import { Pool } from "pg";
+import Database from "better-sqlite3";
+import path from "path";
 import {
   buildAtlasSnapshotFromRows,
   type AtlasSnapshot,
@@ -20,9 +22,14 @@ const pool = new Pool({
   connectionString:
     process.env.VIBEZ_DATABASE_URL ||
     process.env.DATABASE_URL ||
-    process.env.VIBEZ_PGVECTOR_URL ||
     "postgresql://braydon@localhost:5432/vibez_monitor",
 });
+
+const SQLITE_DB_PATH = process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
+
+function shouldUseSqliteAtlas(): boolean {
+  return Boolean(process.env.VIBEZ_DB_PATH && !process.env.VIBEZ_DATABASE_URL && !process.env.DATABASE_URL);
+}
 
 const DEFAULT_EXCLUDED_GROUPS = [
   "BBC News",
@@ -188,6 +195,104 @@ function buildRoomScopeWhere(
     };
   }
   return { clause: "", params: [], nextIndex: idx };
+}
+
+function readSqliteSyncState(db: Database.Database, key: string): string | undefined {
+  const row = db.prepare("SELECT value FROM sync_state WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+}
+
+function loadSqliteRoomScope(db: Database.Database): RoomScope {
+  const beeperActiveGroupIds = parseJsonStringArray(
+    readSqliteSyncState(db, "beeper_active_group_ids"),
+  );
+  const beeperActiveGroupNames = parseJsonStringArray(
+    readSqliteSyncState(db, "beeper_active_group_names"),
+  );
+  const googleGroupKeys = parseJsonStringArray(
+    readSqliteSyncState(db, "google_groups_active_group_keys"),
+  );
+  const googleGroupIds = googleGroupKeys.map((key) => `googlegroup:${key}`);
+  const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));
+  const activeGroupNames = Array.from(new Set([...beeperActiveGroupNames, ...googleGroupKeys]));
+  const excludedGroups = normalizeExclusionList(loadExcludedGroups());
+  const allowedGroups = loadAllowedGroups();
+
+  if (allowedGroups.length > 0) {
+    const allowedGroupSet = new Set(allowedGroups.map((name) => name.toLowerCase()));
+    const allowedBeeperGroupIds =
+      beeperActiveGroupIds.length === beeperActiveGroupNames.length
+        ? beeperActiveGroupIds.filter((_, index) =>
+            allowedGroupSet.has((beeperActiveGroupNames[index] || "").toLowerCase()),
+          )
+        : [];
+    const allowedGoogleGroupIds = googleGroupKeys
+      .filter((groupKey) => allowedGroupSet.has(groupKey.toLowerCase()))
+      .map((groupKey) => `googlegroup:${groupKey}`);
+    return {
+      mode: "active_groups",
+      activeGroupIds: Array.from(new Set([...allowedBeeperGroupIds, ...allowedGoogleGroupIds])),
+      activeGroupNames: Array.from(new Set(allowedGroups)),
+      excludedGroups,
+    };
+  }
+
+  if (activeGroupIds.length > 0 || activeGroupNames.length > 0) {
+    return { mode: "active_groups", activeGroupIds, activeGroupNames, excludedGroups };
+  }
+  if (excludedGroups.length > 0) {
+    return { mode: "excluded_groups", activeGroupIds: [], activeGroupNames: [], excludedGroups };
+  }
+  return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
+}
+
+function buildSqliteRoomScopeWhere(alias: string, scope: RoomScope): {
+  clause: string;
+  params: unknown[];
+} {
+  if (scope.activeGroupIds.length > 0 || scope.activeGroupNames.length > 0) {
+    const parts: string[] = [];
+    const params: unknown[] = [];
+    if (scope.activeGroupIds.length > 0) {
+      parts.push(`${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`);
+      params.push(...scope.activeGroupIds);
+    }
+    if (scope.activeGroupNames.length > 0) {
+      parts.push(
+        `LOWER(${alias}.room_name) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`,
+      );
+      params.push(...scope.activeGroupNames.map((name) => name.toLowerCase()));
+    }
+    return { clause: `(${parts.join(" OR ")})`, params };
+  }
+  if (scope.excludedGroups.length > 0) {
+    return {
+      clause: `LOWER(${alias}.room_name) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      params: scope.excludedGroups,
+    };
+  }
+  return { clause: "", params: [] };
+}
+
+function buildSqliteLinkScopeWhere(scope: RoomScope): {
+  clause: string;
+  params: unknown[];
+} {
+  if (scope.activeGroupNames.length > 0) {
+    return {
+      clause: `LOWER(source_group) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`,
+      params: scope.activeGroupNames.map((name) => name.toLowerCase()),
+    };
+  }
+  if (scope.excludedGroups.length > 0) {
+    return {
+      clause: `LOWER(source_group) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      params: scope.excludedGroups,
+    };
+  }
+  return { clause: "", params: [] };
 }
 
 function loadUserAliases(): UserAliasMap {
@@ -1315,8 +1420,72 @@ export async function getRecentUpdateSnapshot(): Promise<RecentUpdateSnapshot> {
   };
 }
 
+function getAtlasSnapshotFromSqlite(windowHours: number): AtlasSnapshot {
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  const userAliases = loadUserAliases();
+
+  try {
+    const scope = loadSqliteRoomScope(db);
+    const roomScope = buildSqliteRoomScopeWhere("m", scope);
+    const whereParts = ["m.timestamp >= ?"];
+    const params: unknown[] = [windowStart.getTime()];
+    if (roomScope.clause) {
+      whereParts.push(roomScope.clause);
+      params.push(...roomScope.params);
+    }
+
+    const messageRows = db
+      .prepare(
+        `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+                c.relevance_score, c.topics, c.alert_level
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         WHERE ${whereParts.join(" AND ")}
+         ORDER BY m.timestamp DESC
+         LIMIT 3000`,
+      )
+      .all(...params) as AtlasMessageRow[];
+
+    const linkScope = buildSqliteLinkScopeWhere(scope);
+    const linkWhereParts = ["last_seen >= ?"];
+    const linkParams: unknown[] = [windowStart.toISOString()];
+    if (linkScope.clause) {
+      linkWhereParts.push(linkScope.clause);
+      linkParams.push(...linkScope.params);
+    }
+    const linkRows = db
+      .prepare(
+        `SELECT id, url, title, category, relevance, shared_by,
+                source_group, last_seen, value_score
+         FROM links
+         WHERE ${linkWhereParts.join(" AND ")}
+         ORDER BY value_score DESC, last_seen DESC
+         LIMIT 80`,
+      )
+      .all(...linkParams) as AtlasLinkRow[];
+
+    return buildAtlasSnapshotFromRows({
+      generatedAt: now.toISOString(),
+      windowStart: windowStart.toISOString(),
+      windowEnd: now.toISOString(),
+      messages: messageRows.map((row) => ({
+        ...row,
+        sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+      })),
+      links: linkRows,
+    });
+  } finally {
+    db.close();
+  }
+}
+
 export async function getAtlasSnapshot(opts: { windowHours?: number } = {}): Promise<AtlasSnapshot> {
   const windowHours = Math.min(Math.max(opts.windowHours || 48, 6), 168);
+  if (shouldUseSqliteAtlas()) {
+    return getAtlasSnapshotFromSqlite(windowHours);
+  }
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
   const scope = await loadRoomScope(pool);
