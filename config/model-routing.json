@@ -91,6 +91,15 @@
       "temperature": 0.25,
       "timeout_ms": 120000
     },
+    "dashboard.atlas_deeper_dive": {
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1",
+      "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
+      "max_tokens": 4096,
+      "temperature": 0.2,
+      "timeout_ms": 120000
+    },
     "dashboard.topic_analysis": {
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",

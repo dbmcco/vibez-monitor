@@ -79,6 +79,8 @@ describe("atlas editorial report", () => {
     const messages = buildAtlasReportMessages(sampleAtlas());
     const promptText = messages.map((message) => message.content).join("\n");
 
+    expect(promptText).toContain("daily newspaper issue");
+    expect(promptText).toContain("Do not reduce the day to one theme");
     expect(promptText).toContain("What happened?");
     expect(promptText).toContain("What does this mean?");
     expect(promptText).toContain("Why should I care?");
@@ -86,6 +88,111 @@ describe("atlas editorial report", () => {
     expect(promptText).toContain("What do I need to action here?");
     expect(promptText).toContain("vibez:message:m1");
     expect(promptText).toContain("Strunk and White");
+  });
+
+  test("normalizes a newspaper issue with multiple durable article slugs", () => {
+    const report = normalizeAtlasEditorialReport(
+      {
+        issue: {
+          date: "2026-05-16",
+          title: "The Vibez Atlas",
+          subtitle: "A busy day splits into several stories.",
+          edition_label: "Daily Edition",
+        },
+        headline: "The agent work found its bottleneck",
+        dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+        what_happened: ["People circled the evaluation loop and the records behind it."],
+        what_it_means: ["The project is moving from demo energy to operating discipline."],
+        why_care: ["This is where agent work starts to become repeatable."],
+        valuable: ["The useful artifact is the citation trail, not the chatter."],
+        actions: ["Turn the evaluation question into an owner and a next check."],
+        main_topic: {
+          title: "Evaluation as leverage",
+          paragraphs: [
+            "The first paragraph names the theme.",
+            "The second paragraph explains what happened.",
+            "The third paragraph explains what it means.",
+            "The fourth paragraph explains why it matters.",
+            "The fifth paragraph names the next useful move.",
+          ],
+          evidence_refs: ["vibez:message:m1"],
+        },
+        articles: [
+          {
+            role: "lead",
+            title: "Evaluation becomes the work",
+            dek: "The room is moving from demos to proof.",
+            summary: "The main article explains why evaluation is now the bottleneck.",
+            body: [
+              "Evaluation moved from background concern to front-page story.",
+              "The cited messages show a group asking for proof, not applause.",
+              "That matters because repeatable agent work needs durable records.",
+              "The useful thing here is the citation trail.",
+              "The next move is to assign an owner and check the loop.",
+            ],
+            actions: ["Assign an owner for the evaluation loop."],
+            evidence_refs: ["vibez:message:m1", "vibez:message:nope"],
+            link_refs: ["vibez:link:11"],
+            channels: ["Agents"],
+            image: { kind: "generated", prompt: "newspaper illustration of agent evaluation" },
+            related_article_slugs: ["Tooling gaps are product gaps"],
+          },
+          {
+            role: "secondary",
+            title: "Tooling gaps are product gaps",
+            dek: "Questions about records point to a product brief.",
+            summary: "The side article explains the tooling pain.",
+            body: [
+              "The side story deserves its own space.",
+              "It is related to the lead but not the same story.",
+              "The evidence points to records and follow-up.",
+              "The value is a product-shaped question.",
+              "The next move is to test the workflow.",
+            ],
+            actions: ["Review the tool catalog."],
+            evidence_refs: ["vibez:message:m2"],
+            link_refs: [],
+            channels: ["Tools"],
+          },
+        ],
+        briefs: [
+          {
+            title: "A useful reference surfaced",
+            text: "The eval notes link is worth saving.",
+            evidence_refs: ["vibez:link:11"],
+          },
+        ],
+        crosscurrents: [
+          {
+            title: "Agents and Tools are converging",
+            text: "The rooms are asking different versions of the same records question.",
+            channels: ["Agents", "Tools"],
+            evidence_refs: ["vibez:message:m1", "vibez:message:m2"],
+          },
+        ],
+        themes: [],
+        evidence: [],
+      },
+      sampleAtlas(),
+    );
+
+    expect(report.issue).toMatchObject({
+      date: "2026-05-16",
+      title: "The Vibez Atlas",
+      edition_label: "Daily Edition",
+    });
+    expect(report.articles).toHaveLength(2);
+    expect(report.articles[0]).toMatchObject({
+      role: "lead",
+      slug: "evaluation-becomes-the-work",
+      evidence_refs: ["vibez:message:m1"],
+      link_refs: ["vibez:link:11"],
+    });
+    expect(report.articles[0].related_article_slugs).toEqual([
+      "tooling-gaps-are-product-gaps",
+    ]);
+    expect(report.briefs[0].evidence_refs).toEqual(["vibez:link:11"]);
+    expect(report.crosscurrents[0].channels).toEqual(["Agents", "Tools"]);
   });
 
   test("normalizes model output and drops unsupported citation refs", () => {

@@ -24,7 +24,50 @@ export interface AtlasEditorialMainTopic {
   evidence_refs: string[];
 }
 
+export interface AtlasEditorialIssue {
+  date: string;
+  title: string;
+  subtitle: string;
+  edition_label: string;
+}
+
+export interface AtlasEditorialImage {
+  kind: "generated" | "link" | "chat" | "none";
+  prompt?: string;
+  url?: string;
+  alt?: string;
+}
+
+export interface AtlasEditorialArticle {
+  role: "lead" | "secondary";
+  title: string;
+  slug: string;
+  dek: string;
+  summary: string;
+  body: string[];
+  actions: string[];
+  evidence_refs: string[];
+  link_refs: string[];
+  channels: string[];
+  image: AtlasEditorialImage;
+  related_article_slugs: string[];
+}
+
+export interface AtlasEditorialBrief {
+  title: string;
+  text: string;
+  evidence_refs: string[];
+}
+
+export interface AtlasEditorialCrosscurrent {
+  title: string;
+  text: string;
+  channels: string[];
+  evidence_refs: string[];
+}
+
 export interface AtlasEditorialReport {
+  issue: AtlasEditorialIssue;
   headline: string;
   dek: string;
   what_happened: string[];
@@ -33,6 +76,9 @@ export interface AtlasEditorialReport {
   valuable: string[];
   actions: string[];
   main_topic: AtlasEditorialMainTopic;
+  articles: AtlasEditorialArticle[];
+  briefs: AtlasEditorialBrief[];
+  crosscurrents: AtlasEditorialCrosscurrent[];
   themes: AtlasEditorialTheme[];
   evidence: AtlasEditorialEvidence[];
   generated_at: string;
@@ -131,12 +177,14 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "Use some wit when it clarifies the point, but do not be glib.",
         "Do not invent facts. Tie every major claim to the supplied citation refs.",
         "The reader wants analysis, not a pile of links.",
+        "You are creating a daily newspaper issue, not a single-theme dashboard summary.",
       ].join("\n"),
     },
     {
       role: "user",
       content: [
-        "Write the latest Atlas report from this evidence pack.",
+        "Write the latest Atlas report from this evidence pack as a daily newspaper issue.",
+        "Do not reduce the day to one theme unless the evidence truly supports that. Prefer one lead story plus several first-class side stories.",
         "Answer these questions plainly:",
         "1. What happened?",
         "2. What does this mean?",
@@ -147,6 +195,12 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "Return strict JSON with this shape:",
         JSON.stringify(
           {
+            issue: {
+              date: "YYYY-MM-DD",
+              title: "The Vibez Atlas",
+              subtitle: "one sentence issue summary",
+              edition_label: "Daily Edition",
+            },
             headline: "short human headline",
             dek: "one sentence that says what matters",
             what_happened: ["2-4 concise paragraphs or bullets"],
@@ -161,6 +215,39 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
               ],
               evidence_refs: ["vibez:message:..."],
             },
+            articles: [
+              {
+                role: "lead",
+                title: "front-page article title",
+                dek: "one sentence article deck",
+                summary: "two sentence article card summary",
+                body: ["five or more paragraphs for the full article page"],
+                actions: ["concrete next action"],
+                evidence_refs: ["vibez:message:..."],
+                link_refs: ["vibez:link:..."],
+                channels: ["channel name"],
+                image: {
+                  kind: "generated",
+                  prompt: "editorial image prompt grounded in the article",
+                },
+                related_article_slugs: ["related article title or slug"],
+              },
+            ],
+            briefs: [
+              {
+                title: "minor but interesting item",
+                text: "short human note",
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
+            crosscurrents: [
+              {
+                title: "how rooms relate",
+                text: "where channels converge, diverge, or talk past each other",
+                channels: ["channel name"],
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
             themes: [
               {
                 title: "theme name",
@@ -214,6 +301,7 @@ export function normalizeAtlasEditorialReport(
 
   const allowedRefs = new Set(Object.keys(atlas.citations));
   const report: AtlasEditorialReport = {
+    issue: readIssue(payload.issue, atlas),
     headline,
     dek,
     what_happened: [],
@@ -222,6 +310,9 @@ export function normalizeAtlasEditorialReport(
     valuable: [],
     actions: [],
     main_topic: readMainTopic(payload.main_topic, allowedRefs),
+    articles: [],
+    briefs: readBriefs(payload.briefs, allowedRefs),
+    crosscurrents: readCrosscurrents(payload.crosscurrents, allowedRefs),
     themes: readThemes(payload.themes, allowedRefs),
     evidence: readEvidence(payload.evidence, allowedRefs),
     generated_at: new Date().toISOString(),
@@ -233,6 +324,7 @@ export function normalizeAtlasEditorialReport(
       throw new Error(`atlas editorial report is missing ${field}`);
     }
   }
+  report.articles = readArticles(payload.articles, allowedRefs, report);
 
   return report;
 }
@@ -247,6 +339,16 @@ function readTextList(value: unknown): string[] {
     .map((item) => readText(item))
     .filter(Boolean)
     .slice(0, 6);
+}
+
+function readIssue(value: unknown, atlas: AtlasSnapshot): AtlasEditorialIssue {
+  const payload = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    date: readText(payload.date) || atlas.window.end.slice(0, 10),
+    title: readText(payload.title) || "The Vibez Atlas",
+    subtitle: readText(payload.subtitle) || readText(payload.dek) || "The latest field report.",
+    edition_label: readText(payload.edition_label) || (atlas.window.hours >= 120 ? "Weekly Edition" : "Daily Edition"),
+  };
 }
 
 function readThemes(value: unknown, allowedRefs: Set<string>): AtlasEditorialTheme[] {
@@ -268,6 +370,109 @@ function readThemes(value: unknown, allowedRefs: Set<string>): AtlasEditorialThe
     .slice(0, 6);
 }
 
+function readArticles(
+  value: unknown,
+  allowedRefs: Set<string>,
+  report: Pick<AtlasEditorialReport, "headline" | "dek" | "main_topic" | "actions">,
+): AtlasEditorialArticle[] {
+  const rawItems = Array.isArray(value) ? value : [];
+  const slugsByTitle = new Map<string, string>();
+  const articles = rawItems
+    .map((item, index) => readArticle(item, index, allowedRefs))
+    .filter((item): item is AtlasEditorialArticle => Boolean(item))
+    .slice(0, 6);
+
+  if (articles.length === 0) {
+    articles.push({
+      role: "lead",
+      title: report.main_topic.title || report.headline,
+      slug: slugify(report.main_topic.title || report.headline),
+      dek: report.dek,
+      summary: report.main_topic.paragraphs[0] || report.dek,
+      body: report.main_topic.paragraphs,
+      actions: report.actions,
+      evidence_refs: report.main_topic.evidence_refs,
+      link_refs: [],
+      channels: [],
+      image: { kind: "generated", prompt: `Editorial illustration for ${report.headline}` },
+      related_article_slugs: [],
+    });
+  }
+
+  for (const article of articles) {
+    const base = article.slug || slugify(article.title);
+    const seen = slugsByTitle.get(base);
+    if (!seen) {
+      slugsByTitle.set(base, base);
+      article.slug = base;
+    } else {
+      const nextSlug = `${base}-${slugsByTitle.size + 1}`;
+      slugsByTitle.set(nextSlug, nextSlug);
+      article.slug = nextSlug;
+    }
+  }
+
+  const titleToSlug = new Map(articles.map((article) => [article.title.toLowerCase(), article.slug]));
+  const slugSet = new Set(articles.map((article) => article.slug));
+  for (const article of articles) {
+    article.related_article_slugs = article.related_article_slugs
+      .map((value) => titleToSlug.get(value.toLowerCase()) || slugify(value))
+      .filter((slug) => slugSet.has(slug) && slug !== article.slug)
+      .slice(0, 4);
+  }
+
+  if (!articles.some((article) => article.role === "lead")) {
+    articles[0].role = "lead";
+  }
+
+  return articles;
+}
+
+function readArticle(
+  value: unknown,
+  index: number,
+  allowedRefs: Set<string>,
+): AtlasEditorialArticle | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Record<string, unknown>;
+  const title = readText(payload.title);
+  const dek = readText(payload.dek);
+  const body = readTextList(payload.body).slice(0, 8);
+  if (!title || !dek || body.length < 3) return null;
+  const role = readText(payload.role) === "lead" && index === 0 ? "lead" : "secondary";
+  const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
+  return {
+    role,
+    title,
+    slug: slugify(readText(payload.slug) || title),
+    dek,
+    summary: readText(payload.summary) || body[0] || dek,
+    body,
+    actions: readTextList(payload.actions),
+    evidence_refs: evidenceRefs,
+    link_refs: readTextList(payload.link_refs).filter((ref) => allowedRefs.has(ref)),
+    channels: readTextList(payload.channels),
+    image: readImage(payload.image, title),
+    related_article_slugs: readTextList(payload.related_article_slugs),
+  };
+}
+
+function readImage(value: unknown, title: string): AtlasEditorialImage {
+  if (!value || typeof value !== "object") {
+    return { kind: "generated", prompt: `Editorial newspaper image for ${title}` };
+  }
+  const payload = value as Record<string, unknown>;
+  const rawKind = readText(payload.kind);
+  const kind: AtlasEditorialImage["kind"] =
+    rawKind === "link" || rawKind === "chat" || rawKind === "none" ? rawKind : "generated";
+  return {
+    kind,
+    prompt: readText(payload.prompt) || undefined,
+    url: readText(payload.url) || undefined,
+    alt: readText(payload.alt) || undefined,
+  };
+}
+
 function readMainTopic(value: unknown, allowedRefs: Set<string>): AtlasEditorialMainTopic {
   if (!value || typeof value !== "object") {
     throw new Error("atlas editorial report is missing main_topic");
@@ -283,6 +488,45 @@ function readMainTopic(value: unknown, allowedRefs: Set<string>): AtlasEditorial
     paragraphs,
     evidence_refs: readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref)),
   };
+}
+
+function readBriefs(value: unknown, allowedRefs: Set<string>): AtlasEditorialBrief[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const payload = item as Record<string, unknown>;
+      const title = readText(payload.title);
+      const text = readText(payload.text);
+      if (!title || !text) return null;
+      return {
+        title,
+        text,
+        evidence_refs: readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref)),
+      };
+    })
+    .filter((item): item is AtlasEditorialBrief => Boolean(item))
+    .slice(0, 6);
+}
+
+function readCrosscurrents(value: unknown, allowedRefs: Set<string>): AtlasEditorialCrosscurrent[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const payload = item as Record<string, unknown>;
+      const title = readText(payload.title);
+      const text = readText(payload.text);
+      if (!title || !text) return null;
+      return {
+        title,
+        text,
+        channels: readTextList(payload.channels),
+        evidence_refs: readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref)),
+      };
+    })
+    .filter((item): item is AtlasEditorialCrosscurrent => Boolean(item))
+    .slice(0, 5);
 }
 
 function readEvidence(value: unknown, allowedRefs: Set<string>): AtlasEditorialEvidence[] {
@@ -302,4 +546,14 @@ function readEvidence(value: unknown, allowedRefs: Set<string>): AtlasEditorialE
     })
     .filter((item): item is AtlasEditorialEvidence => Boolean(item))
     .slice(0, 10);
+}
+
+export function slugify(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || "article";
 }
