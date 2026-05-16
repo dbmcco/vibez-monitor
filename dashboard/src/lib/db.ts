@@ -18,6 +18,8 @@ import {
 
 const pool = new Pool({
   connectionString:
+    process.env.VIBEZ_DATABASE_URL ||
+    process.env.VIBEZ_PGVECTOR_URL ||
     process.env.DATABASE_URL ||
     "postgresql://braydon@localhost:5432/vibez_monitor",
 });
