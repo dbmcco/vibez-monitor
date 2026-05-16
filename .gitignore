@@ -13,6 +13,7 @@ dist/
 .amplifier/
 .claude/
 .opencode/
+.superpowers/
 test-results/
 hot_alerts.json
 ~/
