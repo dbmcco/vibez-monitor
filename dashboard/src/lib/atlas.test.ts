@@ -66,11 +66,20 @@ describe("buildAtlasSnapshotFromRows", () => {
       sender: "Dana",
     });
     expect(atlas.narrative.title).toBe("Latest 48h Report");
+    expect(atlas.narrative.report.headline).toBe("Agents drove the conversation");
+    expect(atlas.narrative.report.lead).toContain("Agents was the busiest room");
+    expect(atlas.narrative.report.what_matters.length).toBeGreaterThanOrEqual(2);
+    expect(atlas.narrative.report.what_to_watch.length).toBeGreaterThanOrEqual(2);
+    expect(atlas.narrative.report.evidence_refs).toEqual([
+      "vibez:message:m1",
+      "vibez:message:m2",
+    ]);
     expect(atlas.narrative.paragraphs.length).toBeGreaterThanOrEqual(4);
     expect(atlas.narrative.paragraphs.join(" ")).toContain("Agents");
+    expect(atlas.narrative.paragraphs.join(" ")).not.toMatch(/\b(signal|matrix|window|cluster|telemetry)\b/i);
     expect(atlas.narrative.main_topic).toMatchObject({
       topic: "agents",
-      title: "Main topic: agents",
+      title: "Main theme: agents",
     });
     expect(atlas.narrative.main_topic.paragraphs).toHaveLength(5);
     expect(atlas.narrative.main_topic.citation_refs).toEqual([
@@ -132,7 +141,7 @@ describe("buildAtlasSnapshotFromRows", () => {
         kind: "under_covered",
       }),
     );
-    expect(atlas.narrative.paragraphs.join(" ")).toContain("topic coverage");
+    expect(atlas.narrative.paragraphs.join(" ")).toContain("more classified messages");
   });
 
   test("labels seven-day windows as week in review", () => {

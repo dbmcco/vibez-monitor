@@ -32,6 +32,14 @@ interface AtlasMatrixCell {
 interface AtlasNarrative {
   title: string;
   summary: string;
+  report: {
+    headline: string;
+    kicker: string;
+    lead: string;
+    what_matters: string[];
+    what_to_watch: string[];
+    evidence_refs: string[];
+  };
   paragraphs: string[];
   main_topic: {
     title: string;
@@ -89,14 +97,13 @@ interface AtlasSnapshot {
   narrative: AtlasNarrative;
 }
 
-type Lens = "matrix" | "channels" | "topics" | "concerns" | "links";
+type Lens = "themes" | "rooms" | "evidence" | "diagnostics";
 
 const LENSES: Array<{ key: Lens; label: string }> = [
-  { key: "matrix", label: "Matrix" },
-  { key: "channels", label: "Channels" },
-  { key: "topics", label: "Topics" },
-  { key: "concerns", label: "Concerns" },
-  { key: "links", label: "Links" },
+  { key: "themes", label: "Themes" },
+  { key: "rooms", label: "Rooms" },
+  { key: "evidence", label: "Evidence" },
+  { key: "diagnostics", label: "Diagnostics" },
 ];
 
 export default function AtlasPage() {
@@ -104,7 +111,7 @@ export default function AtlasPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState(48);
-  const [lens, setLens] = useState<Lens>("matrix");
+  const [lens, setLens] = useState<Lens>("themes");
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [selectedCitationRef, setSelectedCitationRef] = useState<string | null>(null);
 
@@ -180,20 +187,12 @@ export default function AtlasPage() {
         onOpenCitation={setSelectedCitationRef}
       />
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Metric label="Messages" value={atlas.overview.messages} />
-        <Metric label="People" value={atlas.overview.people} />
-        <Metric label="Channels" value={atlas.overview.channels} />
-        <Metric label="Topics" value={atlas.overview.topics} />
-        <Metric label="Links" value={atlas.overview.links} />
-      </section>
-
       <section className="vibe-panel rounded-xl p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="vibe-title text-lg text-slate-100">{atlas.narrative.title}</h2>
+            <h2 className="vibe-title text-lg text-slate-100">Explore the evidence</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Channels x topics x citations, generated {formatDate(atlas.generated_at)}.
+              Read the themes first. Use diagnostics only when you need the raw shape.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -214,7 +213,10 @@ export default function AtlasPage() {
 
       <section className="grid gap-4 xl:grid-cols-[1.4fr_0.8fr]">
         <div className="space-y-4">
-          {lens === "matrix" && (
+          {lens === "themes" && <TopicLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
+          {lens === "rooms" && <ChannelLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
+          {lens === "evidence" && <EvidenceLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
+          {lens === "diagnostics" && (
             <Matrix
               atlas={atlas}
               channels={matrixChannels}
@@ -223,17 +225,17 @@ export default function AtlasPage() {
               onSelectCell={(cell) => setSelectedCellKey(cellKey(cell))}
             />
           )}
-          {lens === "channels" && <ChannelLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
-          {lens === "topics" && <TopicLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
-          {lens === "concerns" && <ConcernLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
-          {lens === "links" && <LinkLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
         </div>
 
-        <DetailRail
-          atlas={atlas}
-          cell={selectedCell}
-          onOpenCitation={setSelectedCitationRef}
-        />
+        {lens === "diagnostics" ? (
+          <DetailRail
+            atlas={atlas}
+            cell={selectedCell}
+            onOpenCitation={setSelectedCitationRef}
+          />
+        ) : (
+          <AtAGlance atlas={atlas} />
+        )}
       </section>
 
       {selectedCitation && (
@@ -250,13 +252,13 @@ function Header() {
   return (
     <header className="space-y-2">
       <p className="text-xs font-medium tracking-[0.16em] text-cyan-300/90 uppercase">
-        Atlas
+        Vibez
       </p>
       <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-        What moved across Vibez
+        The Latest Report
       </h1>
       <p className="vibe-subtitle max-w-3xl">
-        A 48-hour map across channels, topics, evidence, and shared artifacts.
+        A readable brief first. Evidence and diagnostics stay close at hand.
       </p>
     </header>
   );
@@ -264,7 +266,7 @@ function Header() {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="vibe-panel rounded-xl p-4">
+    <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 p-3">
       <div className="text-xs text-slate-400">{label}</div>
       <div className="vibe-title mt-1 text-2xl text-slate-100">{value.toLocaleString()}</div>
     </div>
@@ -283,17 +285,17 @@ function NarrativeReport({
   onOpenCitation: (ref: string) => void;
 }) {
   return (
-    <section className="vibe-panel rounded-xl p-5">
+    <section className="vibe-panel rounded-xl p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="max-w-4xl">
           <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
-            Narrative
+            {atlas.narrative.report.kicker}
           </p>
-          <h2 className="vibe-title mt-1 text-2xl text-slate-100">
-            {atlas.narrative.title}
+          <h2 className="vibe-title mt-2 text-3xl text-slate-100 sm:text-4xl">
+            {atlas.narrative.report.headline}
           </h2>
-          <p className="mt-2 max-w-4xl text-sm leading-relaxed text-slate-300">
-            {atlas.narrative.summary}
+          <p className="mt-3 text-base leading-7 text-slate-200">
+            {atlas.narrative.report.lead}
           </p>
         </div>
         <div className="flex gap-2">
@@ -322,7 +324,7 @@ function NarrativeReport({
 
         <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Main topic write-up
+            Main theme
           </p>
           <h3 className="vibe-title mt-1 text-lg text-slate-100">
             {atlas.narrative.main_topic.title}
@@ -342,19 +344,74 @@ function NarrativeReport({
         </aside>
       </div>
 
-      <div className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          {atlas.narrative.week_in_review.title}
-        </p>
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          {atlas.narrative.week_in_review.bullets.map((bullet, index) => (
-            <p key={index} className="rounded border border-slate-800/80 bg-slate-950/40 p-3 text-sm text-slate-300">
-              {bullet}
-            </p>
-          ))}
-        </div>
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        <ReportList title="What matters" items={atlas.narrative.report.what_matters} />
+        <ReportList title="Watch next" items={atlas.narrative.report.what_to_watch} />
       </div>
+
+      {atlas.narrative.report.evidence_refs.length > 0 && (
+        <div className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Start here
+          </p>
+          <div className="mt-3">
+            <CitationList
+              atlas={atlas}
+              refs={atlas.narrative.report.evidence_refs}
+              onOpenCitation={onOpenCitation}
+            />
+          </div>
+        </div>
+      )}
     </section>
+  );
+}
+
+function ReportList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</p>
+      <div className="mt-3 space-y-2">
+        {items.map((item, index) => (
+          <p key={index} className="text-sm leading-relaxed text-slate-300">
+            {item}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AtAGlance({ atlas }: { atlas: AtlasSnapshot }) {
+  return (
+    <aside className="vibe-panel rounded-xl p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
+        At a glance
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <Metric label="Messages" value={atlas.overview.messages} />
+        <Metric label="People" value={atlas.overview.people} />
+        <Metric label="Rooms" value={atlas.overview.channels} />
+        <Metric label="Themes" value={atlas.overview.topics} />
+      </div>
+      <div className="mt-4 space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Useful links</p>
+        {atlas.links.slice(0, 4).map((link) => (
+          <a
+            key={link.ref}
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block rounded border border-slate-800/80 bg-slate-950/40 p-2 text-xs text-slate-300 hover:border-cyan-400/40 hover:text-slate-100"
+          >
+            {link.title}
+          </a>
+        ))}
+        {atlas.links.length === 0 && (
+          <p className="text-sm text-slate-400">No links in this report.</p>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -502,7 +559,7 @@ function ChannelLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCi
           <div className="mt-3 flex flex-wrap gap-1.5">
             {channel.top_topics.map((topic) => (
               <span key={topic.name} className="vibe-chip rounded px-2 py-0.5 text-xs">
-                {topic.name} · {topic.count}
+                {topic.name} | {topic.count}
               </span>
             ))}
           </div>
@@ -530,26 +587,6 @@ function TopicLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCita
   );
 }
 
-function ConcernLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitation: (ref: string) => void }) {
-  return (
-    <div className="space-y-3">
-      {atlas.concerns.map((concern, index) => (
-        <article key={`${concern.kind}-${index}`} className="vibe-panel rounded-xl p-4">
-          <p className="text-sm font-semibold text-slate-100">{concern.title}</p>
-          <p className="mt-2 text-sm leading-relaxed text-slate-300">{concern.detail}</p>
-          <p className="mt-2 text-xs uppercase tracking-wide text-slate-500">{concern.kind.replace("_", " ")}</p>
-          <CitationList atlas={atlas} refs={concern.citation_refs} onOpenCitation={onOpenCitation} />
-        </article>
-      ))}
-      {atlas.concerns.length === 0 && (
-        <div className="vibe-panel rounded-xl p-4 text-sm text-slate-400">
-          No diagnostic concerns in this window.
-        </div>
-      )}
-    </div>
-  );
-}
-
 function LinkLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitation: (ref: string) => void }) {
   return (
     <LensGrid>
@@ -570,6 +607,42 @@ function LinkLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitat
         </article>
       ))}
     </LensGrid>
+  );
+}
+
+function EvidenceLens({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="vibe-title text-lg text-slate-100">Open questions</h3>
+        <div className="mt-3 space-y-3">
+          {atlas.concerns.map((concern, index) => (
+            <article key={`${concern.kind}-${index}`} className="vibe-panel rounded-xl p-4">
+              <p className="text-sm font-semibold text-slate-100">{concern.title}</p>
+              <p className="mt-2 text-sm leading-relaxed text-slate-300">{concern.detail}</p>
+              <CitationList atlas={atlas} refs={concern.citation_refs} onOpenCitation={onOpenCitation} />
+            </article>
+          ))}
+          {atlas.concerns.length === 0 && (
+            <div className="vibe-panel rounded-xl p-4 text-sm text-slate-400">
+              No open questions stand out in this report.
+            </div>
+          )}
+        </div>
+      </div>
+      <div>
+        <h3 className="vibe-title text-lg text-slate-100">Shared links</h3>
+        <div className="mt-3">
+          <LinkLens atlas={atlas} onOpenCitation={onOpenCitation} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -672,8 +745,4 @@ function cellKey(cell: AtlasMatrixCell): string {
 
 function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString();
 }

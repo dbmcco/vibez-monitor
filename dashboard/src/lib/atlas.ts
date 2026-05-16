@@ -82,6 +82,14 @@ export interface AtlasLinkSummary {
 export interface AtlasNarrative {
   title: string;
   summary: string;
+  report: {
+    headline: string;
+    kicker: string;
+    lead: string;
+    what_matters: string[];
+    what_to_watch: string[];
+    evidence_refs: string[];
+  };
   paragraphs: string[];
   main_topic: {
     title: string;
@@ -370,39 +378,61 @@ function buildNarrative(input: {
   const unresolved = input.concerns.filter((concern) => concern.kind !== "under_covered");
   const underCovered = input.concerns.find((concern) => concern.kind === "under_covered");
   const title = input.windowHours >= 120 ? "Week in Review" : "Latest 48h Report";
-  const windowLabel = input.windowHours >= 120 ? "the week" : "the last 48 hours";
-  const topicList = input.topics.slice(0, 4).map((topic) => topic.name).join(", ");
+  const topTopicName = topTopic ? humanizeTopic(topTopic.name) : "";
+  const topicList = humanList(input.topics.slice(0, 4).map((topic) => humanizeTopic(topic.name)));
   const channelList = input.channels.slice(0, 3).map((channel) => channel.name).join(", ");
-
+  const headline = topChannel
+    ? `${topChannel.name} drove the conversation`
+    : "The conversation needs more evidence";
+  const lead = topChannel && topTopic
+    ? `${topChannel.name} was the busiest room. The clearest theme was ${topTopicName}.`
+    : "There is activity here, but not enough tagged evidence to tell a strong story yet.";
   const paragraphs = [
-    `${title}: ${input.messageCount} messages from ${input.peopleCount} people moved through ${input.channels.length} channels during ${windowLabel}.`,
+    lead,
     topTopic
-      ? `The strongest narrative thread is ${topTopic.name}, appearing in ${topTopic.message_count} messages across ${topTopic.channels.length} channels.`
-      : "There is not enough topic coverage yet to identify a dominant thread.",
-    topChannel
-      ? `${topChannel.name} is the busiest channel, with ${topChannel.message_count} messages and visible overlap with ${topChannel.top_topics.map((topic) => topic.name).join(", ") || "uncategorized discussion"}.`
-      : "No channel has enough activity in this window to anchor the report.",
+      ? `${sentenceCase(topTopicName)} ran through ${humanList(topTopic.channels.slice(0, 4))}. It mattered because people returned to it from more than one room.`
+      : "The report needs more classified messages before it can name the main theme with confidence.",
     topCell
-      ? `The clearest intersection is ${topCell.topic} inside ${topCell.channel}, with ${topCell.message_count} cited messages from ${topCell.people.length} people.`
-      : "The channel-topic matrix is still sparse, so the report should be read as a coverage map rather than a settled story.",
+      ? `Start with ${topCell.channel}. That is where ${humanizeTopic(topCell.topic)} had the clearest shape and the most useful evidence.`
+      : "Start with the busiest rooms, then read the citations before drawing a conclusion.",
     unresolved.length > 0
-      ? `${unresolved.length} concern or open-question signals need review before this becomes a stable narrative.`
-      : "No hot-alert or open-question signal stands out in the current window.",
+      ? "The open questions deserve attention. They mark places where the group has not yet settled what to do next."
+      : "No urgent concern dominates the report. The useful work is to follow the strongest theme and read the evidence behind it.",
   ];
 
+  const whatMatters = [
+    topTopic
+      ? `${sentenceCase(topTopicName)} crossed ${pluralize(topTopic.channels.length, "channel")}.`
+      : "The main theme is still unclear.",
+    topChannel
+      ? `${topChannel.name} carried the most activity.`
+      : "No room carried the discussion.",
+  ];
   if (input.links.length > 0) {
-    paragraphs.push(`${input.links.length} shared links are available as durable artifacts for follow-up.`);
+    whatMatters.push(`${pluralize(input.links.length, "shared link")} can anchor follow-up.`);
   }
   if (underCovered) {
-    paragraphs.push(`Topic coverage remains incomplete: ${underCovered.detail}`);
+    whatMatters.push("Some messages still need classification before the report is complete.");
   }
-  if (topicList) {
-    paragraphs.push(`Secondary threads to scan next: ${topicList}.`);
-  }
+
+  const whatToWatch = [
+    unresolved.length > 0
+      ? "Resolve the open questions before treating this as settled."
+      : "Watch whether this theme repeats in the next report.",
+    topicList ? `Scan related themes: ${topicList}.` : "Refresh classifications if the report feels thin.",
+  ];
 
   return {
     title,
-    summary: paragraphs.slice(0, 2).join(" "),
+    summary: lead,
+    report: {
+      headline,
+      kicker: title,
+      lead,
+      what_matters: whatMatters,
+      what_to_watch: whatToWatch,
+      evidence_refs: topTopic?.citation_refs || topChannel?.citation_refs || [],
+    },
     paragraphs,
     main_topic: buildMainTopicNarrative(topTopic, topCell, input.channels),
     week_in_review: {
@@ -412,7 +442,7 @@ function buildNarrative(input: {
         topicList ? `Recurring themes: ${topicList}.` : "No recurring themes were found.",
         unresolved.length > 0
           ? `${unresolved.length} concern or open-question signals remain unresolved.`
-          : "No unresolved concern cluster dominates the window.",
+          : "No unresolved concern dominates the report.",
         input.links.length > 0
           ? `${input.links.length} shared links provide follow-up material.`
           : "No fresh shared links were captured for this window.",
@@ -428,25 +458,26 @@ function buildMainTopicNarrative(
 ): AtlasNarrative["main_topic"] {
   if (!topic) {
     return {
-      title: "Main topic: not enough coverage",
+      title: "Main theme: not enough evidence",
       topic: null,
       paragraphs: [
-        "The current window does not have enough topic-tagged messages to support a main-topic narrative.",
-        "That usually means the classifier needs to catch up before the report can connect channels into a useful story.",
-        "The matrix can still show where activity happened, but it should not be treated as thematic synthesis yet.",
-        "The most useful next step is to inspect unclassified channels and refresh the recent classification queue.",
-        "Once topic coverage improves, this section will become a five-paragraph write-up of the leading thread.",
+        "There is not enough tagged evidence to name a main theme.",
+        "The right move is to refresh the recent classifications, then read the strongest citations.",
+        "Until then, the report can show activity, but it should not pretend to know more than it does.",
+        "Look first at the busiest rooms and the open questions.",
+        "Once the evidence improves, this section will become a short editorial note.",
       ],
       citation_refs: [],
     };
   }
 
-  const channelNames = topic.channels.slice(0, 4).join(", ");
-  const peopleNames = topic.people.slice(0, 5).join(", ");
+  const topicName = humanizeTopic(topic.name);
+  const channelNames = humanList(topic.channels.slice(0, 4));
+  const peopleNames = humanList(topic.people.slice(0, 5));
   const strongestIntersection =
     topCell && topCell.topic === topic.name
-      ? `${topCell.channel}, where ${topCell.message_count} messages clustered around the topic`
-      : `${topic.channels[0] || "the leading channel"}, where the theme first concentrates`;
+      ? `${topCell.channel}, where ${pluralize(topCell.message_count, "message")} gave the theme shape`
+      : `${topic.channels[0] || "the leading channel"}, where the theme first appeared`;
   const adjacentChannels = channels
     .filter((channel) => channel.top_topics.some((entry) => entry.name === topic.name))
     .slice(0, 4)
@@ -454,21 +485,42 @@ function buildMainTopicNarrative(
     .join(", ");
 
   return {
-    title: `Main topic: ${topic.name}`,
+    title: `Main theme: ${topicName}`,
     topic: topic.name,
     paragraphs: [
-      `${topic.name} is the main topic because it has the highest classified volume in this window, with ${topic.message_count} messages across ${topic.channels.length} channels.`,
-      `The theme is not isolated to one room; it shows up across ${channelNames || "multiple channels"}, which is why it has more narrative value than a single-channel spike.`,
-      `The strongest intersection is ${strongestIntersection}, giving the report a concrete place to start reading the evidence.`,
+      `${sentenceCase(topicName)} led the report because people returned to it more than any other theme.`,
+      `It was not confined to one room. It appeared in ${channelNames || "several rooms"}, which gives it weight.`,
+      `The best place to start is ${strongestIntersection}.`,
       peopleNames
-        ? `The people most visible in the cited evidence include ${peopleNames}, so the thread has enough participation to be read as conversation rather than a one-person note.`
-        : "The cited evidence does not yet show a broad participant base, so the thread should be treated cautiously.",
+        ? `${peopleNames} were visible in the cited evidence, so this reads like a conversation rather than a private note.`
+        : "The evidence does not yet show a broad set of people, so read this cautiously.",
       adjacentChannels
-        ? `For follow-up, read the citations first, then compare adjacent channel appearances in ${adjacentChannels} to see whether this is one narrative or several related concerns.`
-        : "For follow-up, read the citations first and compare later windows to see whether this becomes a recurring narrative.",
+        ? `Next, read the citations and compare them with ${adjacentChannels}. That will show whether this is one story or several related questions.`
+        : "Next, read the citations and compare the next report. That will show whether this theme lasts.",
     ],
     citation_refs: topic.citation_refs,
   };
+}
+
+function humanizeTopic(topic: string): string {
+  return topic.replace(/[-_]+/g, " ").trim();
+}
+
+function sentenceCase(text: string): string {
+  if (!text) return text;
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+function humanList(items: string[]): string {
+  const clean = items.map((item) => item.trim()).filter(Boolean);
+  if (clean.length === 0) return "";
+  if (clean.length === 1) return clean[0];
+  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
+  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
+}
+
+function pluralize(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function parseTopics(raw: string | null): string[] {
