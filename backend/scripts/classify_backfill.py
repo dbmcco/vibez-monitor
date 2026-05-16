@@ -7,13 +7,15 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from vibez.db import get_connection, init_db
+from vibez.db import close_db_connection, get_connection, init_db
 from vibez.classifier import (
     build_classify_prompt,
     parse_classification,
@@ -73,17 +75,27 @@ def save_classifications_batch(db_path: Path, rows: list[tuple[dict, dict]]) -> 
     if not rows:
         return
     conn = get_connection(db_path)
-    conn.executemany(
-        """INSERT OR REPLACE INTO classifications
+    cursor = conn.cursor()
+    cursor.executemany(
+        """INSERT INTO classifications
            (message_id, relevance_score, topics, entities, contribution_flag, contribution_themes, contribution_hint, alert_level)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (message_id) DO UPDATE SET
+             relevance_score = EXCLUDED.relevance_score,
+             topics = EXCLUDED.topics,
+             entities = EXCLUDED.entities,
+             contribution_flag = EXCLUDED.contribution_flag,
+             contribution_themes = EXCLUDED.contribution_themes,
+             contribution_hint = EXCLUDED.contribution_hint,
+             alert_level = EXCLUDED.alert_level,
+             classified_at = now()""",
         [
             (
                 msg["id"],
                 classification["relevance_score"],
                 json.dumps(classification["topics"]),
                 json.dumps(classification["entities"]),
-                classification["contribution_flag"],
+                int(bool(classification["contribution_flag"])),
                 json.dumps(classification.get("contribution_themes", [])),
                 classification["contribution_hint"],
                 classification["alert_level"],
@@ -100,6 +112,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-path", default="./vibez.db", help="Path to SQLite DB")
     parser.add_argument("--start-date", help="Inclusive YYYY-MM-DD lower bound on message date")
     parser.add_argument("--end-date", help="Inclusive YYYY-MM-DD upper bound on message date")
+    parser.add_argument("--since-hours", type=int, help="Classify messages newer than this many hours")
     parser.add_argument("--limit", type=int, help="Max messages to process")
     parser.add_argument(
         "--task-id",
@@ -128,6 +141,7 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main():
+    load_dotenv()
     args = parse_args()
     db_path = Path(args.db_path)
     init_db(db_path)
@@ -150,15 +164,19 @@ async def main():
                LEFT JOIN classifications c ON m.id = c.message_id
                WHERE c.message_id IS NULL"""
     params: list[object] = []
+    if args.since_hours and args.since_hours > 0:
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=args.since_hours)
+        query += " AND m.timestamp >= %s"
+        params.append(int(cutoff.timestamp() * 1000))
     if args.start_date:
-        query += " AND date(m.timestamp/1000,'unixepoch') >= ?"
+        query += " AND to_timestamp(m.timestamp / 1000.0)::date >= %s"
         params.append(args.start_date)
     if args.end_date:
-        query += " AND date(m.timestamp/1000,'unixepoch') <= ?"
+        query += " AND to_timestamp(m.timestamp / 1000.0)::date <= %s"
         params.append(args.end_date)
     query += " ORDER BY m.timestamp ASC"
     if args.limit and args.limit > 0:
-        query += " LIMIT ?"
+        query += " LIMIT %s"
         params.append(args.limit)
 
     cursor = conn.execute(query, params)
@@ -204,7 +222,8 @@ async def main():
     print(
         f"Task={args.task_id} Model={selected_model} Concurrency={max(1, args.concurrency)} "
         f"num_predict={max(32, args.num_predict)} chunk_size={max(1, args.chunk_size)} "
-        f"Date range={args.start_date or 'min'}..{args.end_date or 'max'}",
+        f"Date range={args.start_date or 'min'}..{args.end_date or 'max'} "
+        f"since_hours={args.since_hours or '-'}",
         flush=True,
     )
 
@@ -247,6 +266,7 @@ async def main():
 
     elapsed = time.time() - start
     print(f"\nDone! {done}/{total} classified in {elapsed:.0f}s ({done/elapsed:.1f}/s)")
+    close_db_connection()
 
 
 if __name__ == "__main__":
