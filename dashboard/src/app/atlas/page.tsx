@@ -29,6 +29,22 @@ interface AtlasMatrixCell {
   citation_refs: string[];
 }
 
+interface AtlasNarrative {
+  title: string;
+  summary: string;
+  paragraphs: string[];
+  main_topic: {
+    title: string;
+    topic: string | null;
+    paragraphs: string[];
+    citation_refs: string[];
+  };
+  week_in_review: {
+    title: string;
+    bullets: string[];
+  };
+}
+
 interface AtlasSnapshot {
   generated_at: string;
   window: { start: string; end: string; hours: number };
@@ -70,6 +86,7 @@ interface AtlasSnapshot {
     last_seen: string | null;
   }>;
   citations: Record<string, AtlasCitation>;
+  narrative: AtlasNarrative;
 }
 
 type Lens = "matrix" | "channels" | "topics" | "concerns" | "links";
@@ -86,13 +103,14 @@ export default function AtlasPage() {
   const [atlas, setAtlas] = useState<AtlasSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [windowHours, setWindowHours] = useState(48);
   const [lens, setLens] = useState<Lens>("matrix");
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [selectedCitationRef, setSelectedCitationRef] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    fetch("/api/atlas?hours=48")
+    fetch(`/api/atlas?hours=${windowHours}`)
       .then((response) => response.json())
       .then((payload: { atlas: AtlasSnapshot | null }) => {
         if (!active) return;
@@ -108,7 +126,7 @@ export default function AtlasPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [windowHours]);
 
   const selectedCell = useMemo(() => {
     if (!atlas || !selectedCellKey) return atlas?.matrix[0] || null;
@@ -117,6 +135,14 @@ export default function AtlasPage() {
 
   const selectedCitation =
     atlas && selectedCitationRef ? atlas.citations[selectedCitationRef] || null : null;
+
+  function handleWindowHoursChange(hours: number) {
+    if (hours === windowHours) return;
+    setLoading(true);
+    setError(null);
+    setSelectedCitationRef(null);
+    setWindowHours(hours);
+  }
 
   if (loading) {
     return (
@@ -147,6 +173,13 @@ export default function AtlasPage() {
     <div className="fade-up space-y-6">
       <Header />
 
+      <NarrativeReport
+        atlas={atlas}
+        windowHours={windowHours}
+        onWindowHoursChange={handleWindowHoursChange}
+        onOpenCitation={setSelectedCitationRef}
+      />
+
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Metric label="Messages" value={atlas.overview.messages} />
         <Metric label="People" value={atlas.overview.people} />
@@ -158,7 +191,7 @@ export default function AtlasPage() {
       <section className="vibe-panel rounded-xl p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="vibe-title text-lg text-slate-100">Latest 48h Report</h2>
+            <h2 className="vibe-title text-lg text-slate-100">{atlas.narrative.title}</h2>
             <p className="mt-1 text-sm text-slate-400">
               Channels x topics x citations, generated {formatDate(atlas.generated_at)}.
             </p>
@@ -235,6 +268,93 @@ function Metric({ label, value }: { label: string; value: number }) {
       <div className="text-xs text-slate-400">{label}</div>
       <div className="vibe-title mt-1 text-2xl text-slate-100">{value.toLocaleString()}</div>
     </div>
+  );
+}
+
+function NarrativeReport({
+  atlas,
+  windowHours,
+  onWindowHoursChange,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  windowHours: number;
+  onWindowHoursChange: (hours: number) => void;
+  onOpenCitation: (ref: string) => void;
+}) {
+  return (
+    <section className="vibe-panel rounded-xl p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
+            Narrative
+          </p>
+          <h2 className="vibe-title mt-1 text-2xl text-slate-100">
+            {atlas.narrative.title}
+          </h2>
+          <p className="mt-2 max-w-4xl text-sm leading-relaxed text-slate-300">
+            {atlas.narrative.summary}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {[48, 168].map((hours) => (
+            <button
+              key={hours}
+              onClick={() => onWindowHoursChange(hours)}
+              className={`rounded-md px-3 py-1.5 text-sm ${
+                windowHours === hours ? "vibe-button" : "vibe-chip"
+              }`}
+            >
+              {hours === 48 ? "48h" : "Week"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_0.85fr]">
+        <article className="space-y-3">
+          {atlas.narrative.paragraphs.map((paragraph, index) => (
+            <p key={index} className="text-sm leading-relaxed text-slate-300">
+              {paragraph}
+            </p>
+          ))}
+        </article>
+
+        <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Main topic write-up
+          </p>
+          <h3 className="vibe-title mt-1 text-lg text-slate-100">
+            {atlas.narrative.main_topic.title}
+          </h3>
+          <div className="mt-3 space-y-3">
+            {atlas.narrative.main_topic.paragraphs.map((paragraph, index) => (
+              <p key={index} className="text-sm leading-relaxed text-slate-300">
+                {paragraph}
+              </p>
+            ))}
+          </div>
+          <CitationList
+            atlas={atlas}
+            refs={atlas.narrative.main_topic.citation_refs}
+            onOpenCitation={onOpenCitation}
+          />
+        </aside>
+      </div>
+
+      <div className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          {atlas.narrative.week_in_review.title}
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {atlas.narrative.week_in_review.bullets.map((bullet, index) => (
+            <p key={index} className="rounded border border-slate-800/80 bg-slate-950/40 p-3 text-sm text-slate-300">
+              {bullet}
+            </p>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -65,6 +65,18 @@ describe("buildAtlasSnapshotFromRows", () => {
       channel: "Agents",
       sender: "Dana",
     });
+    expect(atlas.narrative.title).toBe("Latest 48h Report");
+    expect(atlas.narrative.paragraphs.length).toBeGreaterThanOrEqual(4);
+    expect(atlas.narrative.paragraphs.join(" ")).toContain("Agents");
+    expect(atlas.narrative.main_topic).toMatchObject({
+      topic: "agents",
+      title: "Main topic: agents",
+    });
+    expect(atlas.narrative.main_topic.paragraphs).toHaveLength(5);
+    expect(atlas.narrative.main_topic.citation_refs).toEqual([
+      "vibez:message:m1",
+      "vibez:message:m2",
+    ]);
   });
 
   test("includes recent links and diagnostic concern candidates", () => {
@@ -120,5 +132,30 @@ describe("buildAtlasSnapshotFromRows", () => {
         kind: "under_covered",
       }),
     );
+    expect(atlas.narrative.paragraphs.join(" ")).toContain("topic coverage");
+  });
+
+  test("labels seven-day windows as week in review", () => {
+    const atlas = buildAtlasSnapshotFromRows({
+      generatedAt: "2026-05-16T13:00:00Z",
+      windowStart: "2026-05-09T13:00:00Z",
+      windowEnd: "2026-05-16T13:00:00Z",
+      messages: [
+        {
+          id: "w1",
+          room_name: "Agents",
+          sender_name: "Dana",
+          body: "Agent tooling moved from prototype to review.",
+          timestamp: baseTs,
+          relevance_score: 8,
+          topics: JSON.stringify(["agentic-architecture"]),
+          alert_level: "normal",
+        },
+      ],
+      links: [],
+    });
+
+    expect(atlas.narrative.title).toBe("Week in Review");
+    expect(atlas.narrative.week_in_review.bullets.length).toBeGreaterThanOrEqual(3);
   });
 });
