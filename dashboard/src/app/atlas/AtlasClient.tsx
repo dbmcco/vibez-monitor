@@ -229,8 +229,23 @@ export default function AtlasPage() {
     return (
       <div className="space-y-4">
         <Header />
-        <div className="vibe-panel rounded-xl p-5 text-sm text-slate-300">
-          Building the latest 48h channel-topic map...
+        <div className="vibe-panel rounded-xl bg-[#f8f4ea] p-6 text-slate-950">
+          <div className="border-b-4 border-double border-slate-900 pb-4 text-center">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-600">
+              Daily Edition | Last 48 Hours
+            </p>
+            <h2 className="mt-2 font-serif text-4xl font-black text-slate-950 sm:text-6xl">
+              THE VIBEZ ATLAS
+            </h2>
+            <p className="mt-3 text-sm text-slate-700">
+              Setting type, checking citations, and sending the newsroom back for one more pass...
+            </p>
+          </div>
+          <div className="mt-6 grid gap-5 lg:grid-cols-[0.9fr_1.35fr_0.9fr]">
+            <div className="h-52 border border-slate-300 bg-white/40" />
+            <div className="h-72 border border-slate-300 bg-white/50" />
+            <div className="h-52 border border-slate-300 bg-white/40" />
+          </div>
         </div>
       </div>
     );
@@ -330,10 +345,10 @@ function Header() {
         Vibez
       </p>
       <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-        The Latest Report
+        The Vibez Atlas
       </h1>
       <p className="vibe-subtitle max-w-3xl">
-        A readable brief first. Evidence and diagnostics stay close at hand.
+        A daily newspaper front page for the rooms, themes, evidence, and arguments worth reading.
       </p>
     </header>
   );
