@@ -158,6 +158,20 @@ function usageFromOpenAI(response: { usage?: { input_tokens?: number; output_tok
   };
 }
 
+function usageFromOpenAIChat(response: {
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}) {
+  return {
+    input_tokens: response.usage?.prompt_tokens ?? response.usage?.input_tokens ?? 0,
+    output_tokens: response.usage?.completion_tokens ?? response.usage?.output_tokens ?? 0,
+  };
+}
+
 function parseJsonText(raw: string): unknown {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
@@ -215,6 +229,33 @@ async function runOpenAIRoute(
     model: route.model,
     provider: route.provider,
     usage: usageFromOpenAI(response),
+  };
+}
+
+async function runOpenRouterRoute(
+  route: ModelRoute,
+  payload: ModelMessage[],
+): Promise<ModelTextResult> {
+  if (!route.base_url) {
+    throw new Error("openrouter base_url not configured");
+  }
+  const client = new OpenAI({
+    apiKey: resolveProviderApiKey("openrouter"),
+    baseURL: route.base_url,
+    timeout: route.timeout_ms,
+  });
+  const response = await client.chat.completions.create({
+    model: route.model,
+    messages: payload,
+    max_tokens: route.max_tokens,
+    temperature: route.temperature,
+    response_format: route.mode === "json" ? { type: "json_object" } : undefined,
+  });
+  return {
+    text: response.choices[0]?.message?.content || "",
+    model: route.model,
+    provider: route.provider,
+    usage: usageFromOpenAIChat(response),
   };
 }
 
@@ -332,6 +373,9 @@ export async function generateText({
   }
   if (route.provider === "openai") {
     return runOpenAIRoute(route, payload);
+  }
+  if (route.provider === "openrouter") {
+    return runOpenRouterRoute(route, payload);
   }
   if (route.provider === "ollama") {
     return runOllamaRoute(route, payload);

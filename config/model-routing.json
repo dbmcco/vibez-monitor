@@ -14,6 +14,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 30000
@@ -31,6 +32,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1",
       "mode": "text",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 16384,
       "temperature": 0.2,
       "timeout_ms": 120000
@@ -39,6 +41,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 2048,
       "temperature": 0.1,
       "timeout_ms": 120000
@@ -47,6 +50,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "text",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 120000
@@ -55,6 +59,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 30000
@@ -63,6 +68,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1",
       "mode": "text",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.2,
       "timeout_ms": 60000
@@ -71,14 +77,25 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1",
       "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 4096,
       "temperature": 0.2,
+      "timeout_ms": 120000
+    },
+    "dashboard.atlas_report": {
+      "provider": "openrouter",
+      "model": "openai/gpt-4.1",
+      "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
+      "max_tokens": 4096,
+      "temperature": 0.25,
       "timeout_ms": 120000
     },
     "dashboard.topic_analysis": {
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.1,
       "timeout_ms": 60000
@@ -87,6 +104,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "text",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.2,
       "timeout_ms": 60000
@@ -95,6 +113,7 @@
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "mode": "json",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.1,
       "timeout_ms": 60000

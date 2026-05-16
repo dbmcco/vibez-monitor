@@ -97,6 +97,32 @@ interface AtlasSnapshot {
   narrative: AtlasNarrative;
 }
 
+interface AtlasEditorialReport {
+  headline: string;
+  dek: string;
+  what_happened: string[];
+  what_it_means: string[];
+  why_care: string[];
+  valuable: string[];
+  actions: string[];
+  main_topic: {
+    title: string;
+    paragraphs: string[];
+    evidence_refs: string[];
+  };
+  themes: Array<{
+    title: string;
+    analysis: string;
+    evidence_refs: string[];
+  }>;
+  evidence: Array<{
+    ref: string;
+    label: string;
+    why_it_matters: string;
+  }>;
+  generated_at: string;
+}
+
 type Lens = "themes" | "rooms" | "evidence" | "diagnostics";
 
 const LENSES: Array<{ key: Lens; label: string }> = [
@@ -108,6 +134,8 @@ const LENSES: Array<{ key: Lens; label: string }> = [
 
 export default function AtlasPage() {
   const [atlas, setAtlas] = useState<AtlasSnapshot | null>(null);
+  const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(null);
+  const [editorialError, setEditorialError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState(48);
@@ -119,9 +147,15 @@ export default function AtlasPage() {
     let active = true;
     fetch(`/api/atlas?hours=${windowHours}`)
       .then((response) => response.json())
-      .then((payload: { atlas: AtlasSnapshot | null }) => {
+      .then((payload: {
+        atlas: AtlasSnapshot | null;
+        editorial_report: AtlasEditorialReport | null;
+        editorial_error?: string | null;
+      }) => {
         if (!active) return;
         setAtlas(payload.atlas);
+        setEditorialReport(payload.editorial_report);
+        setEditorialError(payload.editorial_error || null);
         setSelectedCellKey(payload.atlas?.matrix[0] ? cellKey(payload.atlas.matrix[0]) : null);
         setLoading(false);
       })
@@ -147,6 +181,8 @@ export default function AtlasPage() {
     if (hours === windowHours) return;
     setLoading(true);
     setError(null);
+    setEditorialReport(null);
+    setEditorialError(null);
     setSelectedCitationRef(null);
     setWindowHours(hours);
   }
@@ -182,6 +218,8 @@ export default function AtlasPage() {
 
       <NarrativeReport
         atlas={atlas}
+        editorialReport={editorialReport}
+        editorialError={editorialError}
         windowHours={windowHours}
         onWindowHoursChange={handleWindowHoursChange}
         onOpenCitation={setSelectedCitationRef}
@@ -275,27 +313,33 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function NarrativeReport({
   atlas,
+  editorialReport,
+  editorialError,
   windowHours,
   onWindowHoursChange,
   onOpenCitation,
 }: {
   atlas: AtlasSnapshot;
+  editorialReport: AtlasEditorialReport | null;
+  editorialError: string | null;
   windowHours: number;
   onWindowHoursChange: (hours: number) => void;
   onOpenCitation: (ref: string) => void;
 }) {
+  const report = editorialReport;
   return (
     <section className="vibe-panel rounded-xl p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="max-w-4xl">
           <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
-            {atlas.narrative.report.kicker}
+            {atlas.narrative.title}
           </p>
           <h2 className="vibe-title mt-2 text-3xl text-slate-100 sm:text-4xl">
-            {atlas.narrative.report.headline}
+            {report?.headline || "Analysis is unavailable"}
           </h2>
           <p className="mt-3 text-base leading-7 text-slate-200">
-            {atlas.narrative.report.lead}
+            {report?.dek ||
+              `The Atlas evidence loaded, but the editorial analysis did not. ${editorialError || "Try again after the report model is available."}`}
           </p>
         </div>
         <div className="flex gap-2">
@@ -313,63 +357,90 @@ function NarrativeReport({
         </div>
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_0.85fr]">
-        <article className="space-y-3">
-          {atlas.narrative.paragraphs.map((paragraph, index) => (
-            <p key={index} className="text-sm leading-relaxed text-slate-300">
-              {paragraph}
+      {report ? (
+        <>
+          <article className="mt-6 rounded-lg border border-slate-700/70 bg-slate-950/35 p-5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Main topic
             </p>
-          ))}
-        </article>
-
-        <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Main theme
-          </p>
-          <h3 className="vibe-title mt-1 text-lg text-slate-100">
-            {atlas.narrative.main_topic.title}
-          </h3>
-          <div className="mt-3 space-y-3">
-            {atlas.narrative.main_topic.paragraphs.map((paragraph, index) => (
-              <p key={index} className="text-sm leading-relaxed text-slate-300">
-                {paragraph}
-              </p>
-            ))}
-          </div>
-          <CitationList
-            atlas={atlas}
-            refs={atlas.narrative.main_topic.citation_refs}
-            onOpenCitation={onOpenCitation}
-          />
-        </aside>
-      </div>
-
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <ReportList title="What matters" items={atlas.narrative.report.what_matters} />
-        <ReportList title="Watch next" items={atlas.narrative.report.what_to_watch} />
-      </div>
-
-      {atlas.narrative.report.evidence_refs.length > 0 && (
-        <div className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Start here
-          </p>
-          <div className="mt-3">
+            <h3 className="vibe-title mt-2 text-2xl text-slate-100">
+              {report.main_topic.title}
+            </h3>
+            <div className="mt-4 space-y-3">
+              {report.main_topic.paragraphs.map((paragraph, index) => (
+                <p key={index} className="text-sm leading-relaxed text-slate-300">
+                  {paragraph}
+                </p>
+              ))}
+            </div>
             <CitationList
               atlas={atlas}
-              refs={atlas.narrative.report.evidence_refs}
+              refs={report.main_topic.evidence_refs}
               onOpenCitation={onOpenCitation}
             />
+          </article>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <ReportSection title="What happened" items={report.what_happened} />
+            <ReportSection title="What it means" items={report.what_it_means} />
+            <ReportSection title="Why it matters" items={report.why_care} />
+            <ReportSection title="What is valuable here" items={report.valuable} />
           </div>
+
+          <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_0.85fr]">
+            <ReportSection title="What to do next" items={report.actions} emphasis />
+            <ThemeBrief report={report} atlas={atlas} onOpenCitation={onOpenCitation} />
+          </div>
+
+          {report.evidence.length > 0 && (
+            <div className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Evidence that earns its place
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {report.evidence.map((item) => (
+                  <button
+                    key={item.ref}
+                    onClick={() => onOpenCitation(item.ref)}
+                    className="rounded border border-slate-700/70 bg-slate-950/35 p-3 text-left hover:border-cyan-400/45"
+                  >
+                    <span className="block text-sm font-semibold text-slate-100">
+                      {item.label}
+                    </span>
+                    <span className="mt-2 block text-sm leading-relaxed text-slate-300">
+                      {item.why_it_matters}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="mt-5 rounded-lg border border-amber-400/25 bg-amber-400/10 p-4 text-sm leading-relaxed text-amber-100">
+          The data is here, but the editorial layer failed. Atlas is showing diagnostics below
+          instead of filling the gap with fake narrative.
         </div>
       )}
     </section>
   );
 }
 
-function ReportList({ title, items }: { title: string; items: string[] }) {
+function ReportSection({
+  title,
+  items,
+  emphasis = false,
+}: {
+  title: string;
+  items: string[];
+  emphasis?: boolean;
+}) {
   return (
-    <div className="rounded-lg border border-slate-700/70 bg-slate-900/35 p-4">
+    <div className={`rounded-lg border p-4 ${
+      emphasis
+        ? "border-cyan-400/35 bg-cyan-400/10"
+        : "border-slate-700/70 bg-slate-900/35"
+    }`}>
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</p>
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
@@ -379,6 +450,50 @@ function ReportList({ title, items }: { title: string; items: string[] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function ThemeBrief({
+  report,
+  atlas,
+  onOpenCitation,
+}: {
+  report: AtlasEditorialReport;
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  if (report.themes.length === 0) {
+    return (
+      <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Themes
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-slate-300">
+          The report did not name a durable theme. Use the evidence tabs below before making a call.
+        </p>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="rounded-lg border border-slate-700/70 bg-slate-950/35 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Themes
+      </p>
+      <div className="mt-3 space-y-4">
+        {report.themes.map((theme) => (
+          <div key={theme.title}>
+            <h3 className="vibe-title text-lg text-slate-100">{theme.title}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">{theme.analysis}</p>
+            <CitationList
+              atlas={atlas}
+              refs={theme.evidence_refs}
+              onOpenCitation={onOpenCitation}
+            />
+          </div>
+        ))}
+      </div>
+    </aside>
   );
 }
 
