@@ -1,4 +1,10 @@
 import { Pool } from "pg";
+import {
+  buildAtlasSnapshotFromRows,
+  type AtlasSnapshot,
+  type AtlasMessageRow,
+  type AtlasLinkRow,
+} from "./atlas";
 import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search";
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
 import {
@@ -1305,6 +1311,55 @@ export async function getRecentUpdateSnapshot(): Promise<RecentUpdateSnapshot> {
     quotes,
     summary,
   };
+}
+
+export async function getAtlasSnapshot(opts: { windowHours?: number } = {}): Promise<AtlasSnapshot> {
+  const windowHours = Math.min(Math.max(opts.windowHours || 48, 6), 168);
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 2);
+  const userAliases = loadUserAliases();
+
+  const whereParts = ["m.timestamp >= $1"];
+  const params: unknown[] = [windowStart.getTime()];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+
+  const { rows: messageRows } = await pool.query(
+    `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+            c.relevance_score, c.topics, c.alert_level
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     WHERE ${whereParts.join(" AND ")}
+     ORDER BY m.timestamp DESC
+     LIMIT 3000`,
+    params,
+  );
+
+  const linkCutoff = windowStart.toISOString();
+  const { rows: linkRows } = await pool.query(
+    `SELECT id, url, title, category, relevance, shared_by,
+            source_group, last_seen, value_score
+     FROM links
+     WHERE last_seen >= $1
+     ORDER BY value_score DESC, last_seen DESC
+     LIMIT 80`,
+    [linkCutoff],
+  );
+
+  return buildAtlasSnapshotFromRows({
+    generatedAt: now.toISOString(),
+    windowStart: windowStart.toISOString(),
+    windowEnd: now.toISOString(),
+    messages: (messageRows as AtlasMessageRow[]).map((row) => ({
+      ...row,
+      sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+    })),
+    links: linkRows as AtlasLinkRow[],
+  });
 }
 
 export async function getRooms(): Promise<string[]> {
