@@ -201,7 +201,6 @@ const LENSES: Array<{ key: Lens; label: string }> = [
 export default function AtlasPage() {
   const [atlas, setAtlas] = useState<AtlasSnapshot | null>(null);
   const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(null);
-  const [editorialError, setEditorialError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState(48);
@@ -221,7 +220,6 @@ export default function AtlasPage() {
         if (!active) return;
         setAtlas(payload.atlas);
         setEditorialReport(payload.editorial_report);
-        setEditorialError(payload.editorial_error || null);
         setSelectedCellKey(payload.atlas?.matrix[0] ? cellKey(payload.atlas.matrix[0]) : null);
         setLoading(false);
       })
@@ -248,7 +246,6 @@ export default function AtlasPage() {
     setLoading(true);
     setError(null);
     setEditorialReport(null);
-    setEditorialError(null);
     setSelectedCitationRef(null);
     setWindowHours(hours);
   }
@@ -296,9 +293,9 @@ export default function AtlasPage() {
       <NarrativeReport
         atlas={atlas}
         editorialReport={editorialReport}
-        editorialError={editorialError}
         windowHours={windowHours}
         onWindowHoursChange={handleWindowHoursChange}
+        onOpenCitation={setSelectedCitationRef}
       />
 
       <PeopleDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
@@ -381,15 +378,15 @@ function Metric({ label, value }: { label: string; value: number }) {
 function NarrativeReport({
   atlas,
   editorialReport,
-  editorialError,
   windowHours,
   onWindowHoursChange,
+  onOpenCitation,
 }: {
   atlas: AtlasSnapshot;
   editorialReport: AtlasEditorialReport | null;
-  editorialError: string | null;
   windowHours: number;
   onWindowHoursChange: (hours: number) => void;
+  onOpenCitation: (ref: string) => void;
 }) {
   const report = editorialReport;
   const leadArticle = report?.articles.find((article) => article.role === "lead") || report?.articles[0] || null;
@@ -411,7 +408,7 @@ function NarrativeReport({
         <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-[#5e5238] sm:text-base">
           {report?.issue.subtitle ||
             report?.dek ||
-            `The Atlas evidence loaded, but the editorial analysis did not. ${editorialError || "Try again after the report model is available."}`}
+            wireSubtitle(atlas)}
         </p>
         <div className="mt-4 flex justify-center gap-2">
           {[48, 168].map((hours) => (
@@ -497,12 +494,152 @@ function NarrativeReport({
           </div>
         </>
       ) : (
-        <div className="mt-5 rounded border border-[#b3833a]/40 bg-[#f1dfb8] p-4 text-sm leading-relaxed text-[#4a3214]">
-          The data is here, but the editorial layer failed. Atlas is showing diagnostics below
-          instead of filling the gap with fake narrative.
-        </div>
+        <WireDeskFrontPage atlas={atlas} onOpenCitation={onOpenCitation} />
       )}
     </section>
+  );
+}
+
+function WireDeskFrontPage({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const topTopic = atlas.topics[0] || null;
+  const topChannel = atlas.channels[0] || null;
+  const topCell = atlas.matrix[0] || null;
+  const primaryRefs =
+    topCell?.citation_refs.length
+      ? topCell.citation_refs
+      : topTopic?.citation_refs.length
+        ? topTopic.citation_refs
+        : topChannel?.citation_refs || [];
+  const concerns = atlas.concerns.slice(0, 3);
+
+  return (
+    <div className="mt-6 space-y-5">
+      <div className="grid gap-5 min-[1500px]:grid-cols-[0.9fr_1.35fr_0.9fr]">
+        <div className="space-y-4 min-[1500px]:border-r min-[1500px]:border-[#cbbf9d] min-[1500px]:pr-5">
+          <WireSectionLabel>Leading Themes</WireSectionLabel>
+          {atlas.topics.slice(0, 4).map((topic) => (
+            <article key={topic.name} className="border-b border-[#cbbf9d] pb-3 last:border-b-0">
+              <h3 className="font-serif text-2xl font-bold leading-tight text-[#1f1a12]">
+                {topic.name}
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">
+                {topic.message_count.toLocaleString()} messages across{" "}
+                {topic.channels.length.toLocaleString()} rooms.
+              </p>
+              <CitationList
+                atlas={atlas}
+                refs={topic.citation_refs.slice(0, 2)}
+                onOpenCitation={onOpenCitation}
+              />
+            </article>
+          ))}
+        </div>
+
+        <article className="border-y-2 border-[#1f1a12] py-4 min-[1500px]:border-y-0 min-[1500px]:py-0">
+          <WireSectionLabel>Wire Edition</WireSectionLabel>
+          <h3 className="mt-2 font-serif text-4xl font-black leading-none text-[#1f1a12] sm:text-5xl">
+            {atlas.overview.messages.toLocaleString()} messages,{" "}
+            {atlas.overview.channels.toLocaleString()} rooms,{" "}
+            {atlas.overview.people.toLocaleString()} voices
+          </h3>
+          <p className="mt-4 text-base leading-7 text-[#5e5238]">
+            This front page is built from the durable Atlas record: activity counts,
+            classified themes, room intersections, shared links, and citations. It
+            reports what is present in the record without adding an unsourced article.
+          </p>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <Metric label="Themes" value={atlas.overview.topics} />
+            <Metric label="Links" value={atlas.overview.links} />
+            <Metric label="Intersections" value={atlas.matrix.length} />
+          </div>
+          <div className="mt-5 border-t border-[#cbbf9d] pt-4">
+            <h4 className="font-serif text-2xl font-bold text-[#1f1a12]">Start Here</h4>
+            <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+              {topTopic ? `Top theme: ${topTopic.name}. ` : "No top theme is available. "}
+              {topChannel ? `Busiest room: ${topChannel.name}. ` : "No busiest room is available. "}
+              {topCell
+                ? `Strongest intersection: ${topCell.channel} / ${topCell.topic}.`
+                : "No channel-theme intersection is available."}
+            </p>
+            <CitationList
+              atlas={atlas}
+              refs={primaryRefs.slice(0, 3)}
+              onOpenCitation={onOpenCitation}
+            />
+          </div>
+        </article>
+
+        <div className="space-y-4 min-[1500px]:border-l min-[1500px]:border-[#cbbf9d] min-[1500px]:pl-5">
+          <WireSectionLabel>Evidence Desk</WireSectionLabel>
+          {concerns.length > 0 ? (
+            concerns.map((concern, index) => (
+              <article key={`${concern.kind}-${index}`} className="border-b border-[#cbbf9d] pb-3 last:border-b-0">
+                <h3 className="font-serif text-xl font-bold leading-tight text-[#1f1a12]">
+                  {concern.title}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-[#5e5238]">{concern.detail}</p>
+                <CitationList
+                  atlas={atlas}
+                  refs={concern.citation_refs.slice(0, 2)}
+                  onOpenCitation={onOpenCitation}
+                />
+              </article>
+            ))
+          ) : (
+            <p className="text-sm leading-6 text-[#5e5238]">
+              No open-question signals stand out in this window.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-4 border-t-2 border-[#1f1a12] pt-4 lg:grid-cols-2">
+        <WireList
+          title="Most Active Rooms"
+          items={atlas.channels.slice(0, 5).map((channel) =>
+            `${channel.name}: ${channel.message_count.toLocaleString()} messages, ${channel.people.length.toLocaleString()} community members`,
+          )}
+        />
+        <WireList
+          title="Shared Links"
+          items={atlas.links.slice(0, 5).map((link) =>
+            `${link.title} | ${link.source_group || "source room unavailable"}`,
+          )}
+        />
+      </div>
+    </div>
+  );
+}
+
+function wireSubtitle(atlas: AtlasSnapshot): string {
+  return `A sourced wire edition for ${atlas.window.hours} hours of activity: ${atlas.overview.messages.toLocaleString()} messages, ${atlas.overview.people.toLocaleString()} community members, ${atlas.overview.channels.toLocaleString()} rooms, and ${atlas.overview.links.toLocaleString()} shared links.`;
+}
+
+function WireSectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
+      {children}
+    </p>
+  );
+}
+
+function WireList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+      <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
+      <ul className="mt-3 space-y-2 text-sm leading-6 text-[#5e5238]">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+        {items.length === 0 && <li>No records in this window.</li>}
+      </ul>
+    </div>
   );
 }
 
