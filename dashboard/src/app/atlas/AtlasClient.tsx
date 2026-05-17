@@ -514,45 +514,31 @@ function WireDeskFrontPage({
     topCell?.citation_refs.length
       ? topCell.citation_refs
       : topTopic?.citation_refs.length
-        ? topTopic.citation_refs
-        : topChannel?.citation_refs || [];
-  const concerns = atlas.concerns.slice(0, 3);
+      ? topTopic.citation_refs
+      : topChannel?.citation_refs || [];
+  const stories = buildWireStories(atlas, primaryRefs);
+  const leftStory = stories.secondary[0] || null;
+  const rightStory = stories.secondary[1] || null;
+  const belowStories = stories.secondary.slice(2);
 
   return (
     <div className="mt-6 space-y-5">
       <div className="grid gap-5 min-[1500px]:grid-cols-[0.9fr_1.35fr_0.9fr]">
         <div className="space-y-4 min-[1500px]:border-r min-[1500px]:border-[#cbbf9d] min-[1500px]:pr-5">
-          <WireSectionLabel>Leading Themes</WireSectionLabel>
-          {atlas.topics.slice(0, 4).map((topic) => (
-            <article key={topic.name} className="border-b border-[#cbbf9d] pb-3 last:border-b-0">
-              <h3 className="font-serif text-2xl font-bold leading-tight text-[#1f1a12]">
-                {topic.name}
-              </h3>
-              <p className="mt-1 text-sm leading-6 text-[#5e5238]">
-                {topic.message_count.toLocaleString()} messages across{" "}
-                {topic.channels.length.toLocaleString()} rooms.
-              </p>
-              <CitationList
-                atlas={atlas}
-                refs={topic.citation_refs.slice(0, 2)}
-                onOpenCitation={onOpenCitation}
-              />
-            </article>
-          ))}
+          {leftStory ? (
+            <WireStoryCard story={leftStory} atlas={atlas} onOpenCitation={onOpenCitation} compact />
+          ) : (
+            <WireList
+              title="Leading Themes"
+              items={atlas.topics.slice(0, 4).map((topic) =>
+                `${topic.name}: ${topic.message_count.toLocaleString()} messages across ${topic.channels.length.toLocaleString()} rooms`,
+              )}
+            />
+          )}
         </div>
 
         <article className="border-y-2 border-[#1f1a12] py-4 min-[1500px]:border-y-0 min-[1500px]:py-0">
-          <WireSectionLabel>Wire Edition</WireSectionLabel>
-          <h3 className="mt-2 font-serif text-4xl font-black leading-none text-[#1f1a12] sm:text-5xl">
-            {atlas.overview.messages.toLocaleString()} messages,{" "}
-            {atlas.overview.channels.toLocaleString()} rooms,{" "}
-            {atlas.overview.people.toLocaleString()} voices
-          </h3>
-          <p className="mt-4 text-base leading-7 text-[#5e5238]">
-            This front page is built from the durable Atlas record: activity counts,
-            classified themes, room intersections, shared links, and citations. It
-            reports what is present in the record without adding an unsourced article.
-          </p>
+          <WireStoryCard story={stories.lead} atlas={atlas} onOpenCitation={onOpenCitation} lead />
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <Metric label="Themes" value={atlas.overview.topics} />
             <Metric label="Links" value={atlas.overview.links} />
@@ -576,21 +562,8 @@ function WireDeskFrontPage({
         </article>
 
         <div className="space-y-4 min-[1500px]:border-l min-[1500px]:border-[#cbbf9d] min-[1500px]:pl-5">
-          <WireSectionLabel>Evidence Desk</WireSectionLabel>
-          {concerns.length > 0 ? (
-            concerns.map((concern, index) => (
-              <article key={`${concern.kind}-${index}`} className="border-b border-[#cbbf9d] pb-3 last:border-b-0">
-                <h3 className="font-serif text-xl font-bold leading-tight text-[#1f1a12]">
-                  {concern.title}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-[#5e5238]">{concern.detail}</p>
-                <CitationList
-                  atlas={atlas}
-                  refs={concern.citation_refs.slice(0, 2)}
-                  onOpenCitation={onOpenCitation}
-                />
-              </article>
-            ))
+          {rightStory ? (
+            <WireStoryCard story={rightStory} atlas={atlas} onOpenCitation={onOpenCitation} compact />
           ) : (
             <p className="text-sm leading-6 text-[#5e5238]">
               No open-question signals stand out in this window.
@@ -598,6 +571,20 @@ function WireDeskFrontPage({
           )}
         </div>
       </div>
+
+      {belowStories.length > 0 && (
+        <div className="grid gap-4 border-t border-[#cbbf9d] pt-4 min-[1500px]:grid-cols-2">
+          {belowStories.map((story) => (
+            <WireStoryCard
+              key={`${story.section}-${story.title}`}
+              story={story}
+              atlas={atlas}
+              onOpenCitation={onOpenCitation}
+              compact
+            />
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-4 border-t-2 border-[#1f1a12] pt-4 lg:grid-cols-2">
         <WireList
@@ -617,8 +604,119 @@ function WireDeskFrontPage({
   );
 }
 
+interface WireStory {
+  section: string;
+  title: string;
+  dek: string;
+  paragraphs: string[];
+  citation_refs: string[];
+}
+
+function buildWireStories(atlas: AtlasSnapshot, primaryRefs: string[]): {
+  lead: WireStory;
+  secondary: WireStory[];
+} {
+  const lead: WireStory = {
+    section: "Lead Story",
+    title: atlas.narrative.main_topic.title || atlas.narrative.report.headline,
+    dek: atlas.narrative.report.lead || atlas.narrative.summary,
+    paragraphs: atlas.narrative.main_topic.paragraphs.length
+      ? atlas.narrative.main_topic.paragraphs
+      : atlas.narrative.paragraphs,
+    citation_refs: atlas.narrative.main_topic.citation_refs.length
+      ? atlas.narrative.main_topic.citation_refs
+      : primaryRefs,
+  };
+
+  const topicStories = atlas.topics.slice(1, 4).map((topic): WireStory => ({
+    section: "Theme Watch",
+    title: topic.name,
+    dek: `${topic.message_count.toLocaleString()} messages across ${topic.channels.length.toLocaleString()} rooms.`,
+    paragraphs: [
+      `${topic.name} is one of the visible stories in this edition because it appears across ${topic.channels.length.toLocaleString()} rooms.`,
+      topic.channels.length
+        ? `The first rooms to read are ${topic.channels.slice(0, 4).join(", ")}.`
+        : "The room map is thin, so the citations matter more than the label.",
+      topic.people.length
+        ? `${topic.people.slice(0, 5).join(", ")} appear in the available evidence.`
+        : "The current evidence does not show a broad contributor list yet.",
+    ],
+    citation_refs: topic.citation_refs,
+  }));
+
+  const concernStories = atlas.concerns.slice(0, 2).map((concern): WireStory => ({
+    section: concern.kind === "hot_alert" ? "Concern" : "Open Question",
+    title: concern.title,
+    dek: concern.detail,
+    paragraphs: [
+      concern.detail,
+      "This belongs on the front page because it points to a place where the group may need more evidence, a decision, or a follow-up owner.",
+      "Read the citations before treating the signal as settled.",
+    ],
+    citation_refs: concern.citation_refs,
+  }));
+
+  const linkStories = atlas.links.slice(0, 1).map((link): WireStory => ({
+    section: "Links",
+    title: link.title,
+    dek: `${link.shared_by || "A community member"} shared this in ${link.source_group || "the group"}.`,
+    paragraphs: [
+      link.title,
+      link.category ? `Atlas classified the link as ${link.category}.` : "Atlas captured this as follow-up material.",
+      "Use it as supporting material, not as a substitute for the conversation around it.",
+    ],
+    citation_refs: [link.ref],
+  }));
+
+  return {
+    lead,
+    secondary: [...topicStories, ...concernStories, ...linkStories],
+  };
+}
+
+function WireStoryCard({
+  story,
+  atlas,
+  onOpenCitation,
+  lead = false,
+  compact = false,
+}: {
+  story: WireStory;
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+  lead?: boolean;
+  compact?: boolean;
+}) {
+  const paragraphs = lead ? story.paragraphs.slice(0, 5) : story.paragraphs.slice(0, 3);
+  return (
+    <article className={lead ? "" : "border-b border-[#cbbf9d] pb-4 last:border-b-0"}>
+      <WireSectionLabel>{story.section}</WireSectionLabel>
+      <h3 className={`mt-2 font-serif font-black leading-none text-[#1f1a12] ${
+        lead ? "text-3xl sm:text-5xl" : "text-2xl"
+      }`}>
+        {story.title}
+      </h3>
+      <p className={`mt-3 leading-7 text-[#5e5238] ${compact ? "text-sm" : "text-base"}`}>
+        {story.dek}
+      </p>
+      <div className="mt-3 space-y-3">
+        {paragraphs.map((paragraph, index) => (
+          <p key={index} className={`leading-7 text-[#342a1b] ${compact ? "text-sm" : "text-base"}`}>
+            {paragraph}
+          </p>
+        ))}
+      </div>
+      <CitationList
+        atlas={atlas}
+        refs={story.citation_refs.slice(0, lead ? 4 : 2)}
+        onOpenCitation={onOpenCitation}
+      />
+    </article>
+  );
+}
+
 function wireSubtitle(atlas: AtlasSnapshot): string {
-  return `A sourced wire edition for ${atlas.window.hours} hours of activity: ${atlas.overview.messages.toLocaleString()} messages, ${atlas.overview.people.toLocaleString()} community members, ${atlas.overview.channels.toLocaleString()} rooms, and ${atlas.overview.links.toLocaleString()} shared links.`;
+  return `A sourced front page for ${atlas.window.hours} hours of activity: ${atlas.overview.messages.toLocaleString()} messages, ${atlas.overview.people.toLocaleString()} community members, ${atlas.overview.channels.toLocaleString()} rooms, and ${atlas.overview.links.toLocaleString()} shared links.`;
 }
 
 function WireSectionLabel({ children }: { children: ReactNode }) {
