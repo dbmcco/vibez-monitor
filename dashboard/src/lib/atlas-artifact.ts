@@ -18,12 +18,19 @@ export interface AtlasArtifactPayload {
 export function atlasArtifactPath(windowHours: number): string {
   const configured = process.env.VIBEZ_ATLAS_ARTIFACT_PATH;
   if (configured) return configured;
-  return path.join(
-    /* turbopackIgnore: true */ process.cwd(),
-    ".generated",
-    "atlas",
-    `atlas-${windowHours}.json`,
-  );
+  return path.join(defaultArtifactRoot(), "atlas", `atlas-${windowHours}.json`);
+}
+
+function defaultArtifactRoot(): string {
+  const cwd = /* turbopackIgnore: true */ process.cwd();
+  if (path.basename(cwd) === "dashboard") {
+    return path.join(cwd, ".generated");
+  }
+  const dashboardDir = path.join(cwd, "dashboard");
+  if (fs.existsSync(path.join(dashboardDir, "package.json"))) {
+    return path.join(dashboardDir, ".generated");
+  }
+  return path.join(cwd, ".generated");
 }
 
 export function readAtlasArtifact(windowHours: number): AtlasArtifactPayload | null {
