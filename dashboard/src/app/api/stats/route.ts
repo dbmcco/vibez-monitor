@@ -13,7 +13,8 @@ export async function GET(request: NextRequest) {
     }
     const stats = await getStatsDashboard(days);
     return NextResponse.json({ stats });
-  } catch {
+  } catch (error) {
+    console.error("GET /api/stats failed:", error);
     return NextResponse.json({ stats: null }, { status: 500 });
   }
 }
