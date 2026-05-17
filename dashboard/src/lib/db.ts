@@ -2857,9 +2857,340 @@ export async function getVibezRadarSnapshot(
   };
 }
 
+function disabledSemanticAnalytics(): SemanticAnalytics {
+  return {
+    enabled: false,
+    coverage_pct: 0,
+    orphan_pct: 0,
+    avg_coherence: 0,
+    drift_risk: "low",
+    checks: ["semantic analytics require Postgres/pgvector; SQLite stats use tabular aggregates."],
+    arcs: [],
+    trends: [],
+  };
+}
+
+function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashboard {
+  const resolvedWindow = resolveWindowDays(windowDays);
+  const cutoffTs =
+    resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  const userAliases = loadUserAliases();
+
+  try {
+    const scope = loadSqliteRoomScope(db);
+    const roomScope = buildSqliteRoomScopeWhere("m", scope);
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
+    if (roomScope.clause) {
+      whereParts.push(roomScope.clause);
+      params.push(...roomScope.params);
+    }
+    if (cutoffTs !== null) {
+      whereParts.push("m.timestamp >= ?");
+      params.push(cutoffTs);
+    }
+    const where = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+    const rowsData = db
+      .prepare(
+        `SELECT m.timestamp, m.sender_id, m.sender_name, m.room_name, m.body,
+                c.topics, c.relevance_score
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         ${where}
+         ORDER BY m.timestamp ASC`,
+      )
+      .all(...params) as Array<{
+        timestamp: number;
+        sender_id: string | null;
+        sender_name: string;
+        room_name: string;
+        body: string;
+        topics: string | null;
+        relevance_score: number | null;
+      }>;
+
+    const timelineDays =
+      resolvedWindow === null
+        ? rowsData.length > 0
+          ? enumerateDaysFromTs(rowsData[0].timestamp, Date.now())
+          : enumerateDays(30)
+        : enumerateDays(resolvedWindow);
+    const windowDaysValue = timelineDays.length;
+    const timelineMap = new Map<string, number>(timelineDays.map((day) => [day, 0]));
+    const classifiedMap = new Map<string, number>(timelineDays.map((day) => [day, 0]));
+    const withTopicsMap = new Map<string, number>(timelineDays.map((day) => [day, 0]));
+    const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const weekdayCounts = Array.from({ length: 7 }, () => 0);
+    const hourCounts = Array.from({ length: 24 }, () => 0);
+
+    const users = new Map<string, StatBaseAccumulator>();
+    const channels = new Map<string, StatBaseAccumulator>();
+    const topics = new Map<string, TopicAccumulator>();
+    const userIds = new Map<string, Set<string>>();
+    const userTopicCounts = new Map<string, Map<string, number>>();
+    const userChannels = new Map<string, Set<string>>();
+    const userChannelStats = new Map<string, Map<string, StatBaseAccumulator>>();
+    const userPossiblePhone = new Map<string, boolean>();
+    let relevanceTotal = 0;
+    let relevanceCount = 0;
+
+    for (const row of rowsData) {
+      const ts = Number(row.timestamp);
+      if (!Number.isFinite(ts)) continue;
+      const dateKey = dateKeyFromTs(ts);
+      timelineMap.set(dateKey, (timelineMap.get(dateKey) || 0) + 1);
+      const parsedTopics = parseTopics(row.topics);
+      if (row.topics !== null) classifiedMap.set(dateKey, (classifiedMap.get(dateKey) || 0) + 1);
+      if (parsedTopics.length > 0) withTopicsMap.set(dateKey, (withTopicsMap.get(dateKey) || 0) + 1);
+      const d = new Date(ts);
+      weekdayCounts[d.getDay()] += 1;
+      hourCounts[d.getHours()] += 1;
+
+      if (row.relevance_score !== null && row.relevance_score !== undefined) {
+        relevanceTotal += row.relevance_score;
+        relevanceCount += 1;
+      }
+
+      const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+      const senderId = String(row.sender_id || "").trim();
+      const userAcc = users.get(sender) || {
+        messages: 0,
+        activeDays: new Set<string>(),
+        firstTs: ts,
+        lastTs: ts,
+        relevanceTotal: 0,
+        relevanceCount: 0,
+      };
+      userAcc.messages += 1;
+      userAcc.activeDays.add(dateKey);
+      userAcc.firstTs = Math.min(userAcc.firstTs, ts);
+      userAcc.lastTs = Math.max(userAcc.lastTs, ts);
+      if (row.relevance_score !== null && row.relevance_score !== undefined) {
+        userAcc.relevanceTotal += row.relevance_score;
+        userAcc.relevanceCount += 1;
+      }
+      users.set(sender, userAcc);
+
+      if (senderId) {
+        const ids = userIds.get(sender) || new Set<string>();
+        ids.add(senderId);
+        userIds.set(sender, ids);
+      }
+      if (PHONE_LIKE_RE.test(senderId) || PHONE_LIKE_RE.test(row.sender_name || "")) {
+        userPossiblePhone.set(sender, true);
+      }
+
+      const channel = row.room_name || "Unknown";
+      const channelAcc = channels.get(channel) || {
+        messages: 0,
+        activeDays: new Set<string>(),
+        firstTs: ts,
+        lastTs: ts,
+        relevanceTotal: 0,
+        relevanceCount: 0,
+      };
+      channelAcc.messages += 1;
+      channelAcc.activeDays.add(dateKey);
+      channelAcc.firstTs = Math.min(channelAcc.firstTs, ts);
+      channelAcc.lastTs = Math.max(channelAcc.lastTs, ts);
+      if (row.relevance_score !== null && row.relevance_score !== undefined) {
+        channelAcc.relevanceTotal += row.relevance_score;
+        channelAcc.relevanceCount += 1;
+      }
+      channels.set(channel, channelAcc);
+
+      const userTopicMap = userTopicCounts.get(sender) || new Map<string, number>();
+      const userChannelSet = userChannels.get(sender) || new Set<string>();
+      userChannelSet.add(channel);
+      userChannels.set(sender, userChannelSet);
+      const channelMap = userChannelStats.get(sender) || new Map<string, StatBaseAccumulator>();
+      const personChannelAcc = channelMap.get(channel) || {
+        messages: 0,
+        activeDays: new Set<string>(),
+        firstTs: ts,
+        lastTs: ts,
+        relevanceTotal: 0,
+        relevanceCount: 0,
+      };
+      personChannelAcc.messages += 1;
+      personChannelAcc.activeDays.add(dateKey);
+      personChannelAcc.firstTs = Math.min(personChannelAcc.firstTs, ts);
+      personChannelAcc.lastTs = Math.max(personChannelAcc.lastTs, ts);
+      channelMap.set(channel, personChannelAcc);
+      userChannelStats.set(sender, channelMap);
+
+      for (const topic of parsedTopics) {
+        userTopicMap.set(topic, (userTopicMap.get(topic) || 0) + 1);
+        const topicAcc = topics.get(topic) || {
+          messages: 0,
+          activeDays: new Set<string>(),
+          firstTs: ts,
+          lastTs: ts,
+          relevanceTotal: 0,
+          relevanceCount: 0,
+          daily: new Map<string, number>(),
+          weekdayCounts: Array.from({ length: 7 }, () => 0),
+          hourCounts: Array.from({ length: 24 }, () => 0),
+        };
+        topicAcc.messages += 1;
+        topicAcc.activeDays.add(dateKey);
+        topicAcc.firstTs = Math.min(topicAcc.firstTs, ts);
+        topicAcc.lastTs = Math.max(topicAcc.lastTs, ts);
+        topicAcc.daily.set(dateKey, (topicAcc.daily.get(dateKey) || 0) + 1);
+        topicAcc.weekdayCounts[d.getDay()] += 1;
+        topicAcc.hourCounts[d.getHours()] += 1;
+        if (row.relevance_score !== null && row.relevance_score !== undefined) {
+          topicAcc.relevanceTotal += row.relevance_score;
+          topicAcc.relevanceCount += 1;
+        }
+        topics.set(topic, topicAcc);
+      }
+      userTopicCounts.set(sender, userTopicMap);
+    }
+
+    const timeline = timelineDays.map((date) => ({ date, count: timelineMap.get(date) || 0 }));
+    const classified = timelineDays.map((date) => ({ date, count: classifiedMap.get(date) || 0 }));
+    const with_topics = timelineDays.map((date) => ({ date, count: withTopicsMap.get(date) || 0 }));
+    const avgTopicCoverage =
+      rowsData.length > 0
+        ? Number((with_topics.reduce((sum, day) => sum + day.count, 0) / rowsData.length).toFixed(3))
+        : 0;
+
+    const peopleDirectory: PersonDirectoryEntry[] = Array.from(users.entries())
+      .map(([name, acc]) => {
+        const ranked = finalizeRanked(name, acc);
+        const ids = Array.from(userIds.get(name) || []);
+        const channelMap = userChannelStats.get(name) || new Map<string, StatBaseAccumulator>();
+        return {
+          ...ranked,
+          sender_id: ids[0] || null,
+          channels: Array.from(channelMap.entries())
+            .map(([channelName, channelAcc]) => ({
+              name: channelName,
+              messages: channelAcc.messages,
+              first_seen: dateKeyFromTs(channelAcc.firstTs),
+              last_seen: dateKeyFromTs(channelAcc.lastTs),
+            }))
+            .sort((a, b) => b.messages - a.messages || a.name.localeCompare(b.name)),
+          top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 6),
+          possible_phone: userPossiblePhone.get(name) || false,
+        };
+      })
+      .sort((a, b) => b.messages - a.messages || a.name.localeCompare(b.name));
+
+    const topicStats: TopicStat[] = Array.from(topics.entries())
+      .map(([topic, acc]) => {
+        const spanDays = Math.max(1, Math.floor((acc.lastTs - acc.firstTs) / (24 * 60 * 60 * 1000)) + 1);
+        const activeDays = acc.activeDays.size;
+        const ratio = activeDays / spanDays;
+        return {
+          topic,
+          started_on: dateKeyFromTs(acc.firstTs),
+          started_in_window: dateKeyFromTs(acc.firstTs),
+          last_seen: dateKeyFromTs(acc.lastTs),
+          message_count: acc.messages,
+          active_days: activeDays,
+          span_days: spanDays,
+          recurrence_ratio: Number(ratio.toFixed(3)),
+          recurrence_label: recurrenceLabel(ratio, activeDays),
+          last_7d: 0,
+          prev_7d: 0,
+          trend: "flat" as const,
+          peak_weekday: weekdayLabels[peakIndex(acc.weekdayCounts)],
+          peak_hour: peakIndex(acc.hourCounts),
+          daily: timelineDays.map((date) => ({ date, count: acc.daily.get(date) || 0 })),
+        };
+      })
+      .sort((a, b) => b.message_count - a.message_count)
+      .slice(0, 40);
+
+    const relationshipNodes: RelationshipNode[] = Array.from(users.entries())
+      .map(([name, acc]) => ({
+        id: name,
+        messages: acc.messages,
+        channels: userChannels.get(name)?.size || 0,
+        replies_out: 0,
+        replies_in: 0,
+        dm_signals: 0,
+        top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
+      }))
+      .sort((a, b) => b.messages - a.messages)
+      .slice(0, 220);
+
+    return {
+      window_days: windowDaysValue,
+      generated_at: new Date().toISOString(),
+      scope: {
+        mode: scope.mode,
+        active_group_count: Math.max(scope.activeGroupIds.length, scope.activeGroupNames.length),
+        excluded_groups: scope.excludedGroups,
+      },
+      totals: {
+        messages: rowsData.length,
+        users: users.size,
+        channels: channels.size,
+        topics: topics.size,
+        avg_relevance: relevanceCount > 0 ? Number((relevanceTotal / relevanceCount).toFixed(2)) : null,
+      },
+      timeline,
+      coverage: { classified, with_topics, avg_topic_coverage: avgTopicCoverage },
+      users: Array.from(users.entries())
+        .map(([name, acc]) => finalizeRanked(name, acc))
+        .sort((a, b) => b.messages - a.messages)
+        .slice(0, 25),
+      channels: Array.from(channels.entries())
+        .map(([name, acc]) => finalizeRanked(name, acc))
+        .sort((a, b) => b.messages - a.messages)
+        .slice(0, 25),
+      people_directory: peopleDirectory,
+      topics: topicStats,
+      cooccurrence: [],
+      seasonality: {
+        by_weekday: weekdayLabels.map((weekday, i) => ({ weekday, count: weekdayCounts[i] })),
+        by_hour: Array.from({ length: 24 }, (_, hour) => ({ hour, count: hourCounts[hour] })),
+        topic_peaks: topicStats.slice(0, 20).map((topic) => ({
+          topic: topic.topic,
+          messages: topic.message_count,
+          peak_weekday: topic.peak_weekday,
+          peak_hour: topic.peak_hour,
+        })),
+      },
+      network: {
+        relationships: {
+          nodes: relationshipNodes,
+          edges: [],
+          summaries: {
+            included_nodes: relationshipNodes.length,
+            total_users_in_window: users.size,
+            total_messages: rowsData.length,
+            directed_edges: 0,
+            dm_signal_messages: 0,
+          },
+        },
+        topic_alignment: {
+          nodes: relationshipNodes.slice(0, 120),
+          edges: [],
+          summaries: {
+            included_nodes: Math.min(relationshipNodes.length, 120),
+            compared_nodes: Math.min(relationshipNodes.length, 120),
+            alignment_edges: 0,
+          },
+        },
+      },
+      semantic: disabledSemanticAnalytics(),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export async function getStatsDashboard(
   windowDays: number | null = 90,
 ): Promise<StatsDashboard> {
+  if (shouldUseSqliteAtlas()) {
+    return getStatsDashboardFromSqlite(windowDays);
+  }
   const resolvedWindow = resolveWindowDays(windowDays);
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
