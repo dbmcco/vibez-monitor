@@ -53,6 +53,32 @@ interface AtlasNarrative {
   };
 }
 
+interface AtlasPeopleInsights {
+  window_days: 7;
+  generated_at: string;
+  new_faces: Array<{
+    name: string;
+    sender_id: string | null;
+    first_seen: string;
+    first_seen_ts: number;
+    first_channel: string;
+    message_count_7d: number;
+    channels: string[];
+    intro_refs: string[];
+    detection_reasons: Array<"first_seen" | "intros_channel" | "member_event" | "phone_or_name_addition">;
+  }>;
+  top_contributors: Array<{
+    name: string;
+    sender_id: string | null;
+    message_count_7d: number;
+    active_days_7d: number;
+    channels: string[];
+    latest_seen: string;
+    latest_seen_ts: number;
+    citation_refs: string[];
+  }>;
+}
+
 interface AtlasSnapshot {
   generated_at: string;
   window: { start: string; end: string; hours: number };
@@ -94,6 +120,7 @@ interface AtlasSnapshot {
     last_seen: string | null;
   }>;
   citations: Record<string, AtlasCitation>;
+  people: AtlasPeopleInsights;
   narrative: AtlasNarrative;
 }
 
@@ -277,6 +304,8 @@ export default function AtlasPage() {
         windowHours={windowHours}
         onWindowHoursChange={handleWindowHoursChange}
       />
+
+      <PeopleDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
 
       <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -564,6 +593,120 @@ function NewspaperList({ title, items }: { title: string; items: string[] }) {
       </div>
     </section>
   );
+}
+
+function PeopleDesk({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const newFaces = atlas.people?.new_faces || [];
+  const topContributors = atlas.people?.top_contributors || [];
+  return (
+    <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#cbbf9d] pb-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+            Society Desk
+          </p>
+          <h2 className="mt-1 font-serif text-2xl font-black">New Faces This Week</h2>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-[#5e5238]">
+          A rolling seven-day read on who newly appeared, where they surfaced, and who carried the
+          conversation.
+        </p>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.9fr]">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {newFaces.length > 0 ? (
+            newFaces.map((person) => (
+              <article key={`${person.name}-${person.first_seen_ts}`} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8b5f21]">
+                  <span>{person.first_channel}</span>
+                  {person.detection_reasons.slice(0, 2).map((reason) => (
+                    <span key={reason} className="text-[#786846]">
+                      {personReasonLabel(reason)}
+                    </span>
+                  ))}
+                </div>
+                <h3 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">
+                  {person.name}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+                  First seen {formatTimestamp(person.first_seen_ts)}. Posted{" "}
+                  {person.message_count_7d.toLocaleString()} time
+                  {person.message_count_7d === 1 ? "" : "s"} across{" "}
+                  {person.channels.slice(0, 3).join(", ") || "tracked channels"}.
+                </p>
+                {person.intro_refs[0] && (
+                  <button
+                    onClick={() => onOpenCitation(person.intro_refs[0])}
+                    className="mt-3 border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+                  >
+                    Open intro evidence
+                  </button>
+                )}
+              </article>
+            ))
+          ) : (
+            <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4 text-sm leading-6 text-[#5e5238] sm:col-span-2">
+              No new-face signals in the rolling seven-day window. The directory and contributor
+              list still show who was active.
+            </div>
+          )}
+        </div>
+
+        <aside className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+          <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Top Contributors</h3>
+          <div className="mt-3 space-y-3">
+            {topContributors.slice(0, 8).map((person, index) => (
+              <div key={`${person.name}-${person.latest_seen_ts}`} className="border-b border-[#d8cba9] pb-3 last:border-b-0 last:pb-0">
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="font-semibold text-[#1f1a12]">
+                    {index + 1}. {person.name}
+                  </p>
+                  <p className="text-xs text-[#786846]">{person.message_count_7d} msgs</p>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-[#5e5238]">
+                  {person.active_days_7d} active day{person.active_days_7d === 1 ? "" : "s"} ·{" "}
+                  {person.channels.slice(0, 3).join(", ") || "tracked channels"}
+                </p>
+                {person.citation_refs[0] && (
+                  <button
+                    onClick={() => onOpenCitation(person.citation_refs[0])}
+                    className="mt-2 text-xs font-semibold text-[#8b5f21] underline decoration-[#cbbf9d] underline-offset-4 hover:text-[#1f1a12]"
+                  >
+                    Open recent evidence
+                  </button>
+                )}
+              </div>
+            ))}
+            {topContributors.length === 0 && (
+              <p className="text-sm text-[#786846]">No contributor activity in the seven-day window.</p>
+            )}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function personReasonLabel(reason: AtlasPeopleInsights["new_faces"][number]["detection_reasons"][number]): string {
+  switch (reason) {
+    case "first_seen":
+      return "new";
+    case "intros_channel":
+      return "intro";
+    case "member_event":
+      return "joined";
+    case "phone_or_name_addition":
+      return "identity";
+    default:
+      return reason;
+  }
 }
 
 function AtAGlance({ atlas }: { atlas: AtlasSnapshot }) {

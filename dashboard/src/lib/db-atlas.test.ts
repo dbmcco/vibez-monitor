@@ -58,10 +58,13 @@ describe("getAtlasSnapshot", () => {
         rows: [
           {
             id: "m1",
+            room_id: "agents",
             room_name: "Agents",
+            sender_id: "@dana:example",
             sender_name: "Dana",
             body: "Agents need evaluated workflows.",
             timestamp: Date.parse("2026-05-16T12:00:00Z"),
+            raw_event: "{}",
             relevance_score: 8,
             topics: JSON.stringify(["agents"]),
             alert_level: "normal",
@@ -82,12 +85,34 @@ describe("getAtlasSnapshot", () => {
             value_score: 2.4,
           },
         ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "m1",
+            room_id: "agents",
+            room_name: "Agents",
+            sender_id: "@dana:example",
+            sender_name: "Dana",
+            body: "Agents need evaluated workflows.",
+            timestamp: Date.now() - 60 * 60 * 1000,
+            raw_event: "{}",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            person_key: "@dana:example",
+            first_ts: Date.now() - 60 * 60 * 1000,
+          },
+        ],
       });
 
     const { getAtlasSnapshot } = await import("./db");
     const atlas = await getAtlasSnapshot({ windowHours: 48 });
 
-    expect(queryMock).toHaveBeenCalledTimes(5);
+    expect(queryMock).toHaveBeenCalledTimes(7);
     expect(atlas.overview.messages).toBe(1);
     expect(atlas.matrix[0]).toMatchObject({
       channel: "Agents",
@@ -98,5 +123,10 @@ describe("getAtlasSnapshot", () => {
       ref: "vibez:link:3",
       title: "Agent workflow",
     });
+    expect(atlas.people.top_contributors[0]).toMatchObject({
+      name: "Dana",
+      message_count_7d: 1,
+    });
+    expect(atlas.people.new_faces[0].detection_reasons).toContain("first_seen");
   });
 });

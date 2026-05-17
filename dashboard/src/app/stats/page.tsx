@@ -17,6 +17,23 @@ interface RankedStat {
   avg_relevance: number | null;
 }
 
+interface PersonDirectoryEntry {
+  name: string;
+  sender_id: string | null;
+  messages: number;
+  active_days: number;
+  first_seen: string;
+  last_seen: string;
+  channels: Array<{
+    name: string;
+    messages: number;
+    first_seen: string;
+    last_seen: string;
+  }>;
+  top_topics: string[];
+  possible_phone: boolean;
+}
+
 interface TopicStat {
   topic: string;
   started_on: string;
@@ -148,6 +165,7 @@ interface StatsDashboard {
   };
   users: RankedStat[];
   channels: RankedStat[];
+  people_directory: PersonDirectoryEntry[];
   topics: TopicStat[];
   cooccurrence: TopicCooccurrence[];
   seasonality: SeasonalityStats;
@@ -2646,6 +2664,7 @@ const SECTION_LINKS = [
   { id: "people-network", label: "People Network" },
   { id: "topic-graph", label: "Graph" },
   { id: "contributors", label: "Users + Channels" },
+  { id: "people-directory", label: "Directory" },
   { id: "topic-lifecycle", label: "Lifecycle" },
   { id: "topic-drilldown", label: "Drilldown" },
   { id: "cooccurrence", label: "Co-Occurrence" },
@@ -2663,6 +2682,7 @@ export default function StatsPage() {
   });
   const [topicDrilldown, setTopicDrilldown] = useState<TopicDrilldown | null>(null);
   const [topicInsights, setTopicInsights] = useState<TopicInsights | null>(null);
+  const [peopleQuery, setPeopleQuery] = useState("");
   const drilldownRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -2716,6 +2736,22 @@ export default function StatsPage() {
     if (!stats) return "";
     return new Date(stats.generated_at).toLocaleString();
   }, [stats]);
+  const filteredPeople = useMemo(() => {
+    if (!stats) return [];
+    const query = peopleQuery.trim().toLowerCase();
+    if (!query) return stats.people_directory;
+    return stats.people_directory.filter((person) => {
+      const haystack = [
+        person.name,
+        person.sender_id || "",
+        ...person.channels.map((channel) => channel.name),
+        ...person.top_topics,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [stats, peopleQuery]);
 
   const activeDrilldown =
     topicDrilldown && topicDrilldown.topic === effectiveSelectedTopic
@@ -3148,6 +3184,87 @@ export default function StatsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <section id="people-directory" className="vibe-panel scroll-mt-28 rounded-xl p-5">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="vibe-title text-lg">People Directory</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              Everyone observed in the selected window, with channel membership inferred from posting activity.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={peopleQuery}
+              onChange={(event) => setPeopleQuery(event.target.value)}
+              placeholder="Search people, channels, topics"
+              className="w-64 max-w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/60"
+            />
+            <span className="text-xs text-slate-400">
+              {filteredPeople.length} / {stats.people_directory.length}
+            </span>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-slate-400">
+              <tr>
+                <th className="pb-2 pr-3">Person</th>
+                <th className="pb-2 pr-3">Msgs</th>
+                <th className="pb-2 pr-3">Active</th>
+                <th className="pb-2 pr-3">Observed Channels</th>
+                <th className="pb-2 pr-3">Top Topics</th>
+                <th className="pb-2">Window</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPeople.slice(0, 200).map((person) => (
+                <tr key={`${person.name}-${person.sender_id || "name"}`} className="border-t border-slate-700/60 align-top">
+                  <td className="py-3 pr-3 text-slate-200">
+                    <div className="font-semibold">{person.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {person.sender_id ? person.sender_id : "no sender id"}
+                      {person.possible_phone ? " · phone-like id" : ""}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-3">{person.messages}</td>
+                  <td className="py-3 pr-3">{person.active_days}d</td>
+                  <td className="py-3 pr-3">
+                    <div className="flex max-w-xl flex-wrap gap-1.5">
+                      {person.channels.slice(0, 8).map((channel) => (
+                        <span
+                          key={`${person.name}-${channel.name}`}
+                          className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-xs text-slate-200"
+                          title={`${channel.messages} messages, ${channel.first_seen} to ${channel.last_seen}`}
+                        >
+                          {channel.name} · {channel.messages}
+                        </span>
+                      ))}
+                      {person.channels.length > 8 && (
+                        <span className="rounded border border-slate-700/70 px-2 py-1 text-xs text-slate-400">
+                          +{person.channels.length - 8}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-3 text-xs text-slate-300">
+                    {person.top_topics.length > 0 ? person.top_topics.join(", ") : "n/a"}
+                  </td>
+                  <td className="py-3 text-xs text-slate-400">
+                    {person.first_seen} to {person.last_seen}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filteredPeople.length > 200 && (
+            <p className="mt-3 text-xs text-slate-400">
+              Showing the first 200 matches. Use search to narrow the directory.
+            </p>
+          )}
         </div>
       </section>
 

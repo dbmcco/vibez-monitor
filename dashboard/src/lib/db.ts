@@ -6,6 +6,8 @@ import {
   type AtlasSnapshot,
   type AtlasMessageRow,
   type AtlasLinkRow,
+  type AtlasPeopleInsights,
+  type AtlasNewFaceReason,
 } from "./atlas";
 import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search";
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
@@ -1420,6 +1422,277 @@ export async function getRecentUpdateSnapshot(): Promise<RecentUpdateSnapshot> {
   };
 }
 
+interface AtlasPeopleWindowRow {
+  id: string;
+  room_id: string | null;
+  room_name: string | null;
+  sender_id: string | null;
+  sender_name: string | null;
+  body: string | null;
+  timestamp: number;
+  raw_event: string | null;
+}
+
+interface AtlasPersonFirstSeenRow {
+  person_key: string | null;
+  first_ts: number | string | null;
+}
+
+const PHONE_LIKE_RE = /(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/;
+
+function pushLimitedUnique<T>(items: T[], item: T, limit: number): void {
+  if (items.includes(item)) return;
+  if (items.length >= limit) return;
+  items.push(item);
+}
+
+function atlasPersonKeys(row: AtlasPeopleWindowRow, aliases: UserAliasMap): string[] {
+  const keys = new Set<string>();
+  const senderId = String(row.sender_id || "").trim();
+  const rawName = String(row.sender_name || "").trim();
+  const normalizedName = normalizeSenderName(rawName || "Unknown", aliases);
+  if (senderId) keys.add(senderId);
+  if (rawName) keys.add(rawName.toLowerCase());
+  if (normalizedName) keys.add(normalizedName.toLowerCase());
+  return Array.from(keys);
+}
+
+function atlasPrimaryPersonKey(row: AtlasPeopleWindowRow, aliases: UserAliasMap): string {
+  const senderId = String(row.sender_id || "").trim();
+  if (senderId) return senderId;
+  return normalizeSenderName(String(row.sender_name || "Unknown"), aliases).toLowerCase();
+}
+
+function rawEventHasMemberSignal(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as {
+      type?: unknown;
+      content?: { membership?: unknown; displayname?: unknown };
+      unsigned?: { prev_content?: { displayname?: unknown; membership?: unknown } };
+    };
+    if (parsed.type === "m.room.member") return true;
+    const membership = String(parsed.content?.membership || "");
+    if (["join", "invite"].includes(membership)) return true;
+    if (parsed.content?.displayname || parsed.unsigned?.prev_content?.displayname) return true;
+  } catch {
+    return /\bm\.room\.member\b|\b(joined|invited|added)\b/i.test(raw);
+  }
+  return false;
+}
+
+function detectAtlasPersonReasons(row: AtlasPeopleWindowRow): AtlasNewFaceReason[] {
+  const reasons: AtlasNewFaceReason[] = [];
+  const room = String(row.room_name || "");
+  const senderId = String(row.sender_id || "");
+  const senderName = String(row.sender_name || "");
+  if (/\bintro(s|ductions)?\b/i.test(room)) reasons.push("intros_channel");
+  if (rawEventHasMemberSignal(row.raw_event)) reasons.push("member_event");
+  if (PHONE_LIKE_RE.test(senderId) || PHONE_LIKE_RE.test(senderName)) {
+    reasons.push("phone_or_name_addition");
+  }
+  return reasons;
+}
+
+function buildAtlasPeopleInsightsFromRows(input: {
+  generatedAt: string;
+  rows: AtlasPeopleWindowRow[];
+  firstSeenRows: AtlasPersonFirstSeenRow[];
+  aliases: UserAliasMap;
+}): AtlasPeopleInsights {
+  const recentStartTs = Date.parse(input.generatedAt) - 7 * 24 * 60 * 60 * 1000;
+  const firstSeenByKey = new Map<string, number>();
+  for (const row of input.firstSeenRows) {
+    const key = String(row.person_key || "").trim();
+    const firstTs = Number(row.first_ts);
+    if (!key || !Number.isFinite(firstTs)) continue;
+    firstSeenByKey.set(key, firstTs);
+  }
+
+  const people = new Map<string, {
+    name: string;
+    senderId: string | null;
+    count: number;
+    activeDays: Set<string>;
+    channels: Set<string>;
+    firstRecentTs: number;
+    firstRecentChannel: string;
+    latestTs: number;
+    citationRefs: string[];
+    introRefs: string[];
+    reasons: Set<AtlasNewFaceReason>;
+    firstEverTs: number;
+  }>();
+
+  for (const row of input.rows) {
+    const ts = Number(row.timestamp);
+    if (!Number.isFinite(ts)) continue;
+    const key = atlasPrimaryPersonKey(row, input.aliases);
+    const name = normalizeSenderName(String(row.sender_name || "Unknown"), input.aliases);
+    const channel = String(row.room_name || "Unknown");
+    const personKeys = atlasPersonKeys(row, input.aliases);
+    const knownFirstTimes = personKeys
+      .map((personKey) => firstSeenByKey.get(personKey))
+      .filter((value): value is number => value !== undefined);
+    const firstEverTs = Math.min(...knownFirstTimes, ts);
+    const entry = people.get(key) || {
+      name,
+      senderId: row.sender_id || null,
+      count: 0,
+      activeDays: new Set<string>(),
+      channels: new Set<string>(),
+      firstRecentTs: ts,
+      firstRecentChannel: channel,
+      latestTs: ts,
+      citationRefs: [],
+      introRefs: [],
+      reasons: new Set<AtlasNewFaceReason>(),
+      firstEverTs,
+    };
+    entry.count += 1;
+    entry.activeDays.add(dateKeyFromTs(ts));
+    entry.channels.add(channel);
+    if (ts < entry.firstRecentTs) {
+      entry.firstRecentTs = ts;
+      entry.firstRecentChannel = channel;
+    }
+    entry.latestTs = Math.max(entry.latestTs, ts);
+    entry.firstEverTs = Math.min(entry.firstEverTs, firstEverTs);
+    pushLimitedUnique(entry.citationRefs, `vibez:message:${row.id}`, 4);
+    const reasons = detectAtlasPersonReasons(row);
+    for (const reason of reasons) entry.reasons.add(reason);
+    if (reasons.includes("intros_channel")) {
+      pushLimitedUnique(entry.introRefs, `vibez:message:${row.id}`, 3);
+    }
+    people.set(key, entry);
+  }
+
+  const topContributors = Array.from(people.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10)
+    .map((entry) => ({
+      name: entry.name,
+      sender_id: entry.senderId,
+      message_count_7d: entry.count,
+      active_days_7d: entry.activeDays.size,
+      channels: Array.from(entry.channels).sort(),
+      latest_seen: new Date(entry.latestTs).toISOString(),
+      latest_seen_ts: entry.latestTs,
+      citation_refs: entry.citationRefs,
+    }));
+
+  const newFaces = Array.from(people.values())
+    .map((entry) => {
+      const reasons = new Set(entry.reasons);
+      if (entry.firstEverTs >= recentStartTs) reasons.add("first_seen");
+      return { entry, reasons: Array.from(reasons) };
+    })
+    .filter(({ reasons }) => reasons.length > 0)
+    .sort((a, b) => b.entry.firstEverTs - a.entry.firstEverTs)
+    .slice(0, 12)
+    .map(({ entry, reasons }) => ({
+      name: entry.name,
+      sender_id: entry.senderId,
+      first_seen: new Date(entry.firstEverTs).toISOString(),
+      first_seen_ts: entry.firstEverTs,
+      first_channel: entry.firstRecentChannel,
+      message_count_7d: entry.count,
+      channels: Array.from(entry.channels).sort(),
+      intro_refs: entry.introRefs,
+      detection_reasons: reasons.sort(),
+    }));
+
+  return {
+    window_days: 7,
+    generated_at: input.generatedAt,
+    new_faces: newFaces,
+    top_contributors: topContributors,
+  };
+}
+
+function getAtlasPeopleInsightsFromSqlite(
+  db: Database.Database,
+  scope: RoomScope,
+  aliases: UserAliasMap,
+  now: Date,
+): AtlasPeopleInsights {
+  const cutoffTs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const roomScope = buildSqliteRoomScopeWhere("m", scope);
+  const whereParts = ["m.timestamp >= ?"];
+  const params: unknown[] = [cutoffTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+              m.timestamp, m.raw_event
+       FROM messages m
+       WHERE ${whereParts.join(" AND ")}
+       ORDER BY m.timestamp ASC`,
+    )
+    .all(...params) as AtlasPeopleWindowRow[];
+
+  const firstScope = buildSqliteRoomScopeWhere("m", scope);
+  const firstRows = db
+    .prepare(
+      `SELECT COALESCE(NULLIF(m.sender_id, ''), LOWER(COALESCE(m.sender_name, ''))) AS person_key,
+              MIN(m.timestamp) AS first_ts
+       FROM messages m
+       ${firstScope.clause ? `WHERE ${firstScope.clause}` : ""}
+       GROUP BY person_key`,
+    )
+    .all(...firstScope.params) as AtlasPersonFirstSeenRow[];
+
+  return buildAtlasPeopleInsightsFromRows({
+    generatedAt: now.toISOString(),
+    rows,
+    firstSeenRows: firstRows,
+    aliases,
+  });
+}
+
+async function getAtlasPeopleInsights(
+  scope: RoomScope,
+  aliases: UserAliasMap,
+  now: Date,
+): Promise<AtlasPeopleInsights> {
+  const cutoffTs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const roomScope = buildRoomScopeWhere("m", scope, 2);
+  const whereParts = ["m.timestamp >= $1"];
+  const params: unknown[] = [cutoffTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+  const { rows } = await pool.query(
+    `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+            m.timestamp, m.raw_event
+     FROM messages m
+     WHERE ${whereParts.join(" AND ")}
+     ORDER BY m.timestamp ASC`,
+    params,
+  );
+
+  const firstScope = buildRoomScopeWhere("m", scope, 1);
+  const { rows: firstRows } = await pool.query(
+    `SELECT COALESCE(NULLIF(m.sender_id, ''), LOWER(COALESCE(m.sender_name, ''))) AS person_key,
+            MIN(m.timestamp) AS first_ts
+     FROM messages m
+     ${firstScope.clause ? `WHERE ${firstScope.clause}` : ""}
+     GROUP BY person_key`,
+    firstScope.params,
+  );
+
+  return buildAtlasPeopleInsightsFromRows({
+    generatedAt: now.toISOString(),
+    rows: rows as AtlasPeopleWindowRow[],
+    firstSeenRows: firstRows as AtlasPersonFirstSeenRow[],
+    aliases,
+  });
+}
+
 function getAtlasSnapshotFromSqlite(windowHours: number): AtlasSnapshot {
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
@@ -1438,7 +1711,8 @@ function getAtlasSnapshotFromSqlite(windowHours: number): AtlasSnapshot {
 
     const messageRows = db
       .prepare(
-        `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+        `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+                m.timestamp, m.raw_event,
                 c.relevance_score, c.topics, c.alert_level
          FROM messages m
          LEFT JOIN classifications c ON m.id = c.message_id
@@ -1465,6 +1739,7 @@ function getAtlasSnapshotFromSqlite(windowHours: number): AtlasSnapshot {
          LIMIT 80`,
       )
       .all(...linkParams) as AtlasLinkRow[];
+    const people = getAtlasPeopleInsightsFromSqlite(db, scope, userAliases, now);
 
     return buildAtlasSnapshotFromRows({
       generatedAt: now.toISOString(),
@@ -1475,6 +1750,7 @@ function getAtlasSnapshotFromSqlite(windowHours: number): AtlasSnapshot {
         sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
       })),
       links: linkRows,
+      people,
     });
   } finally {
     db.close();
@@ -1500,7 +1776,8 @@ export async function getAtlasSnapshot(opts: { windowHours?: number } = {}): Pro
   }
 
   const { rows: messageRows } = await pool.query(
-    `SELECT m.id, m.room_name, m.sender_name, m.body, m.timestamp,
+    `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+            m.timestamp, m.raw_event,
             c.relevance_score, c.topics, c.alert_level
      FROM messages m
      LEFT JOIN classifications c ON m.id = c.message_id
@@ -1520,6 +1797,7 @@ export async function getAtlasSnapshot(opts: { windowHours?: number } = {}): Pro
      LIMIT 80`,
     [linkCutoff],
   );
+  const people = await getAtlasPeopleInsights(scope, userAliases, now);
 
   return buildAtlasSnapshotFromRows({
     generatedAt: now.toISOString(),
@@ -1530,6 +1808,7 @@ export async function getAtlasSnapshot(opts: { windowHours?: number } = {}): Pro
       sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
     })),
     links: linkRows as AtlasLinkRow[],
+    people,
   });
 }
 
@@ -1692,6 +1971,25 @@ export interface RankedStat {
   avg_relevance: number | null;
 }
 
+export interface PersonChannelMembership {
+  name: string;
+  messages: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface PersonDirectoryEntry {
+  name: string;
+  sender_id: string | null;
+  messages: number;
+  active_days: number;
+  first_seen: string;
+  last_seen: string;
+  channels: PersonChannelMembership[];
+  top_topics: string[];
+  possible_phone: boolean;
+}
+
 export interface TopicStat {
   topic: string;
   started_on: string;
@@ -1804,6 +2102,7 @@ export interface StatsDashboard {
   };
   users: RankedStat[];
   channels: RankedStat[];
+  people_directory: PersonDirectoryEntry[];
   topics: TopicStat[];
   cooccurrence: TopicCooccurrence[];
   seasonality: SeasonalityStats;
@@ -2589,7 +2888,7 @@ export async function getStatsDashboard(
   const windowWhere = windowWhereParts.length > 0 ? `WHERE ${windowWhereParts.join(" AND ")}` : "";
 
   const { rows } = await pool.query(
-    `SELECT m.timestamp, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
+    `SELECT m.timestamp, m.sender_id, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
      FROM messages m
      LEFT JOIN classifications c ON m.id = c.message_id
      ${windowWhere}
@@ -2598,6 +2897,7 @@ export async function getStatsDashboard(
   );
   const rowsData = rows as {
     timestamp: number;
+    sender_id: string | null;
     sender_name: string;
     room_name: string;
     body: string;
@@ -2637,6 +2937,9 @@ export async function getStatsDashboard(
   const cooccurrence = new Map<string, PairAccumulator>();
   const userTopicCounts = new Map<string, Map<string, number>>();
   const userChannels = new Map<string, Set<string>>();
+  const userIds = new Map<string, Set<string>>();
+  const userChannelStats = new Map<string, Map<string, StatBaseAccumulator>>();
+  const userPossiblePhone = new Map<string, boolean>();
   const relationshipEdges = new Map<string, RelationshipEdge>();
   const relationshipInbound = new Map<string, number>();
   const relationshipOutbound = new Map<string, number>();
@@ -2712,6 +3015,7 @@ export async function getStatsDashboard(
     }
 
     const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+    const senderId = String(row.sender_id || "").trim();
     const userAcc = users.get(sender) || {
       messages: 0,
       activeDays: new Set<string>(),
@@ -2729,6 +3033,14 @@ export async function getStatsDashboard(
       userAcc.relevanceCount += 1;
     }
     users.set(sender, userAcc);
+    if (senderId) {
+      const ids = userIds.get(sender) || new Set<string>();
+      ids.add(senderId);
+      userIds.set(sender, ids);
+    }
+    if (PHONE_LIKE_RE.test(senderId) || PHONE_LIKE_RE.test(row.sender_name || "")) {
+      userPossiblePhone.set(sender, true);
+    }
 
     const channel = row.room_name || "Unknown";
     const channelAcc = channels.get(channel) || {
@@ -2753,6 +3065,21 @@ export async function getStatsDashboard(
     const userChannelSet = userChannels.get(sender) || new Set<string>();
     userChannelSet.add(channel);
     userChannels.set(sender, userChannelSet);
+    const channelMap = userChannelStats.get(sender) || new Map<string, StatBaseAccumulator>();
+    const personChannelAcc = channelMap.get(channel) || {
+      messages: 0,
+      activeDays: new Set<string>(),
+      firstTs: ts,
+      lastTs: ts,
+      relevanceTotal: 0,
+      relevanceCount: 0,
+    };
+    personChannelAcc.messages += 1;
+    personChannelAcc.activeDays.add(dateKey);
+    personChannelAcc.firstTs = Math.min(personChannelAcc.firstTs, ts);
+    personChannelAcc.lastTs = Math.max(personChannelAcc.lastTs, ts);
+    channelMap.set(channel, personChannelAcc);
+    userChannelStats.set(sender, channelMap);
 
     const body = String(row.body || "");
     const bodyLower = body.toLowerCase();
@@ -2885,6 +3212,34 @@ export async function getStatsDashboard(
     .map(([name, acc]) => finalizeRanked(name, acc))
     .sort((a, b) => b.messages - a.messages)
     .slice(0, 25);
+
+  const peopleDirectory: PersonDirectoryEntry[] = Array.from(users.entries())
+    .map(([name, acc]) => {
+      const ranked = finalizeRanked(name, acc);
+      const ids = Array.from(userIds.get(name) || []);
+      const channelMap = userChannelStats.get(name) || new Map<string, StatBaseAccumulator>();
+      return {
+        ...ranked,
+        sender_id: ids[0] || null,
+        channels: Array.from(channelMap.entries())
+          .map(([channelName, channelAcc]) => ({
+            name: channelName,
+            messages: channelAcc.messages,
+            first_seen: dateKeyFromTs(channelAcc.firstTs),
+            last_seen: dateKeyFromTs(channelAcc.lastTs),
+          }))
+          .sort((a, b) => {
+            if (b.messages !== a.messages) return b.messages - a.messages;
+            return a.name.localeCompare(b.name);
+          }),
+        top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 6),
+        possible_phone: userPossiblePhone.get(name) || false,
+      };
+    })
+    .sort((a, b) => {
+      if (b.messages !== a.messages) return b.messages - a.messages;
+      return a.name.localeCompare(b.name);
+    });
 
   const channelStats = Array.from(channels.entries())
     .map(([name, acc]) => finalizeRanked(name, acc))
@@ -3113,6 +3468,7 @@ export async function getStatsDashboard(
     },
     users: userStats,
     channels: channelStats,
+    people_directory: peopleDirectory,
     topics: topicStats,
     cooccurrence: cooccurrenceStats,
     seasonality,

@@ -1,9 +1,12 @@
 export interface AtlasMessageRow {
   id: string;
+  room_id?: string | null;
   room_name: string;
+  sender_id?: string | null;
   sender_name: string;
   body: string;
   timestamp: number;
+  raw_event?: string | null;
   relevance_score: number | null;
   topics: string | null;
   alert_level: string | null;
@@ -103,6 +106,42 @@ export interface AtlasNarrative {
   };
 }
 
+export type AtlasNewFaceReason =
+  | "first_seen"
+  | "intros_channel"
+  | "member_event"
+  | "phone_or_name_addition";
+
+export interface AtlasNewFace {
+  name: string;
+  sender_id: string | null;
+  first_seen: string;
+  first_seen_ts: number;
+  first_channel: string;
+  message_count_7d: number;
+  channels: string[];
+  intro_refs: string[];
+  detection_reasons: AtlasNewFaceReason[];
+}
+
+export interface AtlasTopContributor {
+  name: string;
+  sender_id: string | null;
+  message_count_7d: number;
+  active_days_7d: number;
+  channels: string[];
+  latest_seen: string;
+  latest_seen_ts: number;
+  citation_refs: string[];
+}
+
+export interface AtlasPeopleInsights {
+  window_days: 7;
+  generated_at: string;
+  new_faces: AtlasNewFace[];
+  top_contributors: AtlasTopContributor[];
+}
+
 export interface AtlasSnapshot {
   generated_at: string;
   window: {
@@ -122,6 +161,7 @@ export interface AtlasSnapshot {
   matrix: AtlasMatrixCell[];
   concerns: AtlasConcern[];
   links: AtlasLinkSummary[];
+  people: AtlasPeopleInsights;
   narrative: AtlasNarrative;
   citations: Record<string, AtlasCitation>;
 }
@@ -132,6 +172,7 @@ export function buildAtlasSnapshotFromRows(input: {
   windowEnd: string;
   messages: AtlasMessageRow[];
   links: AtlasLinkRow[];
+  people?: AtlasPeopleInsights;
 }): AtlasSnapshot {
   const citations: Record<string, AtlasCitation> = {};
   const people = new Set<string>();
@@ -357,8 +398,62 @@ export function buildAtlasSnapshotFromRows(input: {
     matrix,
     concerns: concerns.slice(0, 12),
     links: linkSummaries,
+    people: input.people || buildFallbackPeopleInsights(input.generatedAt, input.messages),
     narrative,
     citations,
+  };
+}
+
+function buildFallbackPeopleInsights(generatedAt: string, messages: AtlasMessageRow[]): AtlasPeopleInsights {
+  const sevenDayCutoff = Date.parse(generatedAt) - 7 * 24 * 60 * 60 * 1000;
+  const people = new Map<string, {
+    name: string;
+    senderId: string | null;
+    count: number;
+    activeDays: Set<string>;
+    channels: Set<string>;
+    latestTs: number;
+    citations: string[];
+  }>();
+
+  for (const row of messages) {
+    if (row.timestamp < sevenDayCutoff) continue;
+    const name = row.sender_name || "Unknown";
+    const key = row.sender_id || name.toLowerCase();
+    const entry = people.get(key) || {
+      name,
+      senderId: row.sender_id || null,
+      count: 0,
+      activeDays: new Set<string>(),
+      channels: new Set<string>(),
+      latestTs: row.timestamp,
+      citations: [],
+    };
+    entry.count += 1;
+    entry.activeDays.add(new Date(row.timestamp).toISOString().slice(0, 10));
+    entry.channels.add(row.room_name || "Unknown");
+    entry.latestTs = Math.max(entry.latestTs, row.timestamp);
+    pushUnique(entry.citations, messageRef(row.id), 4);
+    people.set(key, entry);
+  }
+
+  return {
+    window_days: 7,
+    generated_at: generatedAt,
+    new_faces: [],
+    top_contributors: Array.from(people.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8)
+      .map((entry) => ({
+        name: entry.name,
+        sender_id: entry.senderId,
+        message_count_7d: entry.count,
+        active_days_7d: entry.activeDays.size,
+        channels: Array.from(entry.channels).sort(),
+        latest_seen: new Date(entry.latestTs).toISOString(),
+        latest_seen_ts: entry.latestTs,
+        citation_refs: entry.citations,
+      })),
   };
 }
 
