@@ -5,6 +5,7 @@ import pytest
 
 from vibez.model_router import (
     ModelRoute,
+    generate_text,
     get_route,
     load_routes,
     resolve_provider_api_key,
@@ -145,5 +146,40 @@ def test_shared_manifest_contains_required_task_routes():
     routes = load_routes(ROOT / "config" / "model-routing.json")
 
     assert REQUIRED_TASK_IDS.issubset(routes)
+    assert routes["classification.inline"].provider == "ollama"
+    assert routes["classification.inline"].model == "hermes3:8b"
     assert routes["classification.backfill"].provider == "ollama"
     assert routes["classification.backfill"].model == "hermes3:8b"
+
+
+def test_shared_manifest_does_not_route_to_anthropic_or_claude_models():
+    routes = load_routes(ROOT / "config" / "model-routing.json")
+
+    for route in routes.values():
+        assert route.provider == "ollama"
+        assert route.provider != "anthropic"
+        assert not route.model.startswith("claude")
+
+
+def test_anthropic_routes_are_disabled(tmp_path: Path):
+    manifest = tmp_path / "model-routing.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "routes": {
+                    "chat.interactive": {
+                        "provider": "anthropic",
+                        "model": "claude-test",
+                        "mode": "text",
+                        "max_tokens": 32,
+                        "temperature": 0.1,
+                        "timeout_ms": 30000,
+                    }
+                },
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Anthropic routes are disabled"):
+        generate_text("chat.interactive", prompt="hello", manifest_path=manifest)

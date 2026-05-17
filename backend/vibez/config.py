@@ -70,8 +70,8 @@ class Config:
     pgvector_index_on_sync: bool = True
     sync_timeout_ms: int = 30000
     poll_interval: int = 30
-    classifier_model: str = "claude-sonnet-4-6"
-    synthesis_model: str = "claude-sonnet-4-6"
+    classifier_model: str = "hermes3:8b"
+    synthesis_model: str = "hermes3:8b"
     synthesis_hour: int = 6
     subject_name: str = DEFAULT_SUBJECT_NAME
     self_aliases: tuple[str, ...] = field(default_factory=get_self_aliases)
@@ -185,8 +185,8 @@ class Config:
             not in {"0", "false", "no", "off"},
             sync_timeout_ms=int(os.environ.get("SYNC_TIMEOUT_MS", "30000")),
             poll_interval=int(os.environ.get("POLL_INTERVAL", "30")),
-            classifier_model=os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-6"),
-            synthesis_model=os.environ.get("SYNTHESIS_MODEL", "claude-sonnet-4-6"),
+            classifier_model=os.environ.get("CLASSIFIER_MODEL", "hermes3:8b"),
+            synthesis_model=os.environ.get("SYNTHESIS_MODEL", "hermes3:8b"),
             synthesis_hour=int(os.environ.get("SYNTHESIS_HOUR", "6")),
             subject_name=subject_name,
             self_aliases=self_aliases,

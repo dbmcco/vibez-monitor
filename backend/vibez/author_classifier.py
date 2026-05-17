@@ -117,7 +117,7 @@ def _save_authored_by(db_path: Path, link_id: int, authored_by: str | None) -> N
 def enrich_link_authors(
     db_path: Path,
     api_key: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "hermes3:8b",
     limit: int = 500,
     daily_budget_usd: float = 10.0,
     dry_run: bool = False,

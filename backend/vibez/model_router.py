@@ -12,7 +12,6 @@ import httpx
 
 PROVIDER_CREDENTIAL_ENVS = {
     "openai": ("VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"),
-    "anthropic": ("VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
     "openrouter": ("VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
 }
 
@@ -157,34 +156,6 @@ def _parse_json_output(raw: str) -> Any:
     if fenced:
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     return json.loads(text)
-
-
-def _run_anthropic(
-    route: ModelRoute,
-    *,
-    prompt: str | None,
-    system: str | None,
-    messages: list[dict[str, str]] | None,
-) -> dict[str, Any]:
-    import anthropic
-
-    payload = _build_messages(prompt=prompt, system=None, messages=messages)
-    with anthropic.Anthropic(api_key=resolve_provider_api_key("anthropic")) as client:
-        response = client.messages.create(
-            model=route.model,
-            max_tokens=route.max_tokens,
-            system=system,
-            messages=payload,
-        )
-    text = "\n".join(
-        block.text.strip()
-        for block in getattr(response, "content", []) or []
-        if getattr(block, "text", None)
-    ).strip()
-    return {
-        "text": text,
-        "usage": _usage_dict(getattr(response, "usage", None)),
-    }
 
 
 def _run_openai(
@@ -341,8 +312,8 @@ def generate_text(
 ) -> dict[str, Any]:
     route = get_route(task_id, manifest_path)
     if route.provider == "anthropic":
-        result = _run_anthropic(route, prompt=prompt, system=system, messages=messages)
-    elif route.provider == "openai":
+        raise ValueError("Anthropic routes are disabled for Vibez; use local Ollama routing")
+    if route.provider == "openai":
         result = _run_openai(route, prompt=prompt, system=system, messages=messages)
     elif route.provider == "openrouter":
         result = _run_openrouter(route, prompt=prompt, system=system, messages=messages)

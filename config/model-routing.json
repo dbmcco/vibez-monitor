@@ -11,12 +11,13 @@
       "dimensions": 256
     },
     "classification.inline": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
+      "base_url": "http://localhost:11434",
       "max_tokens": 256,
       "temperature": 0.1,
-      "timeout_ms": 30000
+      "timeout_ms": 120000
     },
     "classification.backfill": {
       "provider": "ollama",
@@ -28,73 +29,82 @@
       "timeout_ms": 120000
     },
     "synthesis.daily": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "text",
+      "base_url": "http://localhost:11434",
       "max_tokens": 16384,
       "temperature": 0.2,
       "timeout_ms": 120000
     },
     "wisdom.extract": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
+      "base_url": "http://localhost:11434",
       "max_tokens": 2048,
       "temperature": 0.1,
       "timeout_ms": 120000
     },
     "wisdom.summarize": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "text",
+      "base_url": "http://localhost:11434",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 120000
     },
     "links.author_enrichment": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
+      "base_url": "http://localhost:11434",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 30000
     },
     "chat.interactive": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "text",
+      "base_url": "http://localhost:11434",
       "max_tokens": 1024,
       "temperature": 0.2,
       "timeout_ms": 60000
     },
     "dashboard.catchup": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
+      "base_url": "http://localhost:11434",
       "max_tokens": 4096,
       "temperature": 0.2,
       "timeout_ms": 120000
     },
     "dashboard.topic_analysis": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
+      "base_url": "http://localhost:11434",
       "max_tokens": 1024,
       "temperature": 0.1,
       "timeout_ms": 60000
     },
     "dashboard.wisdom_enhance": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "text",
+      "base_url": "http://localhost:11434",
       "max_tokens": 1024,
       "temperature": 0.2,
       "timeout_ms": 60000
     },
     "dashboard.contributions": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
+      "base_url": "http://localhost:11434",
       "max_tokens": 1024,
       "temperature": 0.1,
       "timeout_ms": 60000

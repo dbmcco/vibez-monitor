@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 export interface ModelRoute {
@@ -39,7 +38,6 @@ export interface ModelEmbeddingResult {
 const ROUTE_CACHE = new Map<string, Record<string, ModelRoute>>();
 const PROVIDER_CREDENTIAL_ENVS = {
   openai: ["VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"],
-  anthropic: ["VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
   openrouter: ["VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
 } as const;
 
@@ -144,13 +142,6 @@ function buildMessages({
   return payload;
 }
 
-function usageFromAnthropic(usage: Anthropic.Messages.Usage | undefined) {
-  return {
-    input_tokens: usage?.input_tokens ?? 0,
-    output_tokens: usage?.output_tokens ?? 0,
-  };
-}
-
 function usageFromOpenAI(response: { usage?: { input_tokens?: number; output_tokens?: number } }) {
   return {
     input_tokens: response.usage?.input_tokens ?? 0,
@@ -162,38 +153,6 @@ function parseJsonText(raw: string): unknown {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
   return JSON.parse(fenced || trimmed);
-}
-
-async function runAnthropicRoute(
-  route: ModelRoute,
-  payload: ModelMessage[],
-): Promise<ModelTextResult> {
-  const system = payload
-    .filter((message) => message.role === "system")
-    .map((message) => message.content)
-    .join("\n\n");
-  const messages: Array<{ role: "user" | "assistant"; content: string }> = payload
-    .filter((message) => message.role !== "system")
-    .map((message) => ({
-      role: message.role === "assistant" ? "assistant" : "user",
-      content: message.content,
-    }));
-  const client = new Anthropic({ apiKey: resolveProviderApiKey("anthropic") });
-  const response = await client.messages.create({
-    model: route.model,
-    max_tokens: route.max_tokens,
-    system: system || undefined,
-    messages,
-  });
-  return {
-    text: response.content
-      .map((block) => ("text" in block && typeof block.text === "string" ? block.text : ""))
-      .join("\n")
-      .trim(),
-    model: route.model,
-    provider: route.provider,
-    usage: usageFromAnthropic(response.usage),
-  };
 }
 
 async function runOpenAIRoute(
@@ -328,7 +287,7 @@ export async function generateText({
   validateRouteRequirements(route);
   const payload = buildMessages({ prompt, system, messages });
   if (route.provider === "anthropic") {
-    return runAnthropicRoute(route, payload);
+    throw new Error("Anthropic routes are disabled for Vibez; use local Ollama routing");
   }
   if (route.provider === "openai") {
     return runOpenAIRoute(route, payload);

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import { getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
+import { generateText, getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
 
 const ORIGINAL_ENV = process.env;
 
@@ -81,5 +81,30 @@ describe("model-router", () => {
     };
 
     expect(resolveProviderApiKey("openrouter")).toBe("legacy-openrouter-test-key");
+  });
+
+  test("rejects anthropic routes before provider calls", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "chat.interactive": {
+            provider: "anthropic",
+            model: "claude-test",
+            mode: "text",
+            max_tokens: 32,
+            temperature: 0.2,
+            timeout_ms: 30000,
+          },
+        },
+      }),
+    );
+
+    await expect(
+      generateText({ taskId: "chat.interactive", prompt: "hello", manifestPath }),
+    ).rejects.toThrow("Anthropic routes are disabled");
   });
 });

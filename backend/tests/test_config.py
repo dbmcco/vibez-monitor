@@ -19,7 +19,7 @@ def test_config_loads_from_env(tmp_path):
     with patch.dict(os.environ, env, clear=False):
         cfg = Config.from_env()
     assert cfg.openai_api_key == "vibez-openai-test-key"
-    assert cfg.anthropic_api_key == "vibez-anthropic-test-key"
+    assert cfg.anthropic_api_key == ""
     assert cfg.matrix_homeserver == "https://matrix.beeper.com"
 
 
@@ -36,7 +36,7 @@ def test_config_falls_back_to_legacy_model_provider_keys(tmp_path):
         cfg = Config.from_env()
 
     assert cfg.openai_api_key == "legacy-openai-test-key"
-    assert cfg.anthropic_api_key == "legacy-anthropic-test-key"
+    assert cfg.anthropic_api_key == ""
 
 
 def test_config_defaults(tmp_path):
@@ -58,8 +58,8 @@ def test_config_defaults(tmp_path):
     assert cfg.sync_timeout_ms == 30000
     assert cfg.google_groups_bootstrap_days == 14
     assert cfg.google_groups_bootstrap_max_uids == 2000
-    assert cfg.classifier_model == "claude-sonnet-4-6"
-    assert cfg.synthesis_model == "claude-sonnet-4-6"
+    assert cfg.classifier_model == "hermes3:8b"
+    assert cfg.synthesis_model == "hermes3:8b"
     assert cfg.subject_name == "User"
     assert cfg.self_aliases == ("User",)
     assert cfg.model_routing_path == Path("config/model-routing.json")

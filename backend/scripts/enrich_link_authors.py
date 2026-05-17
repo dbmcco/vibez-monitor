@@ -21,7 +21,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Enrich links with authorship classification.")
     parser.add_argument("--db", default=None, help="Path to vibez.db (default: from env)")
     parser.add_argument("--limit", type=int, default=500, help="Max links to process (default: 500)")
-    parser.add_argument("--model", default="claude-haiku-4-5-20251001", help="Claude model to use")
+    parser.add_argument("--model", default="hermes3:8b", help="Fallback model label for usage accounting")
     parser.add_argument("--dry-run", action="store_true", help="Classify but don't write results")
     args = parser.parse_args()
 
