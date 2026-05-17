@@ -16,6 +16,7 @@ dist/
 .superpowers/
 test-results/
 hot_alerts.json
+dashboard/.generated/
 ~/
 *.log
 *.pid
