@@ -87,7 +87,7 @@
       "model": "openai/gpt-4.1",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
-      "max_tokens": 4096,
+      "max_tokens": 8192,
       "temperature": 0.25,
       "timeout_ms": 120000
     },

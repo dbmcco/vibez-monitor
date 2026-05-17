@@ -225,7 +225,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 title: "front-page article title",
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
-                body: ["five or more paragraphs for the full article page"],
+                body: ["3 to 5 compact paragraphs for the full article page"],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
                 link_refs: ["vibez:link:..."],
@@ -242,7 +242,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 title: "left-side article title",
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
-                body: ["five or more paragraphs for the full article page"],
+                body: ["3 to 5 compact paragraphs for the full article page"],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
                 link_refs: ["vibez:link:..."],
@@ -256,7 +256,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 title: "right-side article title",
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
-                body: ["five or more paragraphs for the full article page"],
+                body: ["3 to 5 compact paragraphs for the full article page"],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
                 link_refs: ["vibez:link:..."],
@@ -474,7 +474,7 @@ function readArticle(
   const payload = value as Record<string, unknown>;
   const title = readText(payload.title);
   const dek = readText(payload.dek);
-  const body = readTextList(payload.body).slice(0, 8);
+  const body = readTextList(payload.body).slice(0, 5);
   if (!title || !dek || body.length < 3) return null;
   const role = readText(payload.role) === "lead" && index === 0 ? "lead" : "secondary";
   const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));

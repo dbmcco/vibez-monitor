@@ -83,6 +83,7 @@ describe("atlas editorial report", () => {
     expect(promptText).toContain("Do not reduce the day to one theme");
     expect(promptText).toContain("MUST include 3 to 6 articles");
     expect(promptText).toContain("section");
+    expect(promptText).toContain("3 to 5 compact paragraphs");
     expect(promptText).toContain("What happened?");
     expect(promptText).toContain("What does this mean?");
     expect(promptText).toContain("Why should I care?");
