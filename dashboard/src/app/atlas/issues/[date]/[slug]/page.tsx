@@ -18,6 +18,7 @@ interface AtlasCitation {
 
 interface AtlasEditorialArticle {
   role: "lead" | "secondary";
+  section: string;
   title: string;
   slug: string;
   dek: string;
@@ -130,16 +131,16 @@ export default function AtlasArticlePage() {
   }
 
   if (loading) {
-    return <div className="vibe-panel rounded-xl p-5 text-sm text-slate-300">Loading article...</div>;
+    return <div className="rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-sm text-[#342a1b]">Loading article...</div>;
   }
 
   if (!payload?.editorial_report || !payload.atlas || !article) {
     return (
       <div className="space-y-4">
-        <Link href="/atlas" className="vibe-chip inline-flex rounded px-3 py-1.5 text-sm">
+        <Link href="/atlas" className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm text-[#342a1b]">
           Back to Atlas
         </Link>
-        <div className="vibe-panel rounded-xl p-5 text-sm text-slate-300">
+        <div className="rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-sm text-[#342a1b]">
           Article unavailable for {params.date}/{params.slug}.
         </div>
       </div>
@@ -148,7 +149,7 @@ export default function AtlasArticlePage() {
 
   return (
     <div className="fade-up space-y-5">
-      <Link href="/atlas" className="vibe-chip inline-flex rounded px-3 py-1.5 text-sm">
+      <Link href="/atlas" className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm text-[#342a1b]">
         Back to front page
       </Link>
 
@@ -158,8 +159,8 @@ export default function AtlasArticlePage() {
             <span>{payload.editorial_report.issue.title}</span>
             <span>{payload.editorial_report.issue.date}</span>
           </div>
-          <p className="mt-5 text-xs font-bold uppercase tracking-[0.16em] text-amber-800">
-            {article.role === "lead" ? "Lead Story" : "Article"}
+          <p className="mt-5 text-xs font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+            {article.section}{article.role === "lead" ? " | Lead Story" : ""}
           </p>
           <h1 className="mt-2 max-w-5xl font-serif text-4xl font-black leading-none tracking-normal text-slate-950 sm:text-6xl">
             {article.title}

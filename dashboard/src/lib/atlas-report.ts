@@ -40,6 +40,7 @@ export interface AtlasEditorialImage {
 
 export interface AtlasEditorialArticle {
   role: "lead" | "secondary";
+  section: string;
   title: string;
   slug: string;
   dek: string;
@@ -186,6 +187,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "Write the latest Atlas report from this evidence pack as a daily newspaper issue.",
         "Do not reduce the day to one theme unless the evidence truly supports that. Prefer one lead story plus several first-class side stories.",
         "You MUST include 3 to 6 articles: exactly one lead article plus at least two secondary articles.",
+        "Each article MUST include a short section label that names its theme, like Personal Workflows, Agent Harnesses, Evidence Systems, or Durable Records.",
         "Answer these questions plainly:",
         "1. What happened?",
         "2. What does this mean?",
@@ -219,6 +221,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
             articles: [
               {
                 role: "lead",
+                section: "Agent Harnesses",
                 title: "front-page article title",
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
@@ -235,6 +238,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
               },
               {
                 role: "secondary",
+                section: "Personal Workflows",
                 title: "left-side article title",
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
@@ -248,6 +252,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
               },
               {
                 role: "secondary",
+                section: "Durable Records",
                 title: "right-side article title",
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
@@ -416,6 +421,7 @@ function readArticles(
   if (articles.length === 0) {
     articles.push({
       role: "lead",
+      section: report.main_topic.title || "Atlas",
       title: report.main_topic.title || report.headline,
       slug: slugify(report.main_topic.title || report.headline),
       dek: report.dek,
@@ -474,6 +480,7 @@ function readArticle(
   const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
   return {
     role,
+    section: readText(payload.section) || "Atlas",
     title,
     slug: slugify(readText(payload.slug) || title),
     dek,

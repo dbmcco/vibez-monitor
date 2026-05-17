@@ -143,6 +143,7 @@ interface AtlasEditorialReport {
 
 interface AtlasEditorialArticle {
   role: "lead" | "secondary";
+  section: string;
   title: string;
   slug: string;
   dek: string;
@@ -229,22 +230,22 @@ export default function AtlasPage() {
     return (
       <div className="space-y-4">
         <Header />
-        <div className="vibe-panel rounded-xl bg-[#f8f4ea] p-6 text-slate-950">
-          <div className="border-b-4 border-double border-slate-900 pb-4 text-center">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-600">
+        <div className="rounded-xl border border-[#cbbf9d] bg-[#f4ead7] p-6 text-[#1f1a12] shadow-[0_18px_60px_rgba(32,24,12,0.22)]">
+          <div className="border-b-4 border-double border-[#1f1a12] pb-4 text-center">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#786846]">
               Daily Edition | Last 48 Hours
             </p>
-            <h2 className="mt-2 font-serif text-4xl font-black text-slate-950 sm:text-6xl">
+            <h2 className="mt-2 font-serif text-4xl font-black text-[#1f1a12] sm:text-6xl">
               THE VIBEZ ATLAS
             </h2>
-            <p className="mt-3 text-sm text-slate-700">
+            <p className="mt-3 text-sm text-[#5e5238]">
               Setting type, checking citations, and sending the newsroom back for one more pass...
             </p>
           </div>
           <div className="mt-6 grid gap-5 lg:grid-cols-[0.9fr_1.35fr_0.9fr]">
-            <div className="h-52 border border-slate-300 bg-white/40" />
-            <div className="h-72 border border-slate-300 bg-white/50" />
-            <div className="h-52 border border-slate-300 bg-white/40" />
+            <div className="h-52 border border-[#cbbf9d] bg-[#fffaf0]/55" />
+            <div className="h-72 border border-[#cbbf9d] bg-[#fffaf0]/65" />
+            <div className="h-52 border border-[#cbbf9d] bg-[#fffaf0]/55" />
           </div>
         </div>
       </div>
@@ -255,7 +256,7 @@ export default function AtlasPage() {
     return (
       <div className="space-y-4">
         <Header />
-        <div className="vibe-panel rounded-xl p-5 text-sm text-slate-300">
+        <div className="rounded-xl border border-[#cbbf9d] bg-[#f4ead7] p-5 text-sm text-[#342a1b]">
           {error || "Atlas data is unavailable right now."}
         </div>
       </div>
@@ -266,7 +267,7 @@ export default function AtlasPage() {
   const matrixChannels = atlas.channels.slice(0, 12).map((channel) => channel.name);
 
   return (
-    <div className="fade-up space-y-6">
+    <div className="fade-up -m-2 space-y-6 rounded-xl border border-[#cbbf9d] bg-[#efe3cc] p-3 text-[#1f1a12] shadow-[0_22px_80px_rgba(18,14,8,0.26)] sm:-m-4 sm:p-5">
       <Header />
 
       <NarrativeReport
@@ -277,11 +278,11 @@ export default function AtlasPage() {
         onWindowHoursChange={handleWindowHoursChange}
       />
 
-      <section className="vibe-panel rounded-xl p-4">
+      <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="vibe-title text-lg text-slate-100">Explore the evidence</h2>
-            <p className="mt-1 text-sm text-slate-400">
+            <h2 className="font-serif text-xl font-bold text-[#1f1a12]">Below the Fold</h2>
+            <p className="mt-1 text-sm text-[#5e5238]">
               Read the themes first. Use diagnostics only when you need the raw shape.
             </p>
           </div>
@@ -290,8 +291,10 @@ export default function AtlasPage() {
               <button
                 key={item.key}
                 onClick={() => setLens(item.key)}
-                className={`rounded-md px-3 py-1.5 text-sm ${
-                  lens === item.key ? "vibe-button" : "vibe-chip"
+                className={`rounded border px-3 py-1.5 text-sm font-semibold ${
+                  lens === item.key
+                    ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
+                    : "border-[#b9aa86] bg-[#fffaf0]/45 text-[#342a1b] hover:border-[#1f1a12]"
                 }`}
               >
                 {item.label}
@@ -340,14 +343,14 @@ export default function AtlasPage() {
 
 function Header() {
   return (
-    <header className="space-y-2">
-      <p className="text-xs font-medium tracking-[0.16em] text-cyan-300/90 uppercase">
+    <header className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
+      <p className="text-xs font-bold tracking-[0.16em] text-[#786846] uppercase">
         Vibez
       </p>
-      <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
+      <h1 className="mt-1 font-serif text-3xl font-black text-[#1f1a12] sm:text-4xl">
         The Vibez Atlas
       </h1>
-      <p className="vibe-subtitle max-w-3xl">
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-[#5e5238]">
         A daily newspaper front page for the rooms, themes, evidence, and arguments worth reading.
       </p>
     </header>
@@ -356,9 +359,9 @@ function Header() {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 p-3">
-      <div className="text-xs text-slate-400">{label}</div>
-      <div className="vibe-title mt-1 text-2xl text-slate-100">{value.toLocaleString()}</div>
+    <div className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 p-3">
+      <div className="text-xs text-[#786846]">{label}</div>
+      <div className="mt-1 font-serif text-2xl font-bold text-[#1f1a12]">{value.toLocaleString()}</div>
     </div>
   );
 }
@@ -379,18 +382,21 @@ function NarrativeReport({
   const report = editorialReport;
   const leadArticle = report?.articles.find((article) => article.role === "lead") || report?.articles[0] || null;
   const sideArticles = report?.articles.filter((article) => article.slug !== leadArticle?.slug).slice(0, 4) || [];
+  const leftArticle = sideArticles[0] || null;
+  const rightArticle = sideArticles[1] || null;
+  const belowArticles = sideArticles.slice(2);
   return (
-    <section className="vibe-panel rounded-xl bg-[#f8f4ea] p-4 text-slate-950 sm:p-6">
-      <div className="border-b-4 border-double border-slate-900 pb-4 text-center">
-        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+    <section className="rounded-xl border border-[#b9aa86] bg-[#f8f4ea] p-4 text-[#1f1a12] shadow-[0_18px_60px_rgba(32,24,12,0.18)] sm:p-6">
+      <div className="border-b-4 border-double border-[#1f1a12] pb-4 text-center">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#786846]">
           <span>{report?.issue.edition_label || atlas.narrative.title}</span>
           <span>|</span>
           <span>{report?.issue.date || atlas.window.end.slice(0, 10)}</span>
         </div>
-        <h2 className="mt-2 font-serif text-4xl font-black tracking-normal text-slate-950 sm:text-6xl">
+        <h2 className="mt-2 font-serif text-4xl font-black tracking-normal text-[#1f1a12] sm:text-6xl">
           {report?.issue.title || "The Vibez Atlas"}
         </h2>
-        <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-slate-700 sm:text-base">
+        <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-[#5e5238] sm:text-base">
           {report?.issue.subtitle ||
             report?.dek ||
             `The Atlas evidence loaded, but the editorial analysis did not. ${editorialError || "Try again after the report model is available."}`}
@@ -402,8 +408,8 @@ function NarrativeReport({
               onClick={() => onWindowHoursChange(hours)}
               className={`rounded border px-3 py-1.5 text-sm ${
                 windowHours === hours
-                  ? "border-slate-900 bg-slate-900 text-[#f8f4ea]"
-                  : "border-slate-400 bg-transparent text-slate-800 hover:border-slate-900"
+                  ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
+                  : "border-[#b9aa86] bg-transparent text-[#342a1b] hover:border-[#1f1a12]"
               }`}
             >
               {hours === 48 ? "48h" : "Week"}
@@ -415,36 +421,34 @@ function NarrativeReport({
       {report && leadArticle ? (
         <>
           <div className="mt-6 grid gap-5 lg:grid-cols-[0.9fr_1.35fr_0.9fr]">
-            <div className="space-y-5 lg:border-r lg:border-slate-300 lg:pr-5">
-              {sideArticles.slice(0, 2).map((article) => (
+            <div className="space-y-5 lg:border-r lg:border-[#cbbf9d] lg:pr-5">
+              {leftArticle && (
                 <NewspaperArticleCard
-                  key={article.slug}
-                  article={article}
+                  article={leftArticle}
                   issueDate={report.issue.date}
                   compact
                 />
-              ))}
+              )}
             </div>
             <NewspaperArticleCard
               article={leadArticle}
               issueDate={report.issue.date}
               lead
             />
-            <div className="space-y-5 lg:border-l lg:border-slate-300 lg:pl-5">
-              {sideArticles.slice(2, 4).map((article) => (
+            <div className="space-y-5 lg:border-l lg:border-[#cbbf9d] lg:pl-5">
+              {rightArticle && (
                 <NewspaperArticleCard
-                  key={article.slug}
-                  article={article}
+                  article={rightArticle}
                   issueDate={report.issue.date}
                   compact
                 />
-              ))}
-              {sideArticles.length < 3 && (
-                <div className="border border-slate-300 bg-white/35 p-4">
-                  <h3 className="font-serif text-xl font-bold text-slate-950">
+              )}
+              {!rightArticle && (
+                <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+                  <h3 className="font-serif text-xl font-bold text-[#1f1a12]">
                     Evidence Desk
                   </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-700">
+                  <p className="mt-2 text-sm leading-6 text-[#5e5238]">
                     The matrix, citations, stats, and links sit below the fold.
                   </p>
                 </div>
@@ -452,7 +456,20 @@ function NarrativeReport({
             </div>
           </div>
 
-          <div className="mt-6 border-t-2 border-slate-900 pt-4">
+          {belowArticles.length > 0 && (
+            <div className="mt-6 grid gap-4 border-t border-[#cbbf9d] pt-4 lg:grid-cols-2">
+              {belowArticles.map((article) => (
+                <NewspaperArticleCard
+                  key={article.slug}
+                  article={article}
+                  issueDate={report.issue.date}
+                  compact
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="mt-6 border-t-2 border-[#1f1a12] pt-4">
             <div className="grid gap-4 lg:grid-cols-2">
               <NewspaperList title="Briefs" items={report.briefs.map((brief) => brief.text)} />
               <NewspaperList
@@ -468,7 +485,7 @@ function NarrativeReport({
           </div>
         </>
       ) : (
-        <div className="mt-5 rounded border border-amber-700/30 bg-amber-100 p-4 text-sm leading-relaxed text-amber-950">
+        <div className="mt-5 rounded border border-[#b3833a]/40 bg-[#f1dfb8] p-4 text-sm leading-relaxed text-[#4a3214]">
           The data is here, but the editorial layer failed. Atlas is showing diagnostics below
           instead of filling the gap with fake narrative.
         </div>
@@ -489,22 +506,23 @@ function NewspaperArticleCard({
   compact?: boolean;
 }) {
   return (
-    <article className={lead ? "" : "border-b border-slate-300 pb-4 last:border-b-0"}>
+    <article className={lead ? "" : "border-b border-[#cbbf9d] pb-4 last:border-b-0"}>
       <ImageBlock article={article} lead={lead} />
-      <p className="mt-3 text-[11px] font-bold uppercase tracking-[0.16em] text-amber-800">
-        {lead ? "Lead Story" : "Article"}
-      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em]">
+        <span className="text-[#8b5f21]">{article.section}</span>
+        {lead && <span className="text-[#786846]">Lead Story</span>}
+      </div>
       <h3 className={`mt-1 font-serif font-black leading-none text-slate-950 ${
         lead ? "text-4xl sm:text-5xl" : "text-2xl"
       }`}>
         {article.title}
       </h3>
-      <p className={`mt-3 leading-7 text-slate-700 ${compact ? "text-sm" : "text-base"}`}>
+      <p className={`mt-3 leading-7 text-[#5e5238] ${compact ? "text-sm" : "text-base"}`}>
         {article.summary || article.dek}
       </p>
       <Link
         href={`/atlas/issues/${issueDate}/${article.slug}`}
-        className="mt-3 inline-flex border border-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-900 hover:text-[#f8f4ea]"
+        className="mt-3 inline-flex border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
       >
         Read full article
       </Link>
@@ -519,12 +537,12 @@ function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: b
       <img
         src={article.image.url}
         alt={article.image.alt || article.title}
-        className={`w-full border border-slate-300 object-cover ${lead ? "h-64" : "h-32"}`}
+        className={`w-full border border-[#cbbf9d] object-cover ${lead ? "h-64" : "h-32"}`}
       />
     );
   }
   return (
-    <div className={`flex w-full items-center justify-center border border-slate-300 bg-slate-200 text-center text-xs uppercase tracking-wide text-slate-500 ${
+    <div className={`flex w-full items-center justify-center border border-[#cbbf9d] bg-[#e4d7bd] px-3 text-center text-xs uppercase tracking-wide text-[#786846] ${
       lead ? "h-64" : "h-32"
     }`}>
       {article.image.kind === "generated" ? "Editorial image prompt ready" : "Article image"}
@@ -535,11 +553,11 @@ function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: b
 function NewspaperList({ title, items }: { title: string; items: string[] }) {
   if (items.length === 0) return null;
   return (
-    <section className="border border-slate-300 bg-white/35 p-4">
-      <h3 className="font-serif text-2xl font-bold text-slate-950">{title}</h3>
+    <section className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+      <h3 className="font-serif text-2xl font-bold text-[#1f1a12]">{title}</h3>
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
-          <p key={index} className="text-sm leading-6 text-slate-700">
+          <p key={index} className="text-sm leading-6 text-[#5e5238]">
             {item}
           </p>
         ))}
@@ -550,8 +568,8 @@ function NewspaperList({ title, items }: { title: string; items: string[] }) {
 
 function AtAGlance({ atlas }: { atlas: AtlasSnapshot }) {
   return (
-    <aside className="vibe-panel rounded-xl p-5">
-      <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
+    <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[#8b5f21]">
         At a glance
       </p>
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -561,20 +579,20 @@ function AtAGlance({ atlas }: { atlas: AtlasSnapshot }) {
         <Metric label="Themes" value={atlas.overview.topics} />
       </div>
       <div className="mt-4 space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Useful links</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#786846]">Useful links</p>
         {atlas.links.slice(0, 4).map((link) => (
           <a
             key={link.ref}
             href={link.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="block rounded border border-slate-800/80 bg-slate-950/40 p-2 text-xs text-slate-300 hover:border-cyan-400/40 hover:text-slate-100"
+            className="block rounded border border-[#cbbf9d] bg-[#fffaf0]/45 p-2 text-xs text-[#342a1b] hover:border-[#1f1a12]"
           >
             {link.title}
           </a>
         ))}
         {atlas.links.length === 0 && (
-          <p className="text-sm text-slate-400">No links in this report.</p>
+          <p className="text-sm text-[#786846]">No links in this report.</p>
         )}
       </div>
     </aside>
@@ -595,14 +613,14 @@ function Matrix({
   onSelectCell: (cell: AtlasMatrixCell) => void;
 }) {
   return (
-    <div className="vibe-panel overflow-x-auto rounded-xl p-4">
+    <div className="overflow-x-auto rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
       <div
         className="grid min-w-[760px] gap-1"
         style={{ gridTemplateColumns: `minmax(160px, 1.2fr) repeat(${topics.length}, minmax(86px, 1fr))` }}
       >
-        <div className="px-2 py-2 text-xs font-semibold text-slate-400">Channel</div>
+        <div className="px-2 py-2 text-xs font-semibold text-[#786846]">Channel</div>
         {topics.map((topic) => (
-          <div key={topic} className="px-2 py-2 text-xs font-semibold text-slate-300">
+          <div key={topic} className="px-2 py-2 text-xs font-semibold text-[#342a1b]">
             {topic}
           </div>
         ))}
@@ -636,13 +654,13 @@ function MatrixRow({
 }) {
   return (
     <>
-      <div className="rounded bg-slate-900/45 px-2 py-2 text-sm font-medium text-slate-100">
+      <div className="rounded bg-[#e4d7bd] px-2 py-2 text-sm font-medium text-[#1f1a12]">
         {channel}
       </div>
       {topics.map((topic) => {
         const cell = atlas.matrix.find((item) => item.channel === channel && item.topic === topic);
         if (!cell) {
-          return <div key={topic} className="rounded border border-slate-800/80 bg-slate-950/35" />;
+          return <div key={topic} className="rounded border border-[#d8ccb2] bg-[#fffaf0]/35" />;
         }
         const selected = selectedCellKey === cellKey(cell);
         return (
@@ -651,14 +669,14 @@ function MatrixRow({
             onClick={() => onSelectCell(cell)}
             className={`rounded border px-2 py-2 text-left transition ${
               selected
-                ? "border-cyan-300/70 bg-cyan-400/15"
-                : "border-slate-700/80 bg-slate-900/50 hover:border-cyan-400/50"
+                ? "border-[#1f1a12] bg-[#1f1a12]/10"
+                : "border-[#cbbf9d] bg-[#fffaf0]/45 hover:border-[#1f1a12]"
             }`}
           >
-            <span className="block text-sm font-semibold text-slate-100">
+            <span className="block text-sm font-semibold text-[#1f1a12]">
               {cell.message_count}
             </span>
-            <span className="block text-[11px] text-slate-400">
+            <span className="block text-[11px] text-[#786846]">
               {cell.citation_refs.length} refs
             </span>
           </button>
@@ -679,33 +697,33 @@ function DetailRail({
 }) {
   if (!cell) {
     return (
-      <aside className="vibe-panel rounded-xl p-5 text-sm text-slate-400">
+      <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5 text-sm text-[#786846]">
         Select a matrix cell to inspect its evidence.
       </aside>
     );
   }
 
   return (
-    <aside className="vibe-panel rounded-xl p-5">
-      <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Selected intersection</p>
-      <h2 className="vibe-title mt-2 text-xl text-slate-100">{cell.topic}</h2>
-      <p className="mt-1 text-sm text-slate-400">{cell.channel}</p>
-      <div className="mt-4 grid gap-2 text-sm text-slate-300">
+    <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[#8b5f21]">Selected intersection</p>
+      <h2 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">{cell.topic}</h2>
+      <p className="mt-1 text-sm text-[#786846]">{cell.channel}</p>
+      <div className="mt-4 grid gap-2 text-sm text-[#342a1b]">
         <p>{cell.message_count} messages from {cell.people.length} people.</p>
         <p>Average relevance: {cell.avg_relevance ?? "n/a"}</p>
         <p>Latest activity: {formatTimestamp(cell.latest_timestamp)}</p>
       </div>
       <div className="mt-4 space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Citations</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#786846]">Citations</p>
         {cell.citation_refs.map((ref) => (
           <CitationButton key={ref} citation={atlas.citations[ref]} onOpen={() => onOpenCitation(ref)} />
         ))}
       </div>
       <div className="mt-5 flex flex-wrap gap-2">
-        <Link href="/stats" className="vibe-chip rounded px-2.5 py-1 text-xs">
+        <Link href="/stats" className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2.5 py-1 text-xs text-[#342a1b] hover:border-[#1f1a12]">
           Open Stats
         </Link>
-        <Link href="/links" className="vibe-chip rounded px-2.5 py-1 text-xs">
+        <Link href="/links" className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2.5 py-1 text-xs text-[#342a1b] hover:border-[#1f1a12]">
           Open Links
         </Link>
       </div>
@@ -717,14 +735,14 @@ function ChannelLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCi
   return (
     <LensGrid>
       {atlas.channels.map((channel) => (
-        <article key={channel.name} className="vibe-panel rounded-xl p-4">
-          <p className="text-sm font-semibold text-slate-100">{channel.name}</p>
-          <p className="mt-1 text-xs text-slate-400">
+        <article key={channel.name} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+          <p className="text-sm font-semibold text-[#1f1a12]">{channel.name}</p>
+          <p className="mt-1 text-xs text-[#786846]">
             {channel.message_count} messages | {channel.people.length} people
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {channel.top_topics.map((topic) => (
-              <span key={topic.name} className="vibe-chip rounded px-2 py-0.5 text-xs">
+              <span key={topic.name} className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2 py-0.5 text-xs text-[#342a1b]">
                 {topic.name} | {topic.count}
               </span>
             ))}
@@ -740,12 +758,12 @@ function TopicLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCita
   return (
     <LensGrid>
       {atlas.topics.map((topic) => (
-        <article key={topic.name} className="vibe-panel rounded-xl p-4">
-          <p className="text-sm font-semibold text-slate-100">{topic.name}</p>
-          <p className="mt-1 text-xs text-slate-400">
+        <article key={topic.name} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+          <p className="text-sm font-semibold text-[#1f1a12]">{topic.name}</p>
+          <p className="mt-1 text-xs text-[#786846]">
             {topic.message_count} messages | {topic.channels.length} channels
           </p>
-          <p className="mt-2 text-xs text-slate-500">{topic.channels.slice(0, 5).join(", ")}</p>
+          <p className="mt-2 text-xs text-[#786846]">{topic.channels.slice(0, 5).join(", ")}</p>
           <CitationList atlas={atlas} refs={topic.citation_refs} onOpenCitation={onOpenCitation} />
         </article>
       ))}
@@ -757,16 +775,16 @@ function LinkLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitat
   return (
     <LensGrid>
       {atlas.links.map((link) => (
-        <article key={link.ref} className="vibe-panel rounded-xl p-4">
-          <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold">
+        <article key={link.ref} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+          <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-[#1f1a12] underline">
             {link.title}
           </a>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-[#786846]">
             {link.category} | {link.shared_by} | {link.source_group}
           </p>
           <button
             onClick={() => onOpenCitation(link.ref)}
-            className="mt-3 rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 text-xs text-cyan-100"
+            className="mt-3 rounded border border-[#1f1a12] bg-[#1f1a12] px-2 py-1 text-xs text-[#f8f4ea]"
           >
             Open citation
           </button>
@@ -786,24 +804,24 @@ function EvidenceLens({
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="vibe-title text-lg text-slate-100">Open questions</h3>
+        <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Open questions</h3>
         <div className="mt-3 space-y-3">
           {atlas.concerns.map((concern, index) => (
-            <article key={`${concern.kind}-${index}`} className="vibe-panel rounded-xl p-4">
-              <p className="text-sm font-semibold text-slate-100">{concern.title}</p>
-              <p className="mt-2 text-sm leading-relaxed text-slate-300">{concern.detail}</p>
+            <article key={`${concern.kind}-${index}`} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+              <p className="text-sm font-semibold text-[#1f1a12]">{concern.title}</p>
+              <p className="mt-2 text-sm leading-relaxed text-[#5e5238]">{concern.detail}</p>
               <CitationList atlas={atlas} refs={concern.citation_refs} onOpenCitation={onOpenCitation} />
             </article>
           ))}
           {atlas.concerns.length === 0 && (
-            <div className="vibe-panel rounded-xl p-4 text-sm text-slate-400">
+            <div className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-sm text-[#786846]">
               No open questions stand out in this report.
             </div>
           )}
         </div>
       </div>
       <div>
-        <h3 className="vibe-title text-lg text-slate-100">Shared links</h3>
+        <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Shared links</h3>
         <div className="mt-3">
           <LinkLens atlas={atlas} onOpenCitation={onOpenCitation} />
         </div>
@@ -840,27 +858,27 @@ function CitationButton({ citation, onOpen }: { citation?: AtlasCitation; onOpen
   return (
     <button
       onClick={onOpen}
-      className="block w-full rounded border border-slate-700/70 bg-slate-900/45 px-3 py-2 text-left text-xs text-slate-300 hover:border-cyan-400/45 hover:text-slate-100"
+      className="block w-full rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-3 py-2 text-left text-xs text-[#5e5238] hover:border-[#1f1a12]"
     >
-      <span className="block font-medium text-slate-100">{citation.label}</span>
-      <span className="mt-0.5 block text-slate-500">{citation.ref}</span>
+      <span className="block font-medium text-[#1f1a12]">{citation.label}</span>
+      <span className="mt-0.5 block text-[#786846]">{citation.ref}</span>
     </button>
   );
 }
 
 function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/75 p-4 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-[#1f1a12]/75 p-4 backdrop-blur-sm" onClick={onClose}>
       <aside
-        className="ml-auto h-full max-w-xl overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 p-5 shadow-2xl"
+        className="ml-auto h-full max-w-xl overflow-y-auto rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-[#1f1a12] shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-wide text-cyan-300">{citation.type} citation</p>
-            <h2 className="vibe-title mt-2 text-xl text-slate-100">{citation.label}</h2>
+            <p className="text-xs uppercase tracking-wide text-[#8b5f21]">{citation.type} citation</p>
+            <h2 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">{citation.label}</h2>
           </div>
-          <button onClick={onClose} className="vibe-chip rounded px-2 py-1 text-xs">
+          <button onClick={onClose} className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2 py-1 text-xs text-[#342a1b]">
             Close
           </button>
         </div>
@@ -877,7 +895,7 @@ function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClos
           )}
         </dl>
         {citation.body && (
-          <p className="mt-5 rounded-lg border border-slate-700/70 bg-slate-900/55 p-3 text-sm leading-relaxed text-slate-200">
+          <p className="mt-5 rounded-lg border border-[#cbbf9d] bg-[#fffaf0]/55 p-3 text-sm leading-relaxed text-[#342a1b]">
             {citation.body}
           </p>
         )}
@@ -886,7 +904,7 @@ function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClos
             href={citation.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-5 inline-flex rounded-md border border-cyan-400/35 bg-cyan-400/10 px-3 py-2 text-sm text-cyan-100"
+            className="mt-5 inline-flex rounded-md border border-[#1f1a12] bg-[#1f1a12] px-3 py-2 text-sm text-[#f8f4ea]"
           >
             Open source link
           </a>
@@ -899,8 +917,8 @@ function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClos
 function EvidenceRow({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="mt-0.5 break-words text-slate-200">{value}</dd>
+      <dt className="text-xs text-[#786846]">{label}</dt>
+      <dd className="mt-0.5 break-words text-[#342a1b]">{value}</dd>
     </div>
   );
 }

@@ -82,6 +82,7 @@ describe("atlas editorial report", () => {
     expect(promptText).toContain("daily newspaper issue");
     expect(promptText).toContain("Do not reduce the day to one theme");
     expect(promptText).toContain("MUST include 3 to 6 articles");
+    expect(promptText).toContain("section");
     expect(promptText).toContain("What happened?");
     expect(promptText).toContain("What does this mean?");
     expect(promptText).toContain("Why should I care?");
@@ -121,6 +122,7 @@ describe("atlas editorial report", () => {
         articles: [
           {
             role: "lead",
+            section: "Agent Harnesses",
             title: "Evaluation becomes the work",
             dek: "The room is moving from demos to proof.",
             summary: "The main article explains why evaluation is now the bottleneck.",
@@ -140,6 +142,7 @@ describe("atlas editorial report", () => {
           },
           {
             role: "secondary",
+            section: "Personal Workflows",
             title: "Tooling gaps are product gaps",
             dek: "Questions about records point to a product brief.",
             summary: "The side article explains the tooling pain.",
@@ -157,6 +160,7 @@ describe("atlas editorial report", () => {
           },
           {
             role: "secondary",
+            section: "Durable Records",
             title: "Durable records become the archive",
             dek: "The links and citations need a long-lived home.",
             summary: "The third article explains why the record itself matters.",
@@ -202,6 +206,7 @@ describe("atlas editorial report", () => {
     expect(report.articles).toHaveLength(3);
     expect(report.articles[0]).toMatchObject({
       role: "lead",
+      section: "Agent Harnesses",
       slug: "evaluation-becomes-the-work",
       evidence_refs: ["vibez:message:m1"],
       link_refs: ["vibez:link:11"],
