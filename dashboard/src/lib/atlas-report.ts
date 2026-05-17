@@ -85,6 +85,19 @@ export interface AtlasEditorialReport {
   generated_at: string;
 }
 
+type AtlasEditorialShell = Omit<AtlasEditorialReport, "articles" | "generated_at"> & {
+  article_seeds?: unknown[];
+};
+
+interface AtlasArticleSeed {
+  role: string;
+  section: string;
+  title: string;
+  dek: string;
+  evidence_refs: string[];
+  channels: string[];
+}
+
 export interface AtlasReportEvidencePack {
   window: AtlasSnapshot["window"];
   overview: AtlasSnapshot["overview"];
@@ -131,6 +144,9 @@ export function buildAtlasReportEvidence(atlas: AtlasSnapshot): AtlasReportEvide
   const refs = new Set<string>();
 
   for (const ref of atlas.narrative.report.evidence_refs) refs.add(ref);
+  for (const channel of atlas.channels.slice(0, 8)) {
+    for (const ref of channel.citation_refs.slice(0, 3)) refs.add(ref);
+  }
   for (const topic of atlas.topics.slice(0, 6)) {
     for (const ref of topic.citation_refs) refs.add(ref);
   }
@@ -348,18 +364,73 @@ export async function generateAtlasEditorialReport(
   atlas: AtlasSnapshot,
   generator: AtlasReportGenerator = generateJson<unknown>,
 ): Promise<AtlasEditorialReport> {
-  const messages = buildAtlasReportMessages(atlas);
+  const messages = buildAtlasIssueShellMessages(atlas);
   const result = await generator({
     taskId: "dashboard.atlas_report",
     messages,
   });
   let parsed = result.parsed;
+  let shell: AtlasEditorialShell | null = null;
   let validationError = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      shell = normalizeAtlasEditorialShell(parsed, atlas);
+      break;
+    } catch (error) {
+      validationError = error instanceof Error ? error.message : "schema validation failed";
+      const repaired = await generator({
+        taskId: "dashboard.atlas_report",
+        messages: buildAtlasIssueShellRepairMessages({
+          atlas,
+          invalidReport: parsed,
+          validationError,
+        }),
+      });
+      parsed = repaired.parsed;
+    }
+  }
+  if (!shell) {
+    shell = normalizeAtlasEditorialShell(parsed, atlas);
+  }
+
+  const articleSeeds = buildChannelArticleSeeds(atlas);
+  const articles = await repairArticlesIndividually({
+    atlas,
+    invalidReport: { ...shell, articles: articleSeeds },
+    validationError: "Atlas newspaper articles must be complete, cited, five-paragraph story pages.",
+    generator,
+  });
+  parsed = { ...shell, articles };
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return normalizeAtlasEditorialReport(parsed, atlas);
     } catch (error) {
       validationError = error instanceof Error ? error.message : "schema validation failed";
+      if (isArticleValidationError(validationError)) {
+        const repaired = await generator({
+          taskId: "dashboard.atlas_report",
+          messages: buildAtlasArticleRepairMessages({
+            atlas,
+            invalidReport: parsed,
+            validationError,
+          }),
+        });
+        parsed = mergeArticleRepair(parsed, repaired.parsed);
+        try {
+          return normalizeAtlasEditorialReport(parsed, atlas);
+        } catch (repairError) {
+          const repairMessage = repairError instanceof Error ? repairError.message : "";
+          if (!isArticleValidationError(repairMessage)) continue;
+          const articles = await repairArticlesIndividually({
+            atlas,
+            invalidReport: parsed,
+            validationError: repairMessage || validationError,
+            generator,
+          });
+          parsed = mergeArticleRepair(parsed, { articles });
+        }
+        continue;
+      }
       const repaired = await generator({
         taskId: "dashboard.atlas_report",
         messages: buildAtlasReportRepairMessages({
@@ -381,6 +452,497 @@ export async function generateAtlasEditorialReport(
       }`,
     );
   }
+}
+
+export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportMessage[] {
+  const evidence = buildAtlasReportEvidence(atlas);
+  return [
+    {
+      role: "system",
+      content: [
+        "You are Edward R. Murrow serving as editor and analyst for Vibez Atlas.",
+        "Write with public-service gravity: precise observation, plain stakes, disciplined skepticism, and clean sentences.",
+        "Honor Strunk and White: concrete nouns, active verbs, and no needless words.",
+        "The community members reading this are leading-edge AI practitioners. They want analysis, not link snippets.",
+        "Do not invent facts. Use only supplied citation refs.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "Write only the compact editorial shell for the latest Atlas newspaper issue.",
+        "Do not write full article bodies in this pass.",
+        "Name the themes that deserve separate articles, and keep them grounded in citations across different active channels where the evidence supports it.",
+        "If evidence is thin or odd, say so plainly.",
+        "Never refer to people as users. Say community members, practitioners, contributors, or people.",
+        "Return strict JSON with this shape:",
+        JSON.stringify(
+          {
+            issue: {
+              date: "YYYY-MM-DD",
+              title: "The Vibez Atlas",
+              subtitle: "one sentence issue summary",
+              edition_label: "Daily Edition",
+            },
+            headline: "short human headline",
+            dek: "one sentence that says what matters",
+            what_happened: ["2-4 concise bullets"],
+            what_it_means: ["2-4 concise bullets"],
+            why_care: ["2-4 concise bullets"],
+            valuable: ["2-4 concise bullets"],
+            actions: ["2-5 concrete next actions"],
+            main_topic: {
+              title: "main topic",
+              paragraphs: [
+                "Setup paragraph.",
+                "What happened paragraph.",
+                "What it means paragraph.",
+                "Why it matters paragraph.",
+                "Next move paragraph.",
+              ],
+              evidence_refs: ["vibez:message:..."],
+            },
+            article_seeds: [
+              {
+                role: "lead",
+                section: "Plain Theme Label",
+                title: "sober article title",
+                dek: "article angle",
+                evidence_refs: ["vibez:message:..."],
+                channels: ["channel name"],
+              },
+              {
+                role: "secondary",
+                section: "Plain Theme Label",
+                title: "sober article title",
+                dek: "article angle",
+                evidence_refs: ["vibez:message:..."],
+                channels: ["channel name"],
+              },
+              {
+                role: "secondary",
+                section: "Plain Theme Label",
+                title: "sober article title",
+                dek: "article angle",
+                evidence_refs: ["vibez:message:..."],
+                channels: ["channel name"],
+              },
+            ],
+            briefs: [
+              {
+                title: "minor but interesting item",
+                text: "short human note",
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
+            crosscurrents: [
+              {
+                title: "how rooms relate",
+                text: "where channels converge, diverge, or talk past each other",
+                channels: ["channel name"],
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
+            themes: [
+              {
+                title: "theme name",
+                analysis: "what this theme is really about",
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
+            evidence: [
+              {
+                ref: "vibez:message:...",
+                label: "short label",
+                why_it_matters: "why this evidence earns its place",
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "",
+        "Evidence pack:",
+        JSON.stringify(evidence, null, 2),
+      ].join("\n"),
+    },
+  ];
+}
+
+function buildAtlasIssueShellRepairMessages({
+  atlas,
+  invalidReport,
+  validationError,
+}: {
+  atlas: AtlasSnapshot;
+  invalidReport: unknown;
+  validationError: string;
+}): AtlasReportMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "You repair only the compact Vibez Atlas issue shell.",
+        "Return strict JSON only. Do not write full article bodies.",
+        "Do not invent facts. Use only supplied evidence refs.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "Repair this issue shell so the required fields are present.",
+        `Validation error: ${validationError}`,
+        "main_topic must have a title, exactly five paragraphs, and valid evidence_refs.",
+        "article_seeds must contain exactly one lead and at least two secondary article angles.",
+        "",
+        "Invalid shell:",
+        JSON.stringify(invalidReport, null, 2),
+        "",
+        "Evidence pack:",
+        JSON.stringify(buildAtlasReportEvidence(atlas), null, 2),
+      ].join("\n"),
+    },
+  ];
+}
+
+function isArticleValidationError(message: string): boolean {
+  return /newspaper articles|five cited paragraphs|article body/i.test(message);
+}
+
+function mergeArticleRepair(base: unknown, repaired: unknown): unknown {
+  if (!base || typeof base !== "object") return base;
+  const basePayload = base as Record<string, unknown>;
+  const repairedPayload = repaired && typeof repaired === "object"
+    ? repaired as Record<string, unknown>
+    : {};
+  const articles = Array.isArray(repaired)
+    ? repaired
+    : Array.isArray(repairedPayload.articles)
+      ? repairedPayload.articles
+      : [];
+  return {
+    ...basePayload,
+    articles,
+  };
+}
+
+export function buildAtlasArticleRepairMessages({
+  atlas,
+  invalidReport,
+  validationError,
+}: {
+  atlas: AtlasSnapshot;
+  invalidReport: unknown;
+  validationError: string;
+}): AtlasReportMessage[] {
+  const evidence = buildAtlasReportEvidence(atlas);
+  return [
+    {
+      role: "system",
+      content: [
+        "You repair only the newspaper articles for Vibez Atlas.",
+        "Return strict JSON only in the form {\"articles\":[...]}",
+        "Do not invent facts. Use only supplied evidence refs.",
+        "Do not use emoji, decorative symbols, or meme punctuation.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "Repair only the newspaper articles for this Atlas issue.",
+        `Validation error: ${validationError}`,
+        "Keep the existing issue/headline/dek/main_topic implied by the invalid report.",
+        "Return exactly one lead article plus at least two secondary articles.",
+        "Each article must have role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
+        "Each article body must contain at least five compact natural paragraph strings.",
+        "Do not return placeholders like Lead paragraph, Evidence paragraph, or Paragraph 1.",
+        "Do not prefix paragraphs with labels. Write the actual prose.",
+        "Each article must include at least one valid evidence_refs citation from the evidence pack.",
+        "Each article image must include kind, prompt, and alt; kind should be generated unless a real source image URL exists.",
+        "Section labels must be plain theme labels, not jokes or decorative text.",
+        "",
+        "Return shape:",
+        JSON.stringify(
+          {
+            articles: [
+              {
+                role: "lead",
+                section: "Plain Theme Label",
+                title: "non-empty title",
+                dek: "non-empty deck",
+                summary: "non-empty summary",
+                body: [
+                  "A natural reporting paragraph about what happened.",
+                  "A natural evidence paragraph with concrete citation details.",
+                  "A natural analysis paragraph about what those details mean.",
+                  "A natural value paragraph about why this matters.",
+                  "A natural action paragraph about what to do next.",
+                ],
+                actions: ["concrete action"],
+                evidence_refs: ["vibez:message:..."],
+                link_refs: [],
+                channels: ["channel name"],
+                image: {
+                  kind: "generated",
+                  prompt: "plain editorial image prompt",
+                  alt: "short accessible image description",
+                },
+                related_article_slugs: [],
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "",
+        "Invalid report summary:",
+        JSON.stringify(compactReportForArticleRepair(invalidReport), null, 2),
+        "",
+        "Evidence pack:",
+        JSON.stringify(evidence, null, 2),
+      ].join("\n"),
+    },
+  ];
+}
+
+async function repairArticlesIndividually({
+  atlas,
+  invalidReport,
+  validationError,
+  generator,
+}: {
+  atlas: AtlasSnapshot;
+  invalidReport: unknown;
+  validationError: string;
+  generator: AtlasReportGenerator;
+}): Promise<unknown[]> {
+  const articleSeeds = buildArticleRepairSeeds(invalidReport, atlas);
+  const articles: unknown[] = [];
+  for (let index = 0; index < articleSeeds.length; index += 1) {
+    const repaired = await generator({
+      taskId: "dashboard.atlas_report",
+      messages: buildAtlasSingleArticleRepairMessages({
+        atlas,
+        invalidReport,
+        articleSeed: articleSeeds[index],
+        articleIndex: index,
+        validationError,
+      }),
+    });
+    articles.push(readRepairedArticle(repaired.parsed));
+  }
+  return articles;
+}
+
+function readRepairedArticle(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const payload = value as Record<string, unknown>;
+  return payload.article || value;
+}
+
+function buildArticleRepairSeeds(invalidReport: unknown, atlas: AtlasSnapshot): unknown[] {
+  const payload = invalidReport && typeof invalidReport === "object"
+    ? invalidReport as Record<string, unknown>
+    : {};
+  const existing = Array.isArray(payload.articles) ? payload.articles.slice(0, 3) : [];
+  const seeds = [...existing];
+  while (seeds.length < 3) {
+    const channel = atlas.channels[seeds.length] || atlas.channels[0];
+    seeds.push({
+      role: seeds.length === 0 ? "lead" : "secondary",
+      section: channel?.name || "Atlas",
+      title: channel ? `${channel.name} needs a closer read` : "The day needs a closer read",
+      dek: "A compact article grounded in the strongest available citations.",
+      evidence_refs: channel?.citation_refs?.slice(0, 3) || atlas.narrative.report.evidence_refs.slice(0, 3),
+      channels: channel ? [channel.name] : [],
+    });
+  }
+  return seeds;
+}
+
+function buildChannelArticleSeeds(atlas: AtlasSnapshot): unknown[] {
+  const seeds = atlas.channels
+    .map((channel, index) => {
+      const evidenceRefs = channel.citation_refs.filter((ref) => {
+        const body = atlas.citations[ref]?.body || "";
+        return body.trim().length >= 30 && !/^related:?\s*$/i.test(body.trim());
+      }).slice(0, 3);
+      if (evidenceRefs.length === 0) return null;
+      const section = cleanSectionLabel(channel.name) || "Atlas";
+      return {
+        role: index === 0 ? "lead" : "secondary",
+        section,
+        title: `${section} needs a closer read`,
+        dek: "A compact article grounded in the strongest available citations from this channel.",
+        evidence_refs: evidenceRefs,
+        channels: [channel.name],
+      };
+    })
+    .filter((seed): seed is AtlasArticleSeed => Boolean(seed))
+    .slice(0, 3);
+  seeds.forEach((seed, index) => {
+    seed.role = index === 0 ? "lead" : "secondary";
+  });
+
+  return buildArticleRepairSeeds({ articles: seeds }, atlas);
+}
+
+function compactReportForArticleRepair(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const payload = value as Record<string, unknown>;
+  const articles = Array.isArray(payload.articles)
+    ? payload.articles.slice(0, 6).map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const article = item as Record<string, unknown>;
+      return {
+        role: article.role,
+        section: article.section,
+        title: article.title,
+        dek: article.dek,
+        summary: article.summary,
+        body: readTextList(article.body),
+        evidence_refs: readTextList(article.evidence_refs),
+        link_refs: readTextList(article.link_refs),
+        channels: readTextList(article.channels),
+        image: article.image,
+      };
+    })
+    : [];
+  return {
+    headline: payload.headline,
+    dek: payload.dek,
+    main_topic: payload.main_topic,
+    actions: readTextList(payload.actions),
+    articles,
+  };
+}
+
+export function buildAtlasSingleArticleRepairMessages({
+  atlas,
+  invalidReport,
+  articleSeed,
+  articleIndex,
+  validationError,
+}: {
+  atlas: AtlasSnapshot;
+  invalidReport: unknown;
+  articleSeed: unknown;
+  articleIndex: number;
+  validationError: string;
+}): AtlasReportMessage[] {
+  const evidence = buildArticleEvidence(atlas, articleSeed);
+  const role = articleIndex === 0 ? "lead" : "secondary";
+  return [
+    {
+      role: "system",
+      content: [
+        "You repair one Vibez Atlas newspaper article.",
+        "Return strict JSON only in the form {\"article\":{...}}",
+        "Do not invent facts. Use only supplied evidence refs.",
+        "Write for community members who are leading-edge AI practitioners, never for generic users.",
+        "Use Edward R. Murrow's plain public-service style and Strunk and White discipline.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "Write one complete article for this Atlas newspaper issue.",
+        `Validation error: ${validationError}`,
+        `Required role: ${role}`,
+        "The title must be sober and specific. No puns, hype, cutesy metaphors, or mock newspaper voice.",
+        "The section must be a plain theme label, not a chat room name with emoji or punctuation.",
+        "The body must contain at least five compact natural paragraph strings.",
+        "Do not prefix paragraphs with Lead, Evidence, Analysis, Value, Action, or similar labels.",
+        "Paragraph 1 reports what happened.",
+        "Paragraph 2 says what the citations show, using concrete details from the cited text.",
+        "Paragraph 3 explains what it means without broad claims the evidence does not support.",
+        "Paragraph 4 explains why the reader should care.",
+        "Paragraph 5 names the action or watch point.",
+        "If the evidence is odd, thin, or inconclusive, say that plainly instead of manufacturing certainty.",
+        "Never refer to people as users. Say community members, practitioners, contributors, or people.",
+        "Use at least one valid evidence_refs entry from the evidence pack.",
+        "Do not make generic claims about AI agents, privacy, security, or project quality unless a citation directly supports them.",
+        "Set image.kind to generated and include image.prompt and image.alt.",
+        "Return shape:",
+        JSON.stringify(
+          {
+            article: {
+              role,
+              section: "Plain Theme Label",
+              title: "non-empty title",
+              dek: "non-empty deck",
+              summary: "two sentence card summary",
+              body: [
+                "A natural reporting paragraph about what happened.",
+                "A natural evidence paragraph with concrete details from the citations.",
+                "A natural analysis paragraph about what those details mean.",
+                "A natural value paragraph about why this matters to the reader.",
+                "A natural action paragraph about what to do or watch next.",
+              ],
+              actions: ["concrete action"],
+              evidence_refs: ["vibez:message:..."],
+              link_refs: [],
+              channels: ["channel name"],
+              image: {
+                kind: "generated",
+                prompt: "plain editorial image prompt",
+                alt: "short accessible image description",
+              },
+              related_article_slugs: [],
+            },
+          },
+          null,
+          2,
+        ),
+        "",
+        "Issue summary:",
+        JSON.stringify(compactReportForArticleRepair(invalidReport), null, 2),
+        "",
+        "Article seed to repair:",
+        JSON.stringify(articleSeed, null, 2),
+        "",
+        "Evidence pack:",
+        JSON.stringify(evidence, null, 2),
+      ].join("\n"),
+    },
+  ];
+}
+
+function buildArticleEvidence(atlas: AtlasSnapshot, articleSeed: unknown): AtlasReportEvidencePack {
+  const fullEvidence = buildAtlasReportEvidence(atlas);
+  if (!articleSeed || typeof articleSeed !== "object") return fullEvidence;
+  const seed = articleSeed as Record<string, unknown>;
+  const seedRefs = new Set(readTextList(seed.evidence_refs));
+  if (seedRefs.size === 0) return fullEvidence;
+  const citations = Array.from(seedRefs)
+    .map((ref) => atlas.citations[ref])
+    .filter((citation): citation is AtlasCitation => Boolean(citation))
+    .map((citation) => ({
+      ref: citation.ref,
+      type: citation.type,
+      label: citation.label,
+      channel: citation.channel,
+      sender: citation.sender,
+      timestamp: citation.timestamp,
+      topics: citation.topics,
+      text: citation.body,
+      url: citation.url,
+      title: citation.title,
+    }));
+  return {
+    ...fullEvidence,
+    channels: fullEvidence.channels.filter((channel) =>
+      channel.citation_refs.some((ref) => seedRefs.has(ref)),
+    ),
+    topics: fullEvidence.topics.filter((topic) =>
+      topic.citation_refs.some((ref) => seedRefs.has(ref)),
+    ),
+    concerns: fullEvidence.concerns.filter((concern) =>
+      concern.citation_refs.some((ref) => seedRefs.has(ref)),
+    ),
+    links: fullEvidence.links.filter((link) => seedRefs.has(link.ref)),
+    citations,
+  };
 }
 
 export function buildAtlasReportRepairMessages({
@@ -526,8 +1088,11 @@ export function normalizeAtlasEditorialReport(
     throw new Error("atlas editorial report is missing");
   }
   const payload = raw as Record<string, unknown>;
-  const headline = readText(payload.headline);
-  const dek = readText(payload.dek);
+  const issuePayload = payload.issue && typeof payload.issue === "object"
+    ? payload.issue as Record<string, unknown>
+    : {};
+  const headline = readText(payload.headline) || readText(payload.title) || readText(issuePayload.subtitle);
+  const dek = readText(payload.dek) || readText(payload.subtitle) || readText(issuePayload.subtitle);
   if (!headline || !dek) {
     throw new Error("atlas editorial report is missing headline or dek");
   }
@@ -542,7 +1107,7 @@ export function normalizeAtlasEditorialReport(
     why_care: [],
     valuable: [],
     actions: [],
-    main_topic: readMainTopic(payload.main_topic, allowedRefs),
+    main_topic: readMainTopic(payload.main_topic, allowedRefs, shellFallbackParagraphs(payload)),
     articles: [],
     briefs: readBriefs(payload.briefs, allowedRefs),
     crosscurrents: readCrosscurrents(payload.crosscurrents, allowedRefs),
@@ -560,6 +1125,51 @@ export function normalizeAtlasEditorialReport(
   report.articles = readArticles(payload.articles, allowedRefs, report);
 
   return report;
+}
+
+function normalizeAtlasEditorialShell(
+  raw: unknown,
+  atlas: AtlasSnapshot,
+): AtlasEditorialShell {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("atlas editorial report is missing");
+  }
+  const payload = raw as Record<string, unknown>;
+  const issuePayload = payload.issue && typeof payload.issue === "object"
+    ? payload.issue as Record<string, unknown>
+    : {};
+  const headline = readText(payload.headline) || readText(payload.title) || readText(issuePayload.subtitle);
+  const dek = readText(payload.dek) || readText(payload.subtitle) || readText(issuePayload.subtitle);
+  if (!headline || !dek) {
+    throw new Error("atlas editorial report is missing headline or dek");
+  }
+
+  const allowedRefs = new Set(Object.keys(atlas.citations));
+  const shell: AtlasEditorialShell = {
+    issue: readIssue(payload.issue, atlas),
+    headline,
+    dek,
+    what_happened: [],
+    what_it_means: [],
+    why_care: [],
+    valuable: [],
+    actions: [],
+    main_topic: readMainTopic(payload.main_topic, allowedRefs, shellFallbackParagraphs(payload)),
+    briefs: readBriefs(payload.briefs, allowedRefs),
+    crosscurrents: readCrosscurrents(payload.crosscurrents, allowedRefs),
+    themes: readThemes(payload.themes, allowedRefs),
+    evidence: readEvidence(payload.evidence, allowedRefs),
+    article_seeds: Array.isArray(payload.article_seeds) ? payload.article_seeds : [],
+  };
+
+  for (const field of REQUIRED_LIST_FIELDS) {
+    shell[field] = readTextList(payload[field]);
+    if (shell[field].length === 0) {
+      throw new Error(`atlas editorial report is missing ${field}`);
+    }
+  }
+
+  return shell;
 }
 
 function readText(value: unknown): string {
@@ -675,13 +1285,15 @@ function readArticle(
   const payload = value as Record<string, unknown>;
   const title = readText(payload.title);
   const dek = readText(payload.dek);
-  const body = readTextList(payload.body);
+  const body = readTextList(payload.body)
+    .map(cleanArticleParagraph)
+    .filter((paragraph) => paragraph && !isArticlePlaceholder(paragraph));
   const role = readText(payload.role) === "lead" && index === 0 ? "lead" : "secondary";
   const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
   if (!title || !dek || body.length < 5 || evidenceRefs.length === 0) return null;
   return {
     role,
-    section: readText(payload.section) || "Atlas",
+    section: cleanSectionLabel(readText(payload.section)) || "Atlas",
     title,
     slug: slugify(readText(payload.slug) || title),
     dek,
@@ -694,6 +1306,31 @@ function readArticle(
     image: readImage(payload.image, title),
     related_article_slugs: readTextList(payload.related_article_slugs),
   };
+}
+
+function cleanArticleParagraph(value: string): string {
+  return value
+    .replace(/^(paragraph\s+\d+|lead|evidence|analysis|value|action)(\s+paragraph)?\s*:\s*/i, "")
+    .trim();
+}
+
+function isArticlePlaceholder(value: string): boolean {
+  return /^(lead|evidence|analysis|value|action)(\s+paragraph)?\.?$/i.test(value) ||
+    /^paragraph\s+\d+\.?$/i.test(value) ||
+    /^a natural (reporting|evidence|analysis|value|action) paragraph/i.test(value);
+}
+
+function cleanSectionLabel(value: string): string {
+  const cleaned = value
+    .replace(/&[^;\s]+;/g, " ")
+    .replace(/[^\p{L}\p{N}\s/-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/^ai[-\s]?oss$/i.test(cleaned)) return "AI OSS";
+  if (/personal agents/i.test(cleaned)) return "Personal Agents";
+  if (/personal workflows/i.test(cleaned)) return "Personal Workflows";
+  if (/agentic weather/i.test(cleaned)) return "Agentic Weather";
+  return cleaned;
 }
 
 function readImage(value: unknown, title: string): AtlasEditorialImage {
@@ -712,13 +1349,27 @@ function readImage(value: unknown, title: string): AtlasEditorialImage {
   };
 }
 
-function readMainTopic(value: unknown, allowedRefs: Set<string>): AtlasEditorialMainTopic {
+function shellFallbackParagraphs(payload: Record<string, unknown>): string[] {
+  return [
+    ...readTextList(payload.what_happened),
+    ...readTextList(payload.what_it_means),
+    ...readTextList(payload.why_care),
+    ...readTextList(payload.valuable),
+    ...readTextList(payload.actions),
+  ];
+}
+
+function readMainTopic(
+  value: unknown,
+  allowedRefs: Set<string>,
+  fallbackParagraphs: string[] = [],
+): AtlasEditorialMainTopic {
   if (!value || typeof value !== "object") {
     throw new Error("atlas editorial report is missing main_topic");
   }
   const payload = value as Record<string, unknown>;
   const title = readText(payload.title);
-  const paragraphs = readTextList(payload.paragraphs).slice(0, 5);
+  const paragraphs = [...readTextList(payload.paragraphs), ...fallbackParagraphs].slice(0, 5);
   if (!title || paragraphs.length !== 5) {
     throw new Error("atlas editorial report main_topic requires a title and five paragraphs");
   }

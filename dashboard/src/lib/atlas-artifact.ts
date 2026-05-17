@@ -11,7 +11,7 @@ export interface AtlasArtifactPayload {
   artifact: {
     generated_at: string;
     window_hours: number;
-    source: "local_ollama";
+    source: "configured_model_route";
   };
 }
 
@@ -53,7 +53,7 @@ export function writeAtlasArtifact({
     artifact: {
       generated_at: new Date().toISOString(),
       window_hours: windowHours,
-      source: "local_ollama",
+      source: "configured_model_route",
     },
   };
   fs.writeFileSync(artifactPath, `${JSON.stringify(payload, null, 2)}\n`);

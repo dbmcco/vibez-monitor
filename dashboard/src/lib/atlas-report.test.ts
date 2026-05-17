@@ -53,6 +53,31 @@ function sampleAtlas() {
   });
 }
 
+function completeArticle(title: string, role = "secondary", ref = "vibez:message:m1") {
+  return {
+    article: {
+      role,
+      section: role === "lead" ? "Agent Harnesses" : "Personal Workflows",
+      title,
+      dek: "A complete deck grounded in evidence.",
+      summary: "A complete article summary grounded in evidence.",
+      body: [
+        "The article opens with the concrete thing that happened.",
+        "The evidence paragraph names what the citation shows.",
+        "The analysis paragraph explains the implication.",
+        "The value paragraph explains why the reader should care.",
+        "The action paragraph names the next useful move.",
+      ],
+      actions: ["Check the cited thread."],
+      evidence_refs: [ref],
+      link_refs: [],
+      channels: [role === "lead" ? "Agents" : "Tools"],
+      image: { kind: "generated", prompt: "newspaper illustration", alt: "Editorial illustration" },
+      related_article_slugs: [],
+    },
+  };
+}
+
 describe("atlas editorial report", () => {
   test("builds an evidence pack with citations the model can reason from", () => {
     const evidence = buildAtlasReportEvidence(sampleAtlas());
@@ -73,6 +98,15 @@ describe("atlas editorial report", () => {
       title: "Hot signal in Agents",
       citation_refs: ["vibez:message:m1"],
     });
+  });
+
+  test("pulls evidence from active channels so the newspaper is not trapped in one theme", () => {
+    const atlas = sampleAtlas();
+    atlas.narrative.report.evidence_refs = ["vibez:message:m1"];
+
+    const evidence = buildAtlasReportEvidence(atlas);
+
+    expect(evidence.citations.map((citation) => citation.ref)).toContain("vibez:message:m2");
   });
 
   test("prompts for reader-value analysis instead of link snippets", () => {
@@ -224,6 +258,88 @@ describe("atlas editorial report", () => {
     expect(report.crosscurrents[0].channels).toEqual(["Agents", "Tools"]);
   });
 
+  test("cleans article section labels and paragraph scaffolding", () => {
+    const report = normalizeAtlasEditorialReport(
+      {
+        headline: "The agent work found its bottleneck",
+        dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+        what_happened: ["People circled the evaluation loop."],
+        what_it_means: ["The project is moving from demo energy to operating discipline."],
+        why_care: ["This is where agent work starts to become repeatable."],
+        valuable: ["The useful artifact is the citation trail."],
+        actions: ["Turn the evaluation question into an owner and a next check."],
+        main_topic: {
+          title: "Evaluation as leverage",
+          paragraphs: [
+            "The first paragraph names the theme.",
+            "The second paragraph explains what happened.",
+            "The third paragraph explains what it means.",
+            "The fourth paragraph explains why it matters.",
+            "The fifth paragraph names the next useful move.",
+          ],
+          evidence_refs: ["vibez:message:m1"],
+        },
+        articles: [
+          {
+            role: "lead",
+            section: "Personal Agents 🦞🦀🛫😱",
+            title: "Evaluation becomes the work",
+            dek: "The room is moving from demos to proof.",
+            summary: "The main article explains why evaluation is now the bottleneck.",
+            body: [
+              "Lead paragraph: Evaluation moved from background concern to front-page story.",
+              "Evidence: The cited messages show a group asking for proof, not applause.",
+              "Analysis paragraph: That matters because repeatable agent work needs durable records.",
+              "Value: The useful thing here is the citation trail.",
+              "Action paragraph: The next move is to assign an owner and check the loop.",
+            ],
+            actions: ["Assign an owner for the evaluation loop."],
+            evidence_refs: ["vibez:message:m1"],
+            link_refs: [],
+            channels: ["Agents"],
+          },
+          {
+            role: "secondary",
+            section: "Personal Workflows",
+            title: "Tooling gaps are product gaps",
+            dek: "Questions about records point to a product brief.",
+            summary: "The side article explains the tooling pain.",
+            body: [
+              "The side story deserves its own space.",
+              "It is related to the lead but not the same story.",
+              "The evidence points to records and follow-up.",
+              "The value is a product-shaped question.",
+              "The next move is to test the workflow.",
+            ],
+            actions: ["Review the tool catalog."],
+            evidence_refs: ["vibez:message:m2"],
+          },
+          {
+            role: "secondary",
+            section: "#ai-oss",
+            title: "Durable records become the archive",
+            dek: "The links and citations need a long-lived home.",
+            summary: "The third article explains why the record itself matters.",
+            body: [
+              "A third story completes the front page.",
+              "It follows the evidence system rather than the people.",
+              "The durable record changes how the group can learn.",
+              "The value is continuity.",
+              "The next move is to preserve the source trail.",
+            ],
+            actions: ["Save the source trail."],
+            evidence_refs: ["vibez:message:m1"],
+          },
+        ],
+      },
+      sampleAtlas(),
+    );
+
+    expect(report.articles[0].section).toBe("Personal Agents");
+    expect(report.articles[0].body[0]).toBe("Evaluation moved from background concern to front-page story.");
+    expect(report.articles[2].section).toBe("AI OSS");
+  });
+
   test("normalizes model output and drops unsupported citation refs", () => {
     const report = normalizeAtlasEditorialReport(
       {
@@ -309,7 +425,7 @@ describe("atlas editorial report", () => {
 
   test("asks the model to repair schema-invalid report JSON", async () => {
     const baseReport = {
-      headline: "The agent work found its bottleneck",
+      headline: "",
       dek: "Evaluation, not enthusiasm, is the limiting reagent.",
       what_happened: ["People circled the evaluation loop."],
       what_it_means: ["The project is moving from demo energy to operating discipline."],
@@ -330,6 +446,7 @@ describe("atlas editorial report", () => {
       .mockResolvedValueOnce({
         parsed: {
           ...baseReport,
+          headline: "The agent work found its bottleneck",
           main_topic: {
             ...baseReport.main_topic,
             paragraphs: [
@@ -341,15 +458,105 @@ describe("atlas editorial report", () => {
             ],
           },
         },
-      });
+      })
+      .mockResolvedValue({ parsed: completeArticle("Evaluation becomes the work", "lead") });
 
     const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
 
-    expect(generator).toHaveBeenCalledTimes(2);
+    expect(generator).toHaveBeenCalledTimes(5);
     expect(generator.mock.calls[1][0].messages.map((message) => message.content).join("\n")).toContain(
-      "Repair this Atlas newspaper issue",
+      "Repair this issue shell",
     );
     expect(report.main_topic.paragraphs).toHaveLength(5);
+  });
+
+  test("writes full articles in article-sized model passes", async () => {
+    const baseReport = {
+      headline: "The agent work found its bottleneck",
+      dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+      what_happened: ["People circled the evaluation loop."],
+      what_it_means: ["The project is moving from demo energy to operating discipline."],
+      why_care: ["This is where agent work starts to become repeatable."],
+      valuable: ["The useful artifact is the citation trail."],
+      actions: ["Turn the evaluation question into an owner and a next check."],
+      main_topic: {
+        title: "Evaluation as leverage",
+        paragraphs: [
+          "The first paragraph names the theme.",
+          "The second paragraph explains what happened.",
+          "The third paragraph explains what it means.",
+          "The fourth paragraph explains why it matters.",
+          "The fifth paragraph names the next useful move.",
+        ],
+        evidence_refs: ["vibez:message:m1"],
+      },
+      article_seeds: [
+        { role: "lead", section: "Agent Harnesses", title: "Evaluation becomes the work", evidence_refs: ["vibez:message:m1"] },
+        { role: "secondary", section: "Personal Workflows", title: "Tooling gaps are product gaps", evidence_refs: ["vibez:message:m2"] },
+        { role: "secondary", section: "Durable Records", title: "Durable records become the archive", evidence_refs: ["vibez:message:m1"] },
+      ],
+      briefs: [],
+      crosscurrents: [],
+      themes: [],
+      evidence: [],
+    };
+    const generator = vi
+      .fn()
+      .mockResolvedValueOnce({ parsed: baseReport })
+      .mockResolvedValueOnce({ parsed: completeArticle("Evaluation becomes the work", "lead") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Tooling gaps are product gaps", "secondary", "vibez:message:m2") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") });
+
+    const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
+
+    expect(generator).toHaveBeenCalledTimes(4);
+    expect(generator.mock.calls[1][0].messages.map((message) => message.content).join("\n")).toContain(
+      "Write one complete article",
+    );
+    expect(report.articles).toHaveLength(3);
+    expect(report.articles[0].body).toHaveLength(5);
+  });
+
+  test("uses active channel seeds when the shell omits article seeds", async () => {
+    const baseReport = {
+      headline: "The agent work found its bottleneck",
+      dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+      what_happened: ["People circled the evaluation loop."],
+      what_it_means: ["The project is moving from demo energy to operating discipline."],
+      why_care: ["This is where agent work starts to become repeatable."],
+      valuable: ["The useful artifact is the citation trail."],
+      actions: ["Turn the evaluation question into an owner and a next check."],
+      main_topic: {
+        title: "Evaluation as leverage",
+        paragraphs: [
+          "The first paragraph names the theme.",
+          "The second paragraph explains what happened.",
+          "The third paragraph explains what it means.",
+          "The fourth paragraph explains why it matters.",
+          "The fifth paragraph names the next useful move.",
+        ],
+        evidence_refs: ["vibez:message:m1"],
+      },
+      briefs: [],
+      crosscurrents: [],
+      themes: [],
+      evidence: [],
+    };
+    const generator = vi
+      .fn()
+      .mockResolvedValueOnce({ parsed: baseReport })
+      .mockResolvedValueOnce({ parsed: completeArticle("Evaluation becomes the work", "lead") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Tooling gaps are product gaps", "secondary", "vibez:message:m2") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") });
+
+    const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
+
+    expect(generator).toHaveBeenCalledTimes(4);
+    expect(generator.mock.calls[1][0].messages.map((message) => message.content).join("\n")).toContain(
+      "Write one complete article",
+    );
+    expect(report.articles).toHaveLength(3);
+    expect(report.articles.every((article) => article.body.length >= 5)).toBe(true);
   });
 
   test("rejects article pages without five cited paragraphs", () => {

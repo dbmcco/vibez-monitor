@@ -288,21 +288,31 @@ async function runOllamaRoute(
 ): Promise<ModelTextResult> {
   const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   if (!baseUrl) throw new Error("OLLAMA_BASE_URL not configured");
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: route.model,
-      messages: payload,
-      stream: false,
-      options: {
-        temperature: route.temperature,
-        num_predict: route.max_tokens,
-        num_ctx: route.context_window,
-      },
-      format: route.mode === "json" ? "json" : undefined,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(route.timeout_ms),
+      body: JSON.stringify({
+        model: route.model,
+        messages: payload,
+        stream: false,
+        options: {
+          temperature: route.temperature,
+          num_predict: route.max_tokens,
+          num_ctx: route.context_window,
+        },
+        format: route.mode === "json" ? "json" : undefined,
+      }),
+    });
+  } catch (error) {
+    throw new Error(
+      `ollama request failed for ${route.model}: ${
+        error instanceof Error ? error.message : "request timed out"
+      }`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`ollama request failed: ${response.status}`);
   }
@@ -328,14 +338,24 @@ async function runOllamaEmbeddingRoute(
   dimensions?: number,
 ): Promise<ModelEmbeddingResult> {
   const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: route.model,
-      input: inputs,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(route.timeout_ms),
+      body: JSON.stringify({
+        model: route.model,
+        input: inputs,
+      }),
+    });
+  } catch (error) {
+    throw new Error(
+      `ollama embed request failed for ${route.model}: ${
+        error instanceof Error ? error.message : "request timed out"
+      }`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`ollama embed request failed: ${response.status}`);
   }

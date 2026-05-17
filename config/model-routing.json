@@ -11,13 +11,14 @@
       "dimensions": 256
     },
     "classification.inline": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
-      "base_url": "https://openrouter.ai/api/v1",
+      "base_url": "http://localhost:11434",
       "max_tokens": 256,
       "temperature": 0.1,
-      "timeout_ms": 30000
+      "timeout_ms": 120000,
+      "context_window": 8192
     },
     "classification.backfill": {
       "provider": "ollama",
@@ -83,14 +84,14 @@
       "timeout_ms": 120000
     },
     "dashboard.atlas_report": {
-      "provider": "ollama",
-      "model": "hermes3:8b",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.1",
       "mode": "json",
-      "base_url": "http://localhost:11434",
+      "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 8192,
-      "temperature": 0.25,
-      "timeout_ms": 120000,
-      "context_window": 32768
+      "temperature": 0.2,
+      "timeout_ms": 180000,
+      "context_window": 202752
     },
     "dashboard.atlas_deeper_dive": {
       "provider": "openrouter",
