@@ -255,8 +255,7 @@ export default function AtlasPage() {
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <Header />
+      <div>
         <div className="rounded-xl border border-[#cbbf9d] bg-[#f4ead7] p-6 text-[#1f1a12] shadow-[0_18px_60px_rgba(32,24,12,0.22)]">
           <div className="border-b-4 border-double border-[#1f1a12] pb-4 text-center">
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#786846]">
@@ -281,8 +280,7 @@ export default function AtlasPage() {
 
   if (error || !atlas) {
     return (
-      <div className="space-y-4">
-        <Header />
+      <div>
         <div className="rounded-xl border border-[#cbbf9d] bg-[#f4ead7] p-5 text-sm text-[#342a1b]">
           {error || "Atlas data is unavailable right now."}
         </div>
@@ -294,9 +292,7 @@ export default function AtlasPage() {
   const matrixChannels = atlas.channels.slice(0, 12).map((channel) => channel.name);
 
   return (
-    <div className="fade-up -m-2 space-y-6 rounded-xl border border-[#cbbf9d] bg-[#efe3cc] p-3 text-[#1f1a12] shadow-[0_22px_80px_rgba(18,14,8,0.26)] sm:-m-4 sm:p-5">
-      <Header />
-
+    <div className="atlas-newspaper fade-up -m-2 space-y-6 rounded-xl border border-[#cbbf9d] bg-[#efe3cc] p-3 text-[#1f1a12] shadow-[0_22px_80px_rgba(18,14,8,0.26)] sm:-m-4 sm:p-5">
       <NarrativeReport
         atlas={atlas}
         editorialReport={editorialReport}
@@ -307,12 +303,13 @@ export default function AtlasPage() {
 
       <PeopleDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
 
-      <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+      <section className="rounded border border-[#cbbf9d] bg-[#f7edd9] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-serif text-xl font-bold text-[#1f1a12]">Below the Fold</h2>
             <p className="mt-1 text-sm text-[#5e5238]">
-              Read the themes first. Use diagnostics only when you need the raw shape.
+              The front page explains the story. This section shows value, evidence, rooms, links,
+              and the raw diagnostic map.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -332,6 +329,8 @@ export default function AtlasPage() {
           </div>
         </div>
       </section>
+
+      <ValueAssessment report={editorialReport} atlas={atlas} />
 
       <section className="grid gap-4 xl:grid-cols-[1.4fr_0.8fr]">
         <div className="space-y-4">
@@ -367,22 +366,6 @@ export default function AtlasPage() {
         />
       )}
     </div>
-  );
-}
-
-function Header() {
-  return (
-    <header className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
-      <p className="text-xs font-bold tracking-[0.16em] text-[#786846] uppercase">
-        Vibez
-      </p>
-      <h1 className="mt-1 font-serif text-3xl font-black text-[#1f1a12] sm:text-4xl">
-        The Vibez Atlas
-      </h1>
-      <p className="mt-2 max-w-3xl text-sm leading-6 text-[#5e5238]">
-        A daily newspaper front page for the rooms, themes, evidence, and arguments worth reading.
-      </p>
-    </header>
   );
 }
 
@@ -449,8 +432,8 @@ function NarrativeReport({
 
       {report && leadArticle ? (
         <>
-          <div className="mt-6 grid gap-5 lg:grid-cols-[0.9fr_1.35fr_0.9fr]">
-            <div className="space-y-5 lg:border-r lg:border-[#cbbf9d] lg:pr-5">
+          <div className="mt-6 grid gap-5 min-[1500px]:grid-cols-[0.9fr_1.35fr_0.9fr]">
+            <div className="space-y-5 min-[1500px]:border-r min-[1500px]:border-[#cbbf9d] min-[1500px]:pr-5">
               {leftArticle && (
                 <NewspaperArticleCard
                   article={leftArticle}
@@ -464,7 +447,7 @@ function NarrativeReport({
               issueDate={report.issue.date}
               lead
             />
-            <div className="space-y-5 lg:border-l lg:border-[#cbbf9d] lg:pl-5">
+            <div className="space-y-5 min-[1500px]:border-l min-[1500px]:border-[#cbbf9d] min-[1500px]:pl-5">
               {rightArticle && (
                 <NewspaperArticleCard
                   article={rightArticle}
@@ -486,7 +469,7 @@ function NarrativeReport({
           </div>
 
           {belowArticles.length > 0 && (
-            <div className="mt-6 grid gap-4 border-t border-[#cbbf9d] pt-4 lg:grid-cols-2">
+            <div className="mt-6 grid gap-4 border-t border-[#cbbf9d] pt-4 min-[1500px]:grid-cols-2">
               {belowArticles.map((article) => (
                 <NewspaperArticleCard
                   key={article.slug}
@@ -542,7 +525,7 @@ function NewspaperArticleCard({
         {lead && <span className="text-[#786846]">Lead Story</span>}
       </div>
       <h3 className={`mt-1 font-serif font-black leading-none text-slate-950 ${
-        lead ? "text-4xl sm:text-5xl" : "text-2xl"
+        lead ? "text-3xl sm:text-4xl" : "text-2xl"
       }`}>
         {article.title}
       </h3>
@@ -551,7 +534,7 @@ function NewspaperArticleCard({
       </p>
       <Link
         href={`/atlas/issues/${issueDate}/${article.slug}`}
-        className="mt-3 inline-flex border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+        className="mt-3 inline-flex border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold !text-[#1f1a12] hover:bg-[#1f1a12] hover:!text-[#f8f4ea]"
       >
         Read full article
       </Link>
@@ -571,12 +554,41 @@ function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: b
     );
   }
   return (
-    <div className={`flex w-full items-center justify-center border border-[#cbbf9d] bg-[#e4d7bd] px-3 text-center text-xs uppercase tracking-wide text-[#786846] ${
-      lead ? "h-64" : "h-32"
-    }`}>
-      {article.image.kind === "generated" ? "Editorial image prompt ready" : "Article image"}
-    </div>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={editorialImageDataUri(article, lead)}
+      alt={article.image.alt || `Editorial image for ${article.title}`}
+      className={`w-full border border-[#cbbf9d] object-fill ${lead ? "h-64" : "h-32"}`}
+    />
   );
+}
+
+function editorialImageDataUri(article: AtlasEditorialArticle, lead: boolean): string {
+  const width = lead ? 960 : 640;
+  const height = lead ? 420 : 260;
+  const section = escapeSvgText(article.section.toUpperCase());
+  const accent = lead ? "#8b5f21" : "#5e5238";
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <rect width="${width}" height="${height}" fill="#e8dcc4"/>
+      <rect x="18" y="18" width="${width - 36}" height="${height - 36}" fill="#f7edd9" stroke="#1f1a12" stroke-width="3"/>
+      <path d="M44 ${height - 82} C ${width * 0.24} ${height - 180}, ${width * 0.44} ${height - 20}, ${width * 0.62} ${height - 116} S ${width - 90} ${height - 72}, ${width - 38} ${height - 160}" fill="none" stroke="${accent}" stroke-width="18" opacity="0.38"/>
+      <circle cx="${width - 118}" cy="92" r="${lead ? 52 : 34}" fill="${accent}" opacity="0.2"/>
+      <line x1="44" y1="52" x2="${width - 44}" y2="52" stroke="#1f1a12" stroke-width="2"/>
+      <line x1="44" y1="${height - 44}" x2="${width - 44}" y2="${height - 44}" stroke="#1f1a12" stroke-width="2"/>
+      <text x="54" y="92" font-family="Georgia, serif" font-size="${lead ? 26 : 18}" font-weight="700" fill="${accent}" letter-spacing="3">${section}</text>
+      <text x="54" y="${lead ? 154 : 128}" font-family="Georgia, serif" font-size="${lead ? 34 : 24}" font-weight="900" fill="#1f1a12">Editorial image brief</text>
+      <text x="54" y="${lead ? 202 : 166}" font-family="Arial, sans-serif" font-size="${lead ? 16 : 12}" fill="#786846">${escapeSvgText((article.image.prompt || article.dek).slice(0, lead ? 92 : 58))}</text>
+    </svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function NewspaperList({ title, items }: { title: string; items: string[] }) {
@@ -622,7 +634,7 @@ function PeopleDesk({
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.9fr]">
         <div className="grid gap-3 sm:grid-cols-2">
           {newFaces.length > 0 ? (
-            newFaces.map((person) => (
+            newFaces.slice(0, 6).map((person) => (
               <article key={`${person.name}-${person.first_seen_ts}`} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8b5f21]">
                   <span>{person.first_channel}</span>
@@ -661,6 +673,11 @@ function PeopleDesk({
 
         <aside className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
           <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Top Contributors</h3>
+          {newFaces.length > 6 && (
+            <p className="mt-1 text-xs leading-5 text-[#786846]">
+              Showing 6 of {newFaces.length.toLocaleString()} new-face signals.
+            </p>
+          )}
           <div className="mt-3 space-y-3">
             {topContributors.slice(0, 8).map((person, index) => (
               <div key={`${person.name}-${person.latest_seen_ts}`} className="border-b border-[#d8cba9] pb-3 last:border-b-0 last:pb-0">
@@ -689,6 +706,46 @@ function PeopleDesk({
             )}
           </div>
         </aside>
+      </div>
+    </section>
+  );
+}
+
+function ValueAssessment({
+  report,
+  atlas,
+}: {
+  report: AtlasEditorialReport | null;
+  atlas: AtlasSnapshot;
+}) {
+  const valueItems = report?.valuable.length ? report.valuable : atlas.narrative.report.what_matters;
+  const actionItems = report?.actions.length ? report.actions : atlas.narrative.report.what_to_watch;
+  const themeItems = report?.themes.length
+    ? report.themes.slice(0, 3).map((theme) => `${theme.title}: ${theme.analysis}`)
+    : atlas.topics.slice(0, 3).map((topic) => `${topic.name}: ${topic.message_count} messages across ${topic.channels.length} rooms.`);
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-3">
+      <AssessmentColumn title="What is valuable here" items={valueItems} />
+      <AssessmentColumn title="What needs action" items={actionItems} />
+      <AssessmentColumn title="Themes to watch" items={themeItems} />
+    </section>
+  );
+}
+
+function AssessmentColumn({ title, items }: { title: string; items: string[] }) {
+  return (
+    <section className="rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4">
+      <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
+      <div className="mt-3 space-y-3">
+        {items.slice(0, 4).map((item, index) => (
+          <p key={index} className="border-t border-[#d8cba9] pt-2 text-sm leading-6 text-[#5e5238] first:border-t-0 first:pt-0">
+            {item}
+          </p>
+        ))}
+        {items.length === 0 && (
+          <p className="text-sm leading-6 text-[#786846]">No clear signal in this window.</p>
+        )}
       </div>
     </section>
   );

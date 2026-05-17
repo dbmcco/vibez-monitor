@@ -79,11 +79,16 @@ describe("atlas editorial report", () => {
     const messages = buildAtlasReportMessages(sampleAtlas());
     const promptText = messages.map((message) => message.content).join("\n");
 
+    expect(promptText).toContain("Edward R. Murrow");
+    expect(promptText).toContain("community members");
+    expect(promptText).not.toMatch(/\busers\b/i);
     expect(promptText).toContain("daily newspaper issue");
     expect(promptText).toContain("Do not reduce the day to one theme");
     expect(promptText).toContain("MUST include 3 to 6 articles");
     expect(promptText).toContain("section");
-    expect(promptText).toContain("3 to 5 compact paragraphs");
+    expect(promptText).toContain("at least five paragraphs");
+    expect(promptText).toContain("Every article must carry citations");
+    expect(promptText).toContain("generated image brief");
     expect(promptText).toContain("What happened?");
     expect(promptText).toContain("What does this mean?");
     expect(promptText).toContain("Why should I care?");
@@ -345,5 +350,91 @@ describe("atlas editorial report", () => {
       "Repair this Atlas newspaper issue",
     );
     expect(report.main_topic.paragraphs).toHaveLength(5);
+  });
+
+  test("rejects article pages without five cited paragraphs", () => {
+    expect(() =>
+      normalizeAtlasEditorialReport(
+        {
+          headline: "The agent work found its bottleneck",
+          dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+          what_happened: ["People circled the evaluation loop."],
+          what_it_means: ["The project is moving from demo energy to operating discipline."],
+          why_care: ["This is where agent work starts to become repeatable."],
+          valuable: ["The useful artifact is the citation trail."],
+          actions: ["Turn the evaluation question into an owner and a next check."],
+          main_topic: {
+            title: "Evaluation as leverage",
+            paragraphs: [
+              "The first paragraph names the theme.",
+              "The second paragraph explains what happened.",
+              "The third paragraph explains what it means.",
+              "The fourth paragraph explains why it matters.",
+              "The fifth paragraph names the next useful move.",
+            ],
+            evidence_refs: ["vibez:message:m1"],
+          },
+          articles: [
+            {
+              role: "lead",
+              section: "Agent Harnesses",
+              title: "Evaluation becomes the work",
+              dek: "The room is moving from demos to proof.",
+              summary: "The main article explains why evaluation is now the bottleneck.",
+              body: [
+                "Evaluation moved from background concern to front-page story.",
+                "The cited messages show a group asking for proof, not applause.",
+                "That matters because repeatable agent work needs durable records.",
+              ],
+              actions: ["Assign an owner for the evaluation loop."],
+              evidence_refs: ["vibez:message:m1"],
+              link_refs: ["vibez:link:11"],
+              channels: ["Agents"],
+              image: { kind: "generated", prompt: "newspaper illustration of agent evaluation" },
+              related_article_slugs: [],
+            },
+            {
+              role: "secondary",
+              section: "Personal Workflows",
+              title: "Tooling gaps are product gaps",
+              dek: "Questions about records point to a product brief.",
+              summary: "The side article explains the tooling pain.",
+              body: [
+                "The side story deserves its own space.",
+                "It is related to the lead but not the same story.",
+                "The evidence points to records and follow-up.",
+                "The value is a product-shaped question.",
+                "The next move is to test the workflow.",
+              ],
+              actions: ["Review the tool catalog."],
+              evidence_refs: [],
+              link_refs: [],
+              channels: ["Tools"],
+            },
+            {
+              role: "secondary",
+              section: "Durable Records",
+              title: "Durable records become the archive",
+              dek: "The links and citations need a long-lived home.",
+              summary: "The third article explains why the record itself matters.",
+              body: [
+                "A third story completes the front page.",
+                "It follows the evidence system rather than the people.",
+                "The durable record changes how the group can learn.",
+                "The value is continuity.",
+                "The next move is to preserve the source trail.",
+              ],
+              actions: ["Save the source trail."],
+              evidence_refs: ["vibez:message:m1"],
+              link_refs: ["vibez:link:11"],
+              channels: ["Agents", "Tools"],
+            },
+          ],
+          themes: [],
+          evidence: [],
+        },
+        sampleAtlas(),
+      ),
+    ).toThrow("five cited paragraphs");
   });
 });

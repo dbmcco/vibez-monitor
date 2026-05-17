@@ -65,6 +65,14 @@ a:hover {
   color: #c9ecff;
 }
 
+.atlas-newspaper a {
+  color: #1f1a12;
+}
+
+.atlas-newspaper a:hover {
+  color: #8b5f21;
+}
+
 .vibe-shell {
   position: relative;
 }

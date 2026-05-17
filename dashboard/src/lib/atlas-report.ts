@@ -173,12 +173,14 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
     {
       role: "system",
       content: [
-        "You are the editor and analyst for Vibez Atlas.",
-        "Write in a human, first-class reporting voice. Follow Strunk and White: concrete nouns, active verbs, short sentences, omit needless words.",
-        "Use some wit when it clarifies the point, but do not be glib.",
+        "You are Edward R. Murrow serving as editor and analyst for Vibez Atlas.",
+        "Write with Murrow's public-service gravity: precise observation, plain moral stakes, disciplined skepticism, and sentences that move cleanly from fact to consequence.",
+        "Honor Strunk and White: prefer concrete nouns, active verbs, and clean structure.",
+        "Keep the voice humane, literate, and calm under pressure. Prefer concrete nouns, active verbs, short sentences, and earned judgment. Omit needless words.",
+        "Let wit appear only as dry clarity. Never chase a joke, never pad the copy, and never mistake atmosphere for reporting.",
         "Do not use emoji, decorative symbols, or meme punctuation.",
         "Do not invent facts. Tie every major claim to the supplied citation refs.",
-        "The reader wants analysis, not a pile of links.",
+        "The community members reading this are leading-edge AI practitioners. They want analysis, not a pile of links.",
         "You are creating a daily newspaper issue, not a single-theme dashboard summary.",
       ].join("\n"),
     },
@@ -190,7 +192,9 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "You MUST include 3 to 6 articles: exactly one lead article plus at least two secondary articles.",
         "Each article MUST include a short plain-text section label that names its theme, like Personal Workflows, Agent Harnesses, Evidence Systems, or Durable Records.",
         "Section labels MUST NOT contain emoji, decorative symbols, punctuation runs, or jokes.",
-        "Each article body MUST contain 3 to 5 compact paragraphs.",
+        "Each article body is the full read-more page and MUST contain at least five paragraphs, kept compact.",
+        "Every article must carry citations: include at least one valid evidence_refs entry, and use citation refs to support every major claim.",
+        "Every article image must include a generated image brief: image.kind must be generated unless a real source image URL exists, image.prompt must describe the visual scene, and image.alt must describe the image for the page.",
         "Answer these questions plainly:",
         "1. What happened?",
         "2. What does this mean?",
@@ -236,6 +240,8 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                   "Lead paragraph for the full article page.",
                   "Evidence paragraph for the full article page.",
                   "Analysis paragraph for the full article page.",
+                  "Value paragraph for the full article page.",
+                  "Action paragraph for the full article page.",
                 ],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
@@ -244,6 +250,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 image: {
                   kind: "generated",
                   prompt: "editorial image prompt grounded in the article",
+                  alt: "short accessible image description",
                 },
                 related_article_slugs: ["related article title or slug"],
               },
@@ -257,12 +264,18 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                   "Lead paragraph for the side article.",
                   "Evidence paragraph for the side article.",
                   "Analysis paragraph for the side article.",
+                  "Value paragraph for the side article.",
+                  "Action paragraph for the side article.",
                 ],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
                 link_refs: ["vibez:link:..."],
                 channels: ["channel name"],
-                image: { kind: "generated", prompt: "editorial image prompt" },
+                image: {
+                  kind: "generated",
+                  prompt: "editorial image prompt",
+                  alt: "short accessible image description",
+                },
                 related_article_slugs: [],
               },
               {
@@ -275,12 +288,18 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                   "Lead paragraph for the side article.",
                   "Evidence paragraph for the side article.",
                   "Analysis paragraph for the side article.",
+                  "Value paragraph for the side article.",
+                  "Action paragraph for the side article.",
                 ],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
                 link_refs: ["vibez:link:..."],
                 channels: ["channel name"],
-                image: { kind: "generated", prompt: "editorial image prompt" },
+                image: {
+                  kind: "generated",
+                  prompt: "editorial image prompt",
+                  alt: "short accessible image description",
+                },
                 related_article_slugs: [],
               },
             ],
@@ -398,7 +417,9 @@ export function buildAtlasReportRepairMessages({
         "- articles must contain 3 to 6 items, exactly one lead and at least two secondary items.",
         "- every article needs role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
         "- article sections must be plain text labels with no emoji or decorative symbols.",
-        "- each article body must be an array with 3 to 5 compact paragraph strings; one paragraph is invalid.",
+        "- each article body must be an array with at least five compact paragraph strings; fewer than five is invalid.",
+        "- every article must include at least one valid evidence_refs citation from the evidence pack.",
+        "- every article image must include kind, prompt, and alt; kind should be generated unless a real source image URL exists.",
         "- If the invalid JSON has fewer than three valid articles, write enough complete secondary articles from the evidence pack to reach three.",
         "- use only refs present in the evidence pack.",
         "",
@@ -432,12 +453,14 @@ export function buildAtlasReportRepairMessages({
                 "Lead paragraph.",
                 "Evidence paragraph.",
                 "Analysis paragraph.",
+                "Value paragraph.",
+                "Action paragraph.",
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
               link_refs: [],
               channels: ["channel name"],
-              image: { kind: "generated", prompt: "plain editorial prompt" },
+              image: { kind: "generated", prompt: "plain editorial prompt", alt: "plain image description" },
               related_article_slugs: [],
             },
             {
@@ -450,12 +473,14 @@ export function buildAtlasReportRepairMessages({
                 "Lead paragraph.",
                 "Evidence paragraph.",
                 "Analysis paragraph.",
+                "Value paragraph.",
+                "Action paragraph.",
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
               link_refs: [],
               channels: ["channel name"],
-              image: { kind: "generated", prompt: "plain editorial prompt" },
+              image: { kind: "generated", prompt: "plain editorial prompt", alt: "plain image description" },
               related_article_slugs: [],
             },
             {
@@ -468,12 +493,14 @@ export function buildAtlasReportRepairMessages({
                 "Lead paragraph.",
                 "Evidence paragraph.",
                 "Analysis paragraph.",
+                "Value paragraph.",
+                "Action paragraph.",
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
               link_refs: [],
               channels: ["channel name"],
-              image: { kind: "generated", prompt: "plain editorial prompt" },
+              image: { kind: "generated", prompt: "plain editorial prompt", alt: "plain image description" },
               related_article_slugs: [],
             },
           ],
@@ -589,7 +616,7 @@ function readArticles(
     .slice(0, 6);
 
   if (rawItems.length > 0 && articles.length < 3) {
-    throw new Error("atlas editorial report requires at least three newspaper articles");
+    throw new Error("atlas editorial report requires at least three newspaper articles with five cited paragraphs");
   }
 
   if (articles.length === 0) {
@@ -648,10 +675,10 @@ function readArticle(
   const payload = value as Record<string, unknown>;
   const title = readText(payload.title);
   const dek = readText(payload.dek);
-  const body = readTextList(payload.body).slice(0, 5);
-  if (!title || !dek || body.length < 3) return null;
+  const body = readTextList(payload.body);
   const role = readText(payload.role) === "lead" && index === 0 ? "lead" : "secondary";
   const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
+  if (!title || !dek || body.length < 5 || evidenceRefs.length === 0) return null;
   return {
     role,
     section: readText(payload.section) || "Atlas",
