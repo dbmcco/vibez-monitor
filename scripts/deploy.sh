@@ -87,6 +87,8 @@ copy_generated_artifacts() {
   if [[ -d "$ROOT_DIR/dashboard/.generated" ]]; then
     mkdir -p "$snapshot_dir/dashboard"
     cp -a "$ROOT_DIR/dashboard/.generated" "$snapshot_dir/dashboard/.generated"
+    rm -rf "$snapshot_dir/dashboard/generated"
+    cp -a "$ROOT_DIR/dashboard/.generated" "$snapshot_dir/dashboard/generated"
   fi
 }
 

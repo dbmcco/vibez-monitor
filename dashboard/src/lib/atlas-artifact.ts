@@ -18,7 +18,7 @@ export interface AtlasArtifactPayload {
 export function atlasArtifactPath(windowHours: number): string {
   const configured = process.env.VIBEZ_ATLAS_ARTIFACT_PATH;
   if (configured) return configured;
-  return path.join(defaultArtifactRoot(), "atlas", `atlas-${windowHours}.json`);
+  return atlasArtifactCandidates(windowHours)[0];
 }
 
 function defaultArtifactRoot(): string {
@@ -33,9 +33,23 @@ function defaultArtifactRoot(): string {
   return path.join(cwd, ".generated");
 }
 
+function atlasArtifactCandidates(windowHours: number): string[] {
+  const cwd = /* turbopackIgnore: true */ process.cwd();
+  const filename = path.join("atlas", `atlas-${windowHours}.json`);
+  const roots = [
+    defaultArtifactRoot(),
+    path.join(cwd, "generated"),
+    path.join(cwd, "dashboard", ".generated"),
+    path.join(cwd, "dashboard", "generated"),
+  ];
+  return Array.from(new Set(roots.map((root) => path.join(root, filename))));
+}
+
 export function readAtlasArtifact(windowHours: number): AtlasArtifactPayload | null {
-  const artifactPath = atlasArtifactPath(windowHours);
-  if (!fs.existsSync(artifactPath)) return null;
+  const artifactPath = process.env.VIBEZ_ATLAS_ARTIFACT_PATH
+    ? atlasArtifactPath(windowHours)
+    : atlasArtifactCandidates(windowHours).find((candidate) => fs.existsSync(candidate));
+  if (!artifactPath) return null;
   const payload = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as AtlasArtifactPayload;
   if (payload.artifact?.window_hours !== windowHours) return null;
   if (!payload.atlas || !payload.editorial_report) return null;
