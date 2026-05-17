@@ -310,11 +310,80 @@ export async function generateAtlasEditorialReport(
   atlas: AtlasSnapshot,
   generator: AtlasReportGenerator = generateJson<unknown>,
 ): Promise<AtlasEditorialReport> {
+  const messages = buildAtlasReportMessages(atlas);
   const result = await generator({
     taskId: "dashboard.atlas_report",
-    messages: buildAtlasReportMessages(atlas),
+    messages,
   });
-  return normalizeAtlasEditorialReport(result.parsed, atlas);
+  let parsed = result.parsed;
+  let validationError = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return normalizeAtlasEditorialReport(parsed, atlas);
+    } catch (error) {
+      validationError = error instanceof Error ? error.message : "schema validation failed";
+      const repaired = await generator({
+        taskId: "dashboard.atlas_report",
+        messages: buildAtlasReportRepairMessages({
+          atlas,
+          invalidReport: parsed,
+          validationError,
+        }),
+      });
+      parsed = repaired.parsed;
+    }
+  }
+
+  try {
+    return normalizeAtlasEditorialReport(parsed, atlas);
+  } catch (error) {
+    throw new Error(
+      `atlas editorial report repair failed: ${
+        error instanceof Error ? error.message : validationError || "schema validation failed"
+      }`,
+    );
+  }
+}
+
+export function buildAtlasReportRepairMessages({
+  atlas,
+  invalidReport,
+  validationError,
+}: {
+  atlas: AtlasSnapshot;
+  invalidReport: unknown;
+  validationError: string;
+}): AtlasReportMessage[] {
+  const evidence = buildAtlasReportEvidence(atlas);
+  return [
+    {
+      role: "system",
+      content: [
+        "You repair Vibez Atlas report JSON.",
+        "Do not invent new facts. Use only supplied evidence refs.",
+        "Return strict JSON only. No markdown.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "Repair this Atlas newspaper issue so it satisfies the schema.",
+        `Validation error: ${validationError}`,
+        "Required invariants:",
+        "- main_topic.paragraphs must contain exactly five short strings.",
+        "- articles must contain 3 to 6 items, exactly one lead and at least two secondary items.",
+        "- every article needs role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
+        "- each article body needs 3 to 5 compact paragraphs.",
+        "- use only refs present in the evidence pack.",
+        "",
+        "Invalid JSON:",
+        JSON.stringify(invalidReport, null, 2),
+        "",
+        "Evidence pack:",
+        JSON.stringify(evidence, null, 2),
+      ].join("\n"),
+    },
+  ];
 }
 
 export function normalizeAtlasEditorialReport(

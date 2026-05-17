@@ -83,13 +83,14 @@
       "timeout_ms": 120000
     },
     "dashboard.atlas_report": {
-      "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "provider": "ollama",
+      "model": "hermes3:8b",
       "mode": "json",
-      "base_url": "https://openrouter.ai/api/v1",
+      "base_url": "http://localhost:11434",
       "max_tokens": 8192,
       "temperature": 0.25,
-      "timeout_ms": 120000
+      "timeout_ms": 120000,
+      "context_window": 32768
     },
     "dashboard.atlas_deeper_dive": {
       "provider": "openrouter",

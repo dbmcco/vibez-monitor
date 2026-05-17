@@ -13,6 +13,7 @@ export interface ModelRoute {
   timeout_ms: number;
   base_url?: string;
   dimensions?: number;
+  context_window?: number;
 }
 
 interface ModelMessage {
@@ -297,6 +298,7 @@ async function runOllamaRoute(
       options: {
         temperature: route.temperature,
         num_predict: route.max_tokens,
+        num_ctx: route.context_window,
       },
       format: route.mode === "json" ? "json" : undefined,
     }),

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { readAtlasArtifact } from "@/lib/atlas-artifact";
 import { generateAtlasEditorialReport } from "@/lib/atlas-report";
 import { getAtlasSnapshot } from "@/lib/db";
 
@@ -8,7 +9,20 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const hours = parseWindowHours(request.nextUrl.searchParams.get("hours"));
+    const artifact = readAtlasArtifact(hours);
+    if (artifact) {
+      return NextResponse.json(artifact);
+    }
+
     const atlas = await getAtlasSnapshot({ windowHours: hours });
+    if (process.env.NODE_ENV === "production" && process.env.VIBEZ_ATLAS_ALLOW_LIVE_MODEL !== "1") {
+      return NextResponse.json({
+        atlas,
+        editorial_report: null,
+        editorial_error: "atlas editorial artifact unavailable; run local Ollama artifact generation before deploy",
+      });
+    }
+
     try {
       const editorialReport = await generateAtlasEditorialReport(atlas);
       return NextResponse.json({

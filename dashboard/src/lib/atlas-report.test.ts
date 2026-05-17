@@ -301,4 +301,49 @@ describe("atlas editorial report", () => {
     );
     expect(report.headline).toBe("The agent work found its bottleneck");
   });
+
+  test("asks the model to repair schema-invalid report JSON", async () => {
+    const baseReport = {
+      headline: "The agent work found its bottleneck",
+      dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+      what_happened: ["People circled the evaluation loop."],
+      what_it_means: ["The project is moving from demo energy to operating discipline."],
+      why_care: ["This is where agent work starts to become repeatable."],
+      valuable: ["The useful artifact is the citation trail."],
+      actions: ["Turn the evaluation question into an owner and a next check."],
+      main_topic: {
+        title: "Evaluation as leverage",
+        paragraphs: ["Too short."],
+        evidence_refs: ["vibez:message:m1"],
+      },
+      themes: [],
+      evidence: [],
+    };
+    const generator = vi
+      .fn()
+      .mockResolvedValueOnce({ parsed: baseReport })
+      .mockResolvedValueOnce({
+        parsed: {
+          ...baseReport,
+          main_topic: {
+            ...baseReport.main_topic,
+            paragraphs: [
+              "The first paragraph names the theme.",
+              "The second paragraph explains what happened.",
+              "The third paragraph explains what it means.",
+              "The fourth paragraph explains why it matters.",
+              "The fifth paragraph names the next useful move.",
+            ],
+          },
+        },
+      });
+
+    const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
+
+    expect(generator).toHaveBeenCalledTimes(2);
+    expect(generator.mock.calls[1][0].messages.map((message) => message.content).join("\n")).toContain(
+      "Repair this Atlas newspaper issue",
+    );
+    expect(report.main_topic.paragraphs).toHaveLength(5);
+  });
 });
