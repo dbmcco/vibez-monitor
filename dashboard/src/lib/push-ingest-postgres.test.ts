@@ -1,0 +1,101 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { Pool } from "pg";
+
+const queryMock = vi.fn();
+
+vi.mock("pg", () => ({
+  Pool: vi.fn(() => ({
+    query: queryMock,
+  })),
+}));
+
+const ORIGINAL_ENV = process.env;
+
+describe("Postgres push ingestion", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    queryMock.mockReset();
+    queryMock.mockResolvedValue({ rows: [], rowCount: 1 });
+    vi.mocked(Pool).mockClear();
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_DATABASE_URL: "",
+      DATABASE_URL: "",
+      VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
+      VIBEZ_PGVECTOR_TABLE: "vibez_message_embeddings",
+      VIBEZ_PGVECTOR_LINK_TABLE: "vibez_link_embeddings",
+    };
+  });
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  test("writes core messages, classifications, and links to Postgres when configured", async () => {
+    const { applyPostgresPayload } = await import("./push-ingest");
+
+    const result = await applyPostgresPayload({
+      records: [
+        {
+          message: {
+            id: "m1",
+            room_id: "room-1",
+            room_name: "Agents",
+            sender_id: "sender-1",
+            sender_name: "Dana",
+            body: "Postgres should be the source of truth.",
+            timestamp: 1776120000000,
+            raw_event: "{}",
+          },
+          classification: {
+            relevance_score: 9,
+            topics: ["postgres"],
+            entities: ["Dana"],
+            contribution_flag: true,
+            contribution_themes: ["architecture"],
+            contribution_hint: "ship it",
+            alert_level: "digest",
+          },
+        },
+      ],
+      links: [
+        {
+          url: "https://example.com/postgres",
+          url_hash: "hash-postgres",
+          title: "Postgres note",
+          category: "article",
+          relevance: "Migration context",
+          shared_by: "Dana",
+          source_group: "Agents",
+          first_seen: "2026-05-18T10:00:00.000Z",
+          last_seen: "2026-05-18T11:00:00.000Z",
+          mention_count: 2,
+          value_score: 8,
+          report_date: "2026-05-18",
+          authored_by: "Dana",
+          pinned: 1,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      messages_written: 1,
+      classifications_written: 1,
+      links_written: 1,
+    });
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS messages"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO messages"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO classifications"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO links"))).toBe(true);
+  });
+
+  test("backfills core Postgres tables from existing pgvector embedding metadata", async () => {
+    const { backfillPostgresCoreFromEmbeddings } = await import("./push-ingest");
+
+    const result = await backfillPostgresCoreFromEmbeddings();
+
+    expect(result).toEqual({ messages_backfilled: 1, links_backfilled: 1 });
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("FROM vibez_message_embeddings"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("FROM vibez_link_embeddings"))).toBe(true);
+  });
+});

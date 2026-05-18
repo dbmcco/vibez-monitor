@@ -4,6 +4,7 @@ import path from "path";
 
 import {
   applyPgvectorPayload,
+  applyPostgresPayload,
   applyPushPayload,
   getRecordCount,
   hasPushPayloadContent,
@@ -66,18 +67,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-
   try {
-    const sqliteResult = applyPushPayload(db, payload);
+    const postgresResult = await applyPostgresPayload(payload);
     const pgvectorResult = await applyPgvectorPayload(payload);
-    return NextResponse.json({ ok: true, ...sqliteResult, ...pgvectorResult });
+    if (postgresResult) {
+      return NextResponse.json({ ok: true, ...postgresResult, ...pgvectorResult });
+    }
+
+    const db = new Database(DB_PATH);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    try {
+      const sqliteResult = applyPushPayload(db, payload);
+      return NextResponse.json({ ok: true, ...sqliteResult, ...pgvectorResult });
+    } finally {
+      db.close();
+    }
   } catch (error) {
     console.error("POST /api/admin/push failed", error);
     return NextResponse.json({ ok: false, error: "Failed to write payload." }, { status: 500 });
-  } finally {
-    db.close();
   }
 }
