@@ -16,6 +16,17 @@ export interface AtlasArtifactPayload {
   };
 }
 
+export interface AtlasEditionSummary {
+  date: string;
+  type: "daily" | "sunday_review";
+  window_hours: number;
+  publication_time: string;
+  title: string;
+  subtitle: string;
+  edition_label: string;
+  href: string;
+}
+
 let atlasPool: Pool | null = null;
 
 function atlasPostgresUrl(): string {
@@ -56,6 +67,10 @@ async function ensureAtlasEditionSchema(pool: Pool): Promise<void> {
 
 function editionTypeForWindow(windowHours: number): "daily" | "sunday_review" {
   return windowHours >= 120 ? "sunday_review" : "daily";
+}
+
+function atlasEditionHref(date: string, windowHours: number): string {
+  return `/atlas/editions/${encodeURIComponent(date)}?hours=${windowHours}`;
 }
 
 export function atlasArtifactPath(windowHours: number): string {
@@ -165,6 +180,64 @@ export async function readAtlasArtifact(
     }
   }
   return readAtlasArtifactFromFile(windowHours);
+}
+
+export async function listAtlasEditions({
+  windowHours = 48,
+  limit = 14,
+}: {
+  windowHours?: number;
+  limit?: number;
+} = {}): Promise<AtlasEditionSummary[]> {
+  const editionType = editionTypeForWindow(windowHours);
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 60);
+  const pool = getAtlasPool();
+  if (pool) {
+    try {
+      await ensureAtlasEditionSchema(pool);
+      const { rows } = await pool.query(
+        `SELECT
+           edition_date,
+           edition_type,
+           window_hours,
+           publication_time,
+           payload #>> '{editorial_report,issue,title}' AS title,
+           payload #>> '{editorial_report,issue,subtitle}' AS subtitle,
+           payload #>> '{editorial_report,issue,edition_label}' AS edition_label
+         FROM atlas_editions
+         WHERE window_hours = $1 AND edition_type = $2
+         ORDER BY publication_time DESC
+         LIMIT $3`,
+        [windowHours, editionType, safeLimit],
+      );
+      return rows.map((row) => ({
+        date: String(row.edition_date),
+        type: row.edition_type === "sunday_review" ? "sunday_review" : "daily",
+        window_hours: Number(row.window_hours) || windowHours,
+        publication_time: String(row.publication_time),
+        title: String(row.title || "The Vibez Atlas"),
+        subtitle: String(row.subtitle || ""),
+        edition_label: String(row.edition_label || (editionType === "sunday_review" ? "Sunday Edition" : "Daily Edition")),
+        href: atlasEditionHref(String(row.edition_date), Number(row.window_hours) || windowHours),
+      }));
+    } catch (error) {
+      console.error("listAtlasEditions postgres lookup failed:", error);
+    }
+  }
+
+  const artifact = readAtlasArtifactFromFile(windowHours);
+  if (!artifact) return [];
+  const date = artifact.editorial_report.issue.date || artifact.atlas.window.end.slice(0, 10);
+  return [{
+    date,
+    type: editionType,
+    window_hours: windowHours,
+    publication_time: artifact.artifact.generated_at,
+    title: artifact.editorial_report.issue.title || "The Vibez Atlas",
+    subtitle: artifact.editorial_report.issue.subtitle || "",
+    edition_label: artifact.editorial_report.issue.edition_label || (editionType === "sunday_review" ? "Sunday Edition" : "Daily Edition"),
+    href: atlasEditionHref(date, windowHours),
+  }];
 }
 
 export async function writeAtlasArtifact({

@@ -190,6 +190,17 @@ interface AtlasEditorialArticle {
   related_article_slugs: string[];
 }
 
+interface AtlasEditionSummary {
+  date: string;
+  type: "daily" | "sunday_review";
+  window_hours: number;
+  publication_time: string;
+  title: string;
+  subtitle: string;
+  edition_label: string;
+  href: string;
+}
+
 type Lens = "themes" | "rooms" | "evidence" | "diagnostics";
 
 const LENSES: Array<{ key: Lens; label: string }> = [
@@ -210,6 +221,7 @@ export default function AtlasPage({
 }) {
   const [atlas, setAtlas] = useState<AtlasSnapshot | null>(initialAtlas);
   const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(initialEditorialReport);
+  const [editions, setEditions] = useState<AtlasEditionSummary[]>([]);
   const [loading, setLoading] = useState(!initialAtlas);
   const [error, setError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState(initialWindowHours);
@@ -246,6 +258,23 @@ export default function AtlasPage({
       active = false;
     };
   }, [initialAtlas, initialEditorialReport, windowHours]);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/atlas/editions?hours=${windowHours}&limit=14`)
+      .then((response) => response.json())
+      .then((data: { editions?: AtlasEditionSummary[] }) => {
+        if (!active) return;
+        setEditions(Array.isArray(data.editions) ? data.editions : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setEditions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [windowHours]);
 
   const selectedCell = useMemo(() => {
     if (!atlas || !selectedCellKey) return atlas?.matrix[0] || null;
@@ -310,6 +339,7 @@ export default function AtlasPage({
       <NarrativeReport
         atlas={atlas}
         editorialReport={editorialReport}
+        editions={editions}
         windowHours={windowHours}
         onWindowHoursChange={handleWindowHoursChange}
         onOpenCitation={setSelectedCitationRef}
@@ -396,12 +426,14 @@ function Metric({ label, value }: { label: string; value: number }) {
 function NarrativeReport({
   atlas,
   editorialReport,
+  editions,
   windowHours,
   onWindowHoursChange,
   onOpenCitation,
 }: {
   atlas: AtlasSnapshot;
   editorialReport: AtlasEditorialReport | null;
+  editions: AtlasEditionSummary[];
   windowHours: number;
   onWindowHoursChange: (hours: number) => void;
   onOpenCitation: (ref: string) => void;
@@ -428,6 +460,10 @@ function NarrativeReport({
             report?.dek ||
             wireSubtitle(atlas)}
         </p>
+        <EditionArchive
+          editions={editions}
+          currentDate={report?.issue.date || atlas.window.end.slice(0, 10)}
+        />
         <div className="mt-4 flex justify-center gap-2">
           {[48, 168].map((hours) => (
             <button
@@ -1030,6 +1066,55 @@ function RoomsDesk({
         )}
       </div>
     </section>
+  );
+}
+
+function EditionArchive({
+  editions,
+  currentDate,
+}: {
+  editions: AtlasEditionSummary[];
+  currentDate: string;
+}) {
+  if (editions.length === 0) return null;
+  return (
+    <div className="mx-auto mt-4 max-w-5xl border-y border-[#cbbf9d] py-3 text-left">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#7b2f20]">
+          Previous Editions
+        </p>
+        <p className="text-xs text-[#786846]">Durable issues, not regenerated on read.</p>
+      </div>
+      <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+        {editions.map((edition) => {
+          const active = edition.date === currentDate;
+          return (
+            <Link
+              key={`${edition.type}-${edition.date}-${edition.window_hours}`}
+              href={edition.href}
+              title={edition.title}
+              className={`min-w-[170px] border px-3 py-2 text-left transition ${
+                active
+                  ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
+                  : "border-[#b9aa86] bg-[#fffaf0]/50 text-[#342a1b] hover:border-[#1f1a12]"
+              }`}
+            >
+              <span
+                className={`block text-[10px] font-bold uppercase tracking-[0.12em] ${
+                  active ? "text-[#f8f4ea]" : "text-[#7b2f20]"
+                }`}
+              >
+                {edition.edition_label}
+              </span>
+              <span className="mt-1 block font-serif text-lg font-bold">{edition.date}</span>
+              <span className={`mt-1 block truncate text-xs ${active ? "text-[#eadfca]" : "text-[#786846]"}`}>
+                {edition.title}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
