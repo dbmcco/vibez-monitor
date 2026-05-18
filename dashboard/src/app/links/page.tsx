@@ -331,16 +331,18 @@ export default function LinksPage() {
   const starredCount = Object.keys(stars.links).length;
 
   return (
-    <div className="fade-up space-y-4">
-      <header className="flex items-baseline justify-between gap-3">
+    <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+      <header className="newspaper-section-header flex items-baseline justify-between gap-3">
         <div>
-          <h1 className="vibe-title text-2xl text-slate-100">Links</h1>
-          <p className="vibe-subtitle text-sm">
-            Browse or search {stats ? stats.total.toLocaleString() : ""} shared links.
+          <p className="newspaper-kicker">Reference Desk</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">Links Desk</h1>
+          <p className="vibe-subtitle mt-1 max-w-2xl text-sm">
+            Browse and search the community record: shared tools, papers, repos, articles,
+            and the small practical clues that explain what people are actually using.
           </p>
         </div>
         <div className="hidden rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400 sm:block">
-          {starredCount} starred
+          {starredCount} starred · {stats ? stats.total.toLocaleString() : ""} links
         </div>
       </header>
 
@@ -363,7 +365,7 @@ export default function LinksPage() {
               const author = authoredBadge(link.authored_by);
               return (
                 <div key={link.id} className="flex items-start gap-2">
-                  <span className="mt-0.5 text-[13px] leading-none text-amber-600/60">📌</span>
+                  <span className="mt-0.5 text-[10px] font-bold uppercase leading-none text-amber-600/60">Pin</span>
                   <div className="min-w-0 flex-1">
                     <a
                       href={link.url}
@@ -376,7 +378,7 @@ export default function LinksPage() {
                     </a>
                     {author ? (
                       <span className="ml-2 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
-                        ✍ {author}
+                        By {author}
                       </span>
                     ) : null}
                     {desc ? (
@@ -539,7 +541,7 @@ export default function LinksPage() {
                         {badge ? <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span> : null}
                         {author ? (
                           <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
-                            ✍ {author}
+                            By {author}
                           </span>
                         ) : null}
                       </div>
@@ -613,7 +615,7 @@ export default function LinksPage() {
                               ) : null}
                               {author ? (
                                 <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
-                                  ✍ {author}
+                                  By {author}
                                 </span>
                               ) : null}
                             </div>

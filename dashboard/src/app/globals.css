@@ -33,12 +33,13 @@ body {
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: #eee6d4;
+  color: #1f1a12;
   background-image:
-    radial-gradient(circle at 10% -10%, rgba(84, 198, 249, 0.2), transparent 38%),
-    radial-gradient(circle at 88% 0%, rgba(34, 197, 94, 0.12), transparent 28%),
-    linear-gradient(180deg, #060a0f 0%, #0a1118 48%, #09131c 100%);
+    linear-gradient(90deg, rgba(31, 26, 18, 0.035) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(31, 26, 18, 0.025) 1px, transparent 1px),
+    linear-gradient(180deg, #f8f4ea 0%, #eee6d4 48%, #e2d4b8 100%);
+  background-size: 34px 34px, 34px 34px, auto;
   font-family: var(--font-space-grotesk), "Segoe UI", sans-serif;
   letter-spacing: 0.01em;
 }
@@ -48,11 +49,9 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
-  background-size: 24px 24px;
-  opacity: 0.35;
+  background-image: radial-gradient(rgba(31, 26, 18, 0.05) 0.7px, transparent 0.7px);
+  background-size: 9px 9px;
+  opacity: 0.45;
   z-index: -1;
 }
 
@@ -71,6 +70,126 @@ a:hover {
 
 .atlas-newspaper a:hover {
   color: #8b5f21;
+}
+
+.newspaper-section {
+  border: 1px solid #cbbf9d;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 252, 243, 0.84), rgba(242, 232, 211, 0.9)),
+    #efe3cc;
+  color: #1f1a12;
+  padding: 1rem;
+  box-shadow: 0 22px 80px rgba(18, 14, 8, 0.18);
+}
+
+.newspaper-section-header {
+  border-bottom: 4px double #1f1a12;
+  padding-bottom: 1rem;
+}
+
+.newspaper-kicker {
+  color: #7b2f20;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.newspaper-section :is(h1, h2, h3, .vibe-title) {
+  color: #1f1a12 !important;
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: 0;
+}
+
+.newspaper-section .vibe-subtitle {
+  color: #5e5238;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.newspaper-section .vibe-panel,
+.newspaper-section [class*="bg-slate-"],
+.newspaper-section [class*="bg-cyan-"],
+.newspaper-section [class*="bg-emerald-"],
+.newspaper-section [class*="bg-amber-"],
+.newspaper-section [class*="bg-fuchsia-"],
+.newspaper-section [class*="bg-rose-"] {
+  background: rgba(255, 250, 240, 0.62) !important;
+}
+
+.newspaper-section .vibe-panel,
+.newspaper-section [class*="border-slate-"],
+.newspaper-section [class*="border-cyan-"],
+.newspaper-section [class*="border-emerald-"],
+.newspaper-section [class*="border-amber-"],
+.newspaper-section [class*="border-fuchsia-"],
+.newspaper-section [class*="border-rose-"] {
+  border-color: #cbbf9d !important;
+}
+
+.newspaper-section .vibe-panel {
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.newspaper-section [class*="text-slate-"],
+.newspaper-section [class*="text-cyan-"],
+.newspaper-section [class*="text-emerald-"],
+.newspaper-section [class*="text-amber-"],
+.newspaper-section [class*="text-fuchsia-"],
+.newspaper-section [class*="text-rose-"] {
+  color: #5e5238 !important;
+}
+
+.newspaper-section :is(a, button, .font-semibold, .font-medium, .vibe-title)[class*="text-slate-"],
+.newspaper-section :is(a, button, .font-semibold, .font-medium)[class*="text-cyan-"] {
+  color: #1f1a12 !important;
+}
+
+.newspaper-section .vibe-chip,
+.newspaper-section button[class*="border"],
+.newspaper-section span[class*="border"] {
+  background: rgba(255, 250, 240, 0.72) !important;
+  border-color: #cbbf9d !important;
+  color: #342a1b !important;
+}
+
+.newspaper-section .vibe-button {
+  background: #1f1a12 !important;
+  border-color: #1f1a12 !important;
+  color: #f8f1df !important;
+}
+
+.newspaper-section .vibe-input,
+.newspaper-section input,
+.newspaper-section select,
+.newspaper-section textarea {
+  background: #fffaf0 !important;
+  border-color: #b9aa84 !important;
+  color: #1f1a12 !important;
+}
+
+.newspaper-section .vibe-input::placeholder,
+.newspaper-section input::placeholder {
+  color: #8b7b5b;
+}
+
+.newspaper-section table {
+  color: #342a1b;
+}
+
+.newspaper-section thead {
+  color: #6a5c3f !important;
+}
+
+.newspaper-section tr {
+  border-color: #cbbf9d !important;
+}
+
+@media (min-width: 640px) {
+  .newspaper-section {
+    padding: 1.25rem;
+  }
 }
 
 .vibe-shell {

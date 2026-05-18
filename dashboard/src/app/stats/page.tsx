@@ -2811,13 +2811,14 @@ export default function StatsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <header className="fade-up space-y-2">
-          <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-            Stats & Trends
+      <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+        <header className="newspaper-section-header space-y-2">
+          <p className="newspaper-kicker">Data Bureau</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">
+            Stats Desk
           </h1>
-          <p className="vibe-subtitle">
-            Activity by user, channel, and topic with lifecycle and recurrence over time.
+          <p className="vibe-subtitle max-w-2xl">
+            Activity by community member, channel, and topic with lifecycle and recurrence over time.
           </p>
         </header>
         <StatusPanel
@@ -2836,10 +2837,16 @@ export default function StatsPage() {
 
   if (!stats) {
     return (
-      <StatusPanel
-        title="Stats unavailable"
-        detail="Could not load analytics right now. Try refreshing in a moment."
-      />
+      <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+        <header className="newspaper-section-header space-y-2">
+          <p className="newspaper-kicker">Data Bureau</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">Stats Desk</h1>
+        </header>
+        <StatusPanel
+          title="Stats unavailable"
+          detail="Could not load analytics right now. Try refreshing in a moment."
+        />
+      </div>
     );
   }
 
@@ -2879,13 +2886,16 @@ export default function StatsPage() {
         : "text-emerald-200 border-emerald-400/35 bg-emerald-400/10";
 
   return (
-    <div className="space-y-6">
-      <header className="fade-up space-y-2">
-        <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-          Stats & Trends
+    <div className="newspaper-section atlas-newspaper fade-up space-y-6">
+      <header className="newspaper-section-header space-y-2">
+        <p className="newspaper-kicker">Data Bureau</p>
+        <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">
+          Stats Desk
         </h1>
-        <p className="vibe-subtitle">
-          Activity by user, channel, and topic with lifecycle and recurrence over time.
+        <p className="vibe-subtitle max-w-2xl">
+          Activity by community member, channel, and topic with lifecycle and recurrence over time.
+          This is the back page of the paper: counts, arcs, recurrence, directories, and the
+          signals behind the reporting.
         </p>
       </header>
 
