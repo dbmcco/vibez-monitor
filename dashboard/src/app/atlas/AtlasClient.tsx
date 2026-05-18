@@ -198,10 +198,16 @@ const LENSES: Array<{ key: Lens; label: string }> = [
   { key: "diagnostics", label: "Diagnostics" },
 ];
 
-export default function AtlasPage() {
-  const [atlas, setAtlas] = useState<AtlasSnapshot | null>(null);
-  const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function AtlasPage({
+  initialAtlas = null,
+  initialEditorialReport = null,
+}: {
+  initialAtlas?: AtlasSnapshot | null;
+  initialEditorialReport?: AtlasEditorialReport | null;
+}) {
+  const [atlas, setAtlas] = useState<AtlasSnapshot | null>(initialAtlas);
+  const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(initialEditorialReport);
+  const [loading, setLoading] = useState(!initialAtlas);
   const [error, setError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState(48);
   const [lens, setLens] = useState<Lens>("themes");
@@ -209,6 +215,13 @@ export default function AtlasPage() {
   const [selectedCitationRef, setSelectedCitationRef] = useState<string | null>(null);
 
   useEffect(() => {
+    if (initialAtlas && windowHours === initialAtlas.window.hours) {
+      setAtlas(initialAtlas);
+      setEditorialReport(initialEditorialReport);
+      setSelectedCellKey(initialAtlas.matrix[0] ? cellKey(initialAtlas.matrix[0]) : null);
+      setLoading(false);
+      return;
+    }
     let active = true;
     fetch(`/api/atlas?hours=${windowHours}`)
       .then((response) => response.json())
@@ -231,7 +244,7 @@ export default function AtlasPage() {
     return () => {
       active = false;
     };
-  }, [windowHours]);
+  }, [initialAtlas, initialEditorialReport, windowHours]);
 
   const selectedCell = useMemo(() => {
     if (!atlas || !selectedCellKey) return atlas?.matrix[0] || null;
