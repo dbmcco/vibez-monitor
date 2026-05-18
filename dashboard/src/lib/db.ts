@@ -4601,7 +4601,146 @@ const SORT_MAP: Record<string, string> = {
   oldest: "first_seen ASC NULLS LAST",
 };
 
+const SQLITE_LINK_SORT_MAP: Record<string, string> = {
+  trending: "CAST(mention_count AS REAL) / MAX(1.0, (julianday('now') - julianday(last_seen)) + 1.0) DESC, last_seen DESC",
+  value: "value_score DESC, last_seen DESC",
+  recent: "last_seen DESC",
+  shared: "mention_count DESC, value_score DESC",
+  oldest: "first_seen ASC",
+};
+
+function sqliteLinkWhere(opts: {
+  category?: string;
+  days?: number;
+  source?: string;
+  sharedBy?: string;
+  authoredBy?: string;
+  pinned?: boolean;
+}): { whereSql: string; params: unknown[] } {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.category) {
+    where.push("category = ?");
+    params.push(opts.category);
+  }
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    where.push("last_seen >= ?");
+    params.push(cutoff);
+  }
+  if (opts.source && opts.source !== "all") {
+    const patterns: Record<string, string> = {
+      github: "%github.com%",
+      x: "%x.com%",
+      youtube: "%youtu%",
+      substack: "%substack.com%",
+      medium: "%medium.com%",
+      arxiv: "%arxiv.org%",
+      reddit: "%reddit.com%",
+      hackernews: "%news.ycombinator.com%",
+      linkedin: "%linkedin.com%",
+      notion: "%notion.so%",
+      gdocs: "%docs.google.com%",
+    };
+    const pat = patterns[opts.source];
+    if (pat) {
+      where.push("url LIKE ?");
+      params.push(pat);
+    }
+  }
+  if (opts.sharedBy) {
+    where.push("shared_by LIKE ?");
+    params.push(`%${opts.sharedBy}%`);
+  }
+  if (opts.authoredBy === "any") {
+    where.push("authored_by IS NOT NULL AND authored_by <> ''");
+  } else if (opts.authoredBy) {
+    where.push("authored_by LIKE ?");
+    params.push(`%${opts.authoredBy}%`);
+  }
+  if (opts.pinned) {
+    where.push("pinned = 1");
+  }
+  return {
+    whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "",
+    params,
+  };
+}
+
+function getLinkStatsFromSqlite(opts: { days?: number }): LinkStats {
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  try {
+    const { whereSql, params } = sqliteLinkWhere({ days: opts.days });
+    const totalRow = db.prepare(`SELECT COUNT(*) as c FROM links ${whereSql}`).get(...params) as { c: number };
+    const catRows = db
+      .prepare(`SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`)
+      .all(...params) as { category: string | null; cnt: number }[];
+    const sharerRows = db
+      .prepare(
+        `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql}${whereSql ? " AND" : " WHERE"} shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`,
+      )
+      .all(...params) as { shared_by: string; cnt: number }[];
+    const urlRows = db.prepare(`SELECT url FROM links ${whereSql}`).all(...params) as { url: string }[];
+    const authorRows = db
+      .prepare(
+        `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql}${whereSql ? " AND" : " WHERE"} authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`,
+      )
+      .all(...params) as { authored_by: string; cnt: number }[];
+
+    const sourceCounts: Record<string, number> = {};
+    for (const row of urlRows) {
+      const source = sourceFromUrl(row.url);
+      sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+    }
+
+    return {
+      total: totalRow.c,
+      sources: Object.entries(sourceCounts)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count),
+      sharers: sharerRows.map((row) => ({ name: row.shared_by, count: row.cnt })),
+      categories: catRows.map((row) => ({ name: row.category || "uncategorized", count: row.cnt })),
+      authors: authorRows.map((row) => ({ name: row.authored_by, count: row.cnt })),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function getLinksFromSqlite(opts: {
+  category?: string;
+  days?: number;
+  limit?: number;
+  sort?: string;
+  source?: string;
+  sharedBy?: string;
+  authoredBy?: string;
+  pinned?: boolean;
+}): LinkRow[] {
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  try {
+    const { whereSql, params } = sqliteLinkWhere(opts);
+    const orderBy = SQLITE_LINK_SORT_MAP[opts.sort || "value"] || SQLITE_LINK_SORT_MAP.value;
+    const limit = Math.min(Math.max(1, opts.limit || 50), 200);
+    return db
+      .prepare(
+        `SELECT id, url, url_hash, title, category, relevance, shared_by,
+                source_group, first_seen, last_seen, mention_count, value_score,
+                report_date, authored_by, pinned
+         FROM links ${whereSql}
+         ORDER BY ${orderBy}
+         LIMIT ?`,
+      )
+      .all(...params, limit) as LinkRow[];
+  } finally {
+    db.close();
+  }
+}
+
 export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> {
+  if (shouldUseSqliteAtlas()) {
+    return getLinkStatsFromSqlite(opts);
+  }
   let pi = 1;
   const where: string[] = [];
   const params: unknown[] = [];
@@ -4660,6 +4799,9 @@ export async function getLinks(opts: {
   authoredBy?: string;
   pinned?: boolean;
 }): Promise<LinkRow[]> {
+  if (shouldUseSqliteAtlas()) {
+    return getLinksFromSqlite(opts);
+  }
   let pi = 1;
   const where: string[] = [];
   const params: unknown[] = [];
