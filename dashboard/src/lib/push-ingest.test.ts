@@ -198,6 +198,33 @@ describe("applyPushPayload", () => {
     expect(ftsRow).toMatchObject({ url: "https://example.com/a" });
   });
 
+  test("replaces links when rebuilding the archive", () => {
+    const db = openPushTestDb();
+    applyPushPayload(db, {
+      links: [
+        {
+          url: "https://example.com/stale",
+          url_hash: "hash-stale",
+        },
+      ],
+    });
+
+    applyPushPayload(db, {
+      replace_links: true,
+      links: [
+        {
+          url: "https://example.com/fresh",
+          url_hash: "hash-fresh",
+        },
+      ],
+    });
+
+    const rows = db.prepare("SELECT url FROM links ORDER BY url").all() as Array<{ url: string }>;
+    const ftsRows = db.prepare("SELECT url FROM links_fts ORDER BY url").all() as Array<{ url: string }>;
+    expect(rows).toEqual([{ url: "https://example.com/fresh" }]);
+    expect(ftsRows).toEqual([{ url: "https://example.com/fresh" }]);
+  });
+
   test("upserts daily reports by report_date", () => {
     const db = openPushTestDb();
     db.prepare("INSERT INTO daily_reports (report_date, briefing_md) VALUES (?, ?)").run(

@@ -569,11 +569,14 @@ def push_analysis_tables(
         )
         for i in range(0, len(rows), resolved_batch_size):
             batch = rows[i : i + resolved_batch_size]
+            payload: dict[str, Any] = {section_name: batch}
+            if section_name == "links" and i == 0:
+                payload["replace_links"] = True
             result = push_section(
                 remote_url,
                 push_key,
                 access_cookie,
-                {section_name: batch},
+                payload,
             )
             print(
                 f"  {section_name} batch {(i // batch_size) + 1}: pushed {len(batch)} rows "

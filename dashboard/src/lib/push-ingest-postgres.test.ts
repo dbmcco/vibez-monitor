@@ -89,6 +89,25 @@ describe("Postgres push ingestion", () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO links"))).toBe(true);
   });
 
+  test("can replace the Postgres link archive before rebuilding it", async () => {
+    const { applyPostgresPayload } = await import("./push-ingest");
+
+    await applyPostgresPayload({
+      replace_links: true,
+      links: [
+        {
+          url: "https://example.com/rebuilt",
+          url_hash: "hash-rebuilt",
+        },
+      ],
+    });
+
+    const deleteIndex = queryMock.mock.calls.findIndex(([sql]) => String(sql).includes("DELETE FROM links"));
+    const insertIndex = queryMock.mock.calls.findIndex(([sql]) => String(sql).includes("INSERT INTO links"));
+    expect(deleteIndex).toBeGreaterThan(-1);
+    expect(insertIndex).toBeGreaterThan(deleteIndex);
+  });
+
   test("backfills core Postgres tables from existing pgvector embedding metadata", async () => {
     const { backfillPostgresCoreFromEmbeddings } = await import("./push-ingest");
 

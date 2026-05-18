@@ -138,6 +138,7 @@ export interface LinkEmbeddingPayload {
 export interface PushPayload {
   records?: unknown;
   links?: unknown;
+  replace_links?: unknown;
   daily_reports?: unknown;
   wisdom_topics?: unknown;
   wisdom_items?: unknown;
@@ -890,6 +891,10 @@ export async function applyPostgresPayload(
     sync_state_written: 0,
   };
 
+  if (payload.replace_links === true && links.length > 0) {
+    await pool.query("DELETE FROM links");
+  }
+
   for (const record of records) {
     const message = record?.message as MessagePayload;
     if (!message || !isValidMessage(message)) {
@@ -1231,6 +1236,11 @@ export function applyPushPayload(
   };
 
   const transaction = db.transaction(() => {
+    if (payload.replace_links === true && links.length > 0) {
+      db.prepare("DELETE FROM links").run();
+      db.exec("DROP TABLE IF EXISTS links_fts");
+    }
+
     for (const record of records) {
       const message = record?.message as MessagePayload;
       if (!message || !isValidMessage(message)) {
