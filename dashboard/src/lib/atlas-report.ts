@@ -46,6 +46,7 @@ export interface AtlasEditorialArticle {
   dek: string;
   summary: string;
   body: string[];
+  paragraph_citations?: string[][];
   actions: string[];
   evidence_refs: string[];
   link_refs: string[];
@@ -88,15 +89,6 @@ export interface AtlasEditorialReport {
 type AtlasEditorialShell = Omit<AtlasEditorialReport, "articles" | "generated_at"> & {
   article_seeds?: unknown[];
 };
-
-interface AtlasArticleSeed {
-  role: string;
-  section: string;
-  title: string;
-  dek: string;
-  evidence_refs: string[];
-  channels: string[];
-}
 
 export interface AtlasReportEvidencePack {
   window: AtlasSnapshot["window"];
@@ -198,17 +190,22 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "Do not invent facts. Tie every major claim to the supplied citation refs.",
         "The community members reading this are leading-edge AI practitioners. They want analysis, not a pile of links.",
         "You are creating a daily newspaper issue, not a single-theme dashboard summary.",
+        `The evidence window is ${atlas.window.hours} hours, from ${atlas.window.start} to ${atlas.window.end}. Use that window accurately; do not call it a week unless the evidence window is at least 120 hours.`,
       ].join("\n"),
     },
     {
       role: "user",
       content: [
         "Write the latest Atlas report from this evidence pack as a daily newspaper issue.",
+        `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         "Do not reduce the day to one theme unless the evidence truly supports that. Prefer one lead story plus several first-class side stories.",
         "You MUST include 3 to 6 articles: exactly one lead article plus at least two secondary articles.",
         "Each article MUST include a short plain-text section label that names its theme, like Personal Workflows, Agent Harnesses, Evidence Systems, or Durable Records.",
         "Section labels MUST NOT contain emoji, decorative symbols, punctuation runs, or jokes.",
         "Each article body is the full read-more page and MUST contain at least five paragraphs, kept compact.",
+        "Write article bodies as paragraph objects: {\"text\":\"finished prose paragraph\",\"citation_refs\":[\"vibez:message:...\"]}.",
+        "Do not label the paragraphs; use the five-paragraph arc as structure beneath the prose.",
+        "At least the first four article paragraphs should carry citation_refs. The fifth should carry citations when the action depends on a source.",
         "Every article must carry citations: include at least one valid evidence_refs entry, and use citation refs to support every major claim.",
         "Every article image must include a generated image brief: image.kind must be generated unless a real source image URL exists, image.prompt must describe the visual scene, and image.alt must describe the image for the page.",
         "Answer these questions plainly:",
@@ -253,11 +250,11 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
                 body: [
-                  "Lead paragraph for the full article page.",
-                  "Evidence paragraph for the full article page.",
-                  "Analysis paragraph for the full article page.",
-                  "Value paragraph for the full article page.",
-                  "Action paragraph for the full article page.",
+                  { text: "Concrete reported opening paragraph.", citation_refs: ["vibez:message:..."] },
+                  { text: "Evidence paragraph with source details.", citation_refs: ["vibez:message:..."] },
+                  { text: "Analysis paragraph explaining consequence.", citation_refs: ["vibez:message:..."] },
+                  { text: "Value paragraph about why it matters.", citation_refs: ["vibez:message:..."] },
+                  { text: "Action paragraph naming the next useful move.", citation_refs: ["vibez:message:..."] },
                 ],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
@@ -277,11 +274,11 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
                 body: [
-                  "Lead paragraph for the side article.",
-                  "Evidence paragraph for the side article.",
-                  "Analysis paragraph for the side article.",
-                  "Value paragraph for the side article.",
-                  "Action paragraph for the side article.",
+                  { text: "Concrete reported opening paragraph.", citation_refs: ["vibez:message:..."] },
+                  { text: "Evidence paragraph with source details.", citation_refs: ["vibez:message:..."] },
+                  { text: "Analysis paragraph explaining consequence.", citation_refs: ["vibez:message:..."] },
+                  { text: "Value paragraph about why it matters.", citation_refs: ["vibez:message:..."] },
+                  { text: "Action paragraph naming the next useful move.", citation_refs: ["vibez:message:..."] },
                 ],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
@@ -301,11 +298,11 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 dek: "one sentence article deck",
                 summary: "two sentence article card summary",
                 body: [
-                  "Lead paragraph for the side article.",
-                  "Evidence paragraph for the side article.",
-                  "Analysis paragraph for the side article.",
-                  "Value paragraph for the side article.",
-                  "Action paragraph for the side article.",
+                  { text: "Concrete reported opening paragraph.", citation_refs: ["vibez:message:..."] },
+                  { text: "Evidence paragraph with source details.", citation_refs: ["vibez:message:..."] },
+                  { text: "Analysis paragraph explaining consequence.", citation_refs: ["vibez:message:..."] },
+                  { text: "Value paragraph about why it matters.", citation_refs: ["vibez:message:..."] },
+                  { text: "Action paragraph naming the next useful move.", citation_refs: ["vibez:message:..."] },
                 ],
                 actions: ["concrete next action"],
                 evidence_refs: ["vibez:message:..."],
@@ -393,7 +390,7 @@ export async function generateAtlasEditorialReport(
     shell = normalizeAtlasEditorialShell(parsed, atlas);
   }
 
-  const articleSeeds = buildChannelArticleSeeds(atlas);
+  const articleSeeds = shell.article_seeds || [];
   const articles = await repairArticlesIndividually({
     atlas,
     invalidReport: { ...shell, articles: articleSeeds },
@@ -465,14 +462,20 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
         "Honor Strunk and White: concrete nouns, active verbs, and no needless words.",
         "The community members reading this are leading-edge AI practitioners. They want analysis, not link snippets.",
         "Do not invent facts. Use only supplied citation refs.",
+        `The evidence window is ${atlas.window.hours} hours, from ${atlas.window.start} to ${atlas.window.end}. Use that window accurately; do not call it a week unless the evidence window is at least 120 hours.`,
       ].join("\n"),
     },
     {
       role: "user",
       content: [
         "Write only the compact editorial shell for the latest Atlas newspaper issue.",
+        `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         "Do not write full article bodies in this pass.",
-        "Name the themes that deserve separate articles, and keep them grounded in citations across different active channels where the evidence supports it.",
+        "You own story selection. Do not simply choose the busiest channels or force one grand theme across unrelated evidence.",
+        "Name the themes that deserve separate articles because they help a reader understand what happened, what changed, what matters, and what needs action.",
+        "Prefer useful, surprising, human, decision-relevant story angles over generic channel summaries.",
+        "Keep article seeds grounded in citations across different active channels where the evidence supports it.",
+        "Do not merge unrelated citations into one story just to make the page look tidy.",
         "If evidence is thin or odd, say so plainly.",
         "Never refer to people as users. Say community members, practitioners, contributors, or people.",
         "Return strict JSON with this shape:",
@@ -508,6 +511,7 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
                 section: "Plain Theme Label",
                 title: "sober article title",
                 dek: "article angle",
+                why_this_story: "why this deserves a front-page article",
                 evidence_refs: ["vibez:message:..."],
                 channels: ["channel name"],
               },
@@ -516,6 +520,7 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
                 section: "Plain Theme Label",
                 title: "sober article title",
                 dek: "article angle",
+                why_this_story: "why this deserves a separate article",
                 evidence_refs: ["vibez:message:..."],
                 channels: ["channel name"],
               },
@@ -524,6 +529,7 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
                 section: "Plain Theme Label",
                 title: "sober article title",
                 dek: "article angle",
+                why_this_story: "why this deserves a separate article",
                 evidence_refs: ["vibez:message:..."],
                 channels: ["channel name"],
               },
@@ -594,6 +600,9 @@ function buildAtlasIssueShellRepairMessages({
         `Validation error: ${validationError}`,
         "main_topic must have a title, exactly five paragraphs, and valid evidence_refs.",
         "article_seeds must contain exactly one lead and at least two secondary article angles.",
+        "Each article_seed must be an editorial choice, not a mechanical channel summary.",
+        "Each article_seed must include role, section, title, dek, why_this_story, evidence_refs, and channels.",
+        "Do not choose story angles by busiest channel alone. Choose what best explains what happened, why it matters, and what needs action.",
         "",
         "Invalid shell:",
         JSON.stringify(invalidReport, null, 2),
@@ -644,17 +653,20 @@ export function buildAtlasArticleRepairMessages({
         "Return strict JSON only in the form {\"articles\":[...]}",
         "Do not invent facts. Use only supplied evidence refs.",
         "Do not use emoji, decorative symbols, or meme punctuation.",
+        `The evidence window is ${atlas.window.hours} hours, from ${atlas.window.start} to ${atlas.window.end}. Use that window accurately; do not call it a week unless the evidence window is at least 120 hours.`,
       ].join("\n"),
     },
     {
       role: "user",
       content: [
         "Repair only the newspaper articles for this Atlas issue.",
+        `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         `Validation error: ${validationError}`,
         "Keep the existing issue/headline/dek/main_topic implied by the invalid report.",
         "Return exactly one lead article plus at least two secondary articles.",
         "Each article must have role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
-        "Each article body must contain at least five compact natural paragraph strings.",
+        "Each article body must contain at least five compact natural paragraph objects with text and citation_refs.",
+        "At least the first four paragraphs should include citation_refs from that article's evidence pack.",
         "Do not return placeholders like Lead paragraph, Evidence paragraph, or Paragraph 1.",
         "Do not prefix paragraphs with labels. Write the actual prose.",
         "Each article must include at least one valid evidence_refs citation from the evidence pack.",
@@ -672,11 +684,11 @@ export function buildAtlasArticleRepairMessages({
                 dek: "non-empty deck",
                 summary: "non-empty summary",
                 body: [
-                  "A natural reporting paragraph about what happened.",
-                  "A natural evidence paragraph with concrete citation details.",
-                  "A natural analysis paragraph about what those details mean.",
-                  "A natural value paragraph about why this matters.",
-                  "A natural action paragraph about what to do next.",
+                  { text: "A natural reporting paragraph about what happened.", citation_refs: ["vibez:message:..."] },
+                  { text: "A natural evidence paragraph with concrete citation details.", citation_refs: ["vibez:message:..."] },
+                  { text: "A natural analysis paragraph about what those details mean.", citation_refs: ["vibez:message:..."] },
+                  { text: "A natural value paragraph about why this matters.", citation_refs: ["vibez:message:..."] },
+                  { text: "A natural action paragraph about what to do next.", citation_refs: ["vibez:message:..."] },
                 ],
                 actions: ["concrete action"],
                 evidence_refs: ["vibez:message:..."],
@@ -717,6 +729,9 @@ async function repairArticlesIndividually({
   generator: AtlasReportGenerator;
 }): Promise<unknown[]> {
   const articleSeeds = buildArticleRepairSeeds(invalidReport, atlas);
+  if (articleSeeds.length < 3) {
+    throw new Error("atlas editorial shell must provide one lead and at least two cited article seeds");
+  }
   const articles: unknown[] = [];
   for (let index = 0; index < articleSeeds.length; index += 1) {
     const repaired = await generator({
@@ -741,50 +756,11 @@ function readRepairedArticle(value: unknown): unknown {
 }
 
 function buildArticleRepairSeeds(invalidReport: unknown, atlas: AtlasSnapshot): unknown[] {
+  const allowedRefs = new Set(Object.keys(atlas.citations));
   const payload = invalidReport && typeof invalidReport === "object"
     ? invalidReport as Record<string, unknown>
     : {};
-  const existing = Array.isArray(payload.articles) ? payload.articles.slice(0, 3) : [];
-  const seeds = [...existing];
-  while (seeds.length < 3) {
-    const channel = atlas.channels[seeds.length] || atlas.channels[0];
-    seeds.push({
-      role: seeds.length === 0 ? "lead" : "secondary",
-      section: channel?.name || "Atlas",
-      title: channel ? `${channel.name} needs a closer read` : "The day needs a closer read",
-      dek: "A compact article grounded in the strongest available citations.",
-      evidence_refs: channel?.citation_refs?.slice(0, 3) || atlas.narrative.report.evidence_refs.slice(0, 3),
-      channels: channel ? [channel.name] : [],
-    });
-  }
-  return seeds;
-}
-
-function buildChannelArticleSeeds(atlas: AtlasSnapshot): unknown[] {
-  const seeds = atlas.channels
-    .map((channel, index) => {
-      const evidenceRefs = channel.citation_refs.filter((ref) => {
-        const body = atlas.citations[ref]?.body || "";
-        return body.trim().length >= 30 && !/^related:?\s*$/i.test(body.trim());
-      }).slice(0, 3);
-      if (evidenceRefs.length === 0) return null;
-      const section = cleanSectionLabel(channel.name) || "Atlas";
-      return {
-        role: index === 0 ? "lead" : "secondary",
-        section,
-        title: `${section} needs a closer read`,
-        dek: "A compact article grounded in the strongest available citations from this channel.",
-        evidence_refs: evidenceRefs,
-        channels: [channel.name],
-      };
-    })
-    .filter((seed): seed is AtlasArticleSeed => Boolean(seed))
-    .slice(0, 3);
-  seeds.forEach((seed, index) => {
-    seed.role = index === 0 ? "lead" : "secondary";
-  });
-
-  return buildArticleRepairSeeds({ articles: seeds }, atlas);
+  return readArticleSeeds(payload.articles, allowedRefs).slice(0, 6);
 }
 
 function compactReportForArticleRepair(value: unknown): unknown {
@@ -794,13 +770,15 @@ function compactReportForArticleRepair(value: unknown): unknown {
     ? payload.articles.slice(0, 6).map((item) => {
       if (!item || typeof item !== "object") return item;
       const article = item as Record<string, unknown>;
+      const body = readArticleBody(article.body, new Set());
       return {
         role: article.role,
         section: article.section,
         title: article.title,
         dek: article.dek,
         summary: article.summary,
-        body: readTextList(article.body),
+        body: body.body,
+        paragraph_citations: body.paragraphCitations,
         evidence_refs: readTextList(article.evidence_refs),
         link_refs: readTextList(article.link_refs),
         channels: readTextList(article.channels),
@@ -841,27 +819,28 @@ export function buildAtlasSingleArticleRepairMessages({
         "Do not invent facts. Use only supplied evidence refs.",
         "Write for community members who are leading-edge AI practitioners, never for generic users.",
         "Use Edward R. Murrow's plain public-service style and Strunk and White discipline.",
+        `The evidence window is ${atlas.window.hours} hours, from ${atlas.window.start} to ${atlas.window.end}. Use that window accurately; do not call it a week unless the evidence window is at least 120 hours.`,
       ].join("\n"),
     },
     {
       role: "user",
       content: [
         "Write one complete article for this Atlas newspaper issue.",
+        `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         `Validation error: ${validationError}`,
         `Required role: ${role}`,
         "The title must be sober and specific. No puns, hype, cutesy metaphors, or mock newspaper voice.",
         "The section must be a plain theme label, not a chat room name with emoji or punctuation.",
-        "The body must contain at least five compact natural paragraph strings.",
+        "The body must contain at least five compact natural paragraph objects with text and citation_refs.",
         "Do not prefix paragraphs with Lead, Evidence, Analysis, Value, Action, or similar labels.",
-        "Paragraph 1 reports what happened.",
-        "Paragraph 2 says what the citations show, using concrete details from the cited text.",
-        "Paragraph 3 explains what it means without broad claims the evidence does not support.",
-        "Paragraph 4 explains why the reader should care.",
-        "Paragraph 5 names the action or watch point.",
+        "Use this five-paragraph arc without labeling it: report what happened; show what the citations say; explain what it means; explain why the reader should care; name the action or watch point.",
+        "At least paragraphs 1 through 4 should include citation_refs from this article's evidence pack. Paragraph 5 should cite when the action depends on a source.",
         "If the evidence is odd, thin, or inconclusive, say that plainly instead of manufacturing certainty.",
         "Never refer to people as users. Say community members, practitioners, contributors, or people.",
         "Use at least one valid evidence_refs entry from the evidence pack.",
         "Do not make generic claims about AI agents, privacy, security, or project quality unless a citation directly supports them.",
+        "Weak: \"AI agents are becoming more important, and the community should pay attention.\"",
+        "Better: \"Dana named the evaluation loop as the blocker, and Lee tied the same problem to durable records before the weekly readout.\"",
         "Set image.kind to generated and include image.prompt and image.alt.",
         "Return shape:",
         JSON.stringify(
@@ -873,11 +852,11 @@ export function buildAtlasSingleArticleRepairMessages({
               dek: "non-empty deck",
               summary: "two sentence card summary",
               body: [
-                "A natural reporting paragraph about what happened.",
-                "A natural evidence paragraph with concrete details from the citations.",
-                "A natural analysis paragraph about what those details mean.",
-                "A natural value paragraph about why this matters to the reader.",
-                "A natural action paragraph about what to do or watch next.",
+                { text: "A natural reporting paragraph about what happened.", citation_refs: ["vibez:message:..."] },
+                { text: "A natural evidence paragraph with concrete details from the citations.", citation_refs: ["vibez:message:..."] },
+                { text: "A natural analysis paragraph about what those details mean.", citation_refs: ["vibez:message:..."] },
+                { text: "A natural value paragraph about why this matters to the reader.", citation_refs: ["vibez:message:..."] },
+                { text: "A natural action paragraph about what to do or watch next.", citation_refs: ["vibez:message:..."] },
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
@@ -963,12 +942,14 @@ export function buildAtlasReportRepairMessages({
         "Do not invent new facts. Use only supplied evidence refs.",
         "Return strict JSON only. No markdown.",
         "Do not use emoji, decorative symbols, or meme punctuation.",
+        `The evidence window is ${atlas.window.hours} hours, from ${atlas.window.start} to ${atlas.window.end}. Use that window accurately; do not call it a week unless the evidence window is at least 120 hours.`,
       ].join("\n"),
     },
     {
       role: "user",
       content: [
         "Repair this Atlas newspaper issue so it satisfies the schema.",
+        `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         `Validation error: ${validationError}`,
         "Required invariants:",
         "- main_topic must be an object with title, paragraphs, and evidence_refs.",
@@ -979,7 +960,8 @@ export function buildAtlasReportRepairMessages({
         "- articles must contain 3 to 6 items, exactly one lead and at least two secondary items.",
         "- every article needs role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
         "- article sections must be plain text labels with no emoji or decorative symbols.",
-        "- each article body must be an array with at least five compact paragraph strings; fewer than five is invalid.",
+        "- each article body must be an array with at least five compact paragraph objects; each object needs text and citation_refs.",
+        "- at least the first four article paragraphs should include citation_refs from the evidence pack.",
         "- every article must include at least one valid evidence_refs citation from the evidence pack.",
         "- every article image must include kind, prompt, and alt; kind should be generated unless a real source image URL exists.",
         "- If the invalid JSON has fewer than three valid articles, write enough complete secondary articles from the evidence pack to reach three.",
@@ -1012,11 +994,11 @@ export function buildAtlasReportRepairMessages({
               dek: "non-empty deck",
               summary: "non-empty summary",
               body: [
-                "Lead paragraph.",
-                "Evidence paragraph.",
-                "Analysis paragraph.",
-                "Value paragraph.",
-                "Action paragraph.",
+                { text: "Reported opening paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Evidence paragraph with concrete source details.", citation_refs: ["vibez:message:..."] },
+                { text: "Analysis paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Value paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Action paragraph.", citation_refs: ["vibez:message:..."] },
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
@@ -1032,11 +1014,11 @@ export function buildAtlasReportRepairMessages({
               dek: "non-empty deck",
               summary: "non-empty summary",
               body: [
-                "Lead paragraph.",
-                "Evidence paragraph.",
-                "Analysis paragraph.",
-                "Value paragraph.",
-                "Action paragraph.",
+                { text: "Reported opening paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Evidence paragraph with concrete source details.", citation_refs: ["vibez:message:..."] },
+                { text: "Analysis paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Value paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Action paragraph.", citation_refs: ["vibez:message:..."] },
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
@@ -1052,11 +1034,11 @@ export function buildAtlasReportRepairMessages({
               dek: "non-empty deck",
               summary: "non-empty summary",
               body: [
-                "Lead paragraph.",
-                "Evidence paragraph.",
-                "Analysis paragraph.",
-                "Value paragraph.",
-                "Action paragraph.",
+                { text: "Reported opening paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Evidence paragraph with concrete source details.", citation_refs: ["vibez:message:..."] },
+                { text: "Analysis paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Value paragraph.", citation_refs: ["vibez:message:..."] },
+                { text: "Action paragraph.", citation_refs: ["vibez:message:..."] },
               ],
               actions: ["concrete action"],
               evidence_refs: ["vibez:message:..."],
@@ -1145,6 +1127,14 @@ function normalizeAtlasEditorialShell(
   }
 
   const allowedRefs = new Set(Object.keys(atlas.citations));
+  const articleSeeds = readArticleSeeds(payload.article_seeds, allowedRefs);
+  if (
+    articleSeeds.length < 3 ||
+    articleSeeds.filter((seed) => readText((seed as Record<string, unknown>).role) === "lead").length !== 1 ||
+    articleSeeds.filter((seed) => readText((seed as Record<string, unknown>).role) === "secondary").length < 2
+  ) {
+    throw new Error("atlas editorial shell must provide one lead and at least two cited article seeds");
+  }
   const shell: AtlasEditorialShell = {
     issue: readIssue(payload.issue, atlas),
     headline,
@@ -1159,7 +1149,7 @@ function normalizeAtlasEditorialShell(
     crosscurrents: readCrosscurrents(payload.crosscurrents, allowedRefs),
     themes: readThemes(payload.themes, allowedRefs),
     evidence: readEvidence(payload.evidence, allowedRefs),
-    article_seeds: Array.isArray(payload.article_seeds) ? payload.article_seeds : [],
+    article_seeds: articleSeeds,
   };
 
   for (const field of REQUIRED_LIST_FIELDS) {
@@ -1182,6 +1172,64 @@ function readTextList(value: unknown): string[] {
     .map((item) => readText(item))
     .filter(Boolean)
     .slice(0, 6);
+}
+
+function uniqueTextList(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean))).slice(0, 12);
+}
+
+function readArticleSeeds(value: unknown, allowedRefs: Set<string>): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map<Record<string, unknown> | null>((item) => {
+      if (!item || typeof item !== "object") return null;
+      const payload = item as Record<string, unknown>;
+      const role = readText(payload.role);
+      const section = cleanSectionLabel(readText(payload.section));
+      const title = readText(payload.title);
+      const dek = readText(payload.dek);
+      const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
+      if ((role !== "lead" && role !== "secondary") || !section || !title || !dek || evidenceRefs.length === 0) {
+        return null;
+      }
+      return {
+        ...payload,
+        role,
+        section,
+        title,
+        dek,
+        evidence_refs: evidenceRefs,
+        channels: readTextList(payload.channels),
+      };
+    })
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .slice(0, 6);
+}
+
+function readArticleBody(
+  value: unknown,
+  allowedRefs: Set<string>,
+): { body: string[]; paragraphCitations: string[][] } {
+  if (!Array.isArray(value)) return { body: [], paragraphCitations: [] };
+  const body: string[] = [];
+  const paragraphCitations: string[][] = [];
+  for (const item of value) {
+    let text = "";
+    let citationRefs: string[] = [];
+    if (typeof item === "string") {
+      text = item;
+    } else if (item && typeof item === "object") {
+      const payload = item as Record<string, unknown>;
+      text = readText(payload.text) || readText(payload.paragraph) || readText(payload.body);
+      citationRefs = readTextList(payload.citation_refs).filter((ref) => allowedRefs.size === 0 || allowedRefs.has(ref));
+    }
+    const paragraph = cleanArticleParagraph(text);
+    if (!paragraph || isArticlePlaceholder(paragraph)) continue;
+    body.push(paragraph);
+    paragraphCitations.push(uniqueTextList(citationRefs));
+    if (body.length >= 6) break;
+  }
+  return { body, paragraphCitations };
 }
 
 function readIssue(value: unknown, atlas: AtlasSnapshot): AtlasEditorialIssue {
@@ -1238,6 +1286,7 @@ function readArticles(
       dek: report.dek,
       summary: report.main_topic.paragraphs[0] || report.dek,
       body: report.main_topic.paragraphs,
+      paragraph_citations: report.main_topic.paragraphs.map(() => report.main_topic.evidence_refs),
       actions: report.actions,
       evidence_refs: report.main_topic.evidence_refs,
       link_refs: [],
@@ -1285,11 +1334,13 @@ function readArticle(
   const payload = value as Record<string, unknown>;
   const title = readText(payload.title);
   const dek = readText(payload.dek);
-  const body = readTextList(payload.body)
-    .map(cleanArticleParagraph)
-    .filter((paragraph) => paragraph && !isArticlePlaceholder(paragraph));
+  const articleBody = readArticleBody(payload.body, allowedRefs);
+  const body = articleBody.body;
   const role = readText(payload.role) === "lead" && index === 0 ? "lead" : "secondary";
-  const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
+  const evidenceRefs = uniqueTextList([
+    ...readTextList(payload.evidence_refs),
+    ...articleBody.paragraphCitations.flat(),
+  ]).filter((ref) => allowedRefs.has(ref));
   if (!title || !dek || body.length < 5 || evidenceRefs.length === 0) return null;
   return {
     role,
@@ -1299,6 +1350,7 @@ function readArticle(
     dek,
     summary: readText(payload.summary) || body[0] || dek,
     body,
+    paragraph_citations: articleBody.paragraphCitations,
     actions: readTextList(payload.actions),
     evidence_refs: evidenceRefs,
     link_refs: readTextList(payload.link_refs).filter((ref) => allowedRefs.has(ref)),
