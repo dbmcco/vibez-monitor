@@ -316,6 +316,7 @@ export default function AtlasPage({
       />
 
       <PeopleDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
+      <RoomsDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
 
       <section className="rounded border border-[#cbbf9d] bg-[#f7edd9] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -369,7 +370,7 @@ export default function AtlasPage({
             onOpenCitation={setSelectedCitationRef}
           />
         ) : (
-          <AtAGlance atlas={atlas} />
+          <EditionNotes atlas={atlas} />
         )}
       </section>
 
@@ -969,6 +970,69 @@ function PeopleDesk({
   );
 }
 
+function RoomsDesk({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const rooms = atlas.channels.slice(0, 6);
+  return (
+    <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#cbbf9d] pb-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+            Rooms Desk
+          </p>
+          <h2 className="mt-1 font-serif text-2xl font-black">Report by Channel</h2>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-[#5e5238]">
+          The front page follows stories across rooms. This desk shows where each room carried the
+          edition and what a reader should notice there.
+        </p>
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        {rooms.map((room) => {
+          const topTopic = room.top_topics[0] || null;
+          const secondTopic = room.top_topics[1] || null;
+          return (
+            <article key={room.name} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+                {room.message_count.toLocaleString()} messages · {room.people.length.toLocaleString()} people
+              </p>
+              <h3 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">{room.name}</h3>
+              <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+                {topTopic
+                  ? `${topTopic.name} led the room, with ${topTopic.count.toLocaleString()} visible signals.`
+                  : "Atlas did not find a dominant theme in this room."}
+                {secondTopic ? ` ${secondTopic.name} was the next thread to watch.` : ""}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {room.top_topics.slice(0, 4).map((topic) => (
+                  <span key={topic.name} className="border border-[#d8cba9] bg-[#f8f4ea] px-2 py-0.5 text-xs text-[#342a1b]">
+                    {topic.name} · {topic.count}
+                  </span>
+                ))}
+              </div>
+              <CitationList
+                atlas={atlas}
+                refs={room.citation_refs.slice(0, 2)}
+                onOpenCitation={onOpenCitation}
+              />
+            </article>
+          );
+        })}
+        {rooms.length === 0 && (
+          <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4 text-sm leading-6 text-[#5e5238] lg:col-span-3">
+            No room-level activity was available for this edition.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ValueAssessment({
   report,
   atlas,
@@ -1024,17 +1088,24 @@ function personReasonLabel(reason: AtlasPeopleInsights["new_faces"][number]["det
   }
 }
 
-function AtAGlance({ atlas }: { atlas: AtlasSnapshot }) {
+function EditionNotes({ atlas }: { atlas: AtlasSnapshot }) {
+  const activeRooms = atlas.channels.filter((room) => room.message_count > 0).length;
+  const citedStories = Object.keys(atlas.citations).length;
   return (
     <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5">
       <p className="text-xs font-semibold uppercase tracking-wide text-[#8b5f21]">
-        At a glance
+        Edition notes
       </p>
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <Metric label="Messages" value={atlas.overview.messages} />
-        <Metric label="People" value={atlas.overview.people} />
-        <Metric label="Rooms" value={atlas.overview.channels} />
-        <Metric label="Themes" value={atlas.overview.topics} />
+      <div className="mt-3 space-y-3 text-sm leading-6 text-[#5e5238]">
+        <p>
+          This edition draws from {activeRooms.toLocaleString()} active room
+          {activeRooms === 1 ? "" : "s"} and carries {citedStories.toLocaleString()} validated
+          citation{citedStories === 1 ? "" : "s"}.
+        </p>
+        <p>
+          Counts describe the reporting window, not total community membership. For the full
+          directory, open Stats.
+        </p>
       </div>
       <div className="mt-4 space-y-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-[#786846]">Useful links</p>

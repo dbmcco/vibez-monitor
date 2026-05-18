@@ -1,101 +1,59 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const ALL_LINKS = [
+const PRIMARY_LINKS = [
   { href: "/atlas", label: "Atlas" },
-  { href: "/briefing", label: "Briefing" },
-  { href: "/catchup", label: "Catchup" },
-  { href: "/wisdom", label: "Wisdom" },
   { href: "/links", label: "Links" },
   { href: "/stats", label: "Stats" },
   { href: "/spaces", label: "Groups" },
-  { href: "/settings", label: "Settings" },
 ];
 
-const PAGE_INTENT: Record<string, string> = {
-  "/": "Executive signal first: what changed, why it matters, and where to pay attention.",
-  "/atlas":
-    "Atlas: latest cross-channel map of topics, citations, concerns, and shared artifacts.",
-  "/briefing":
-    "Executive signal first: what changed, why it matters, and where to pay attention.",
-  "/briefing/trends":
-    "Trend coverage: unpack the trend narrative with deeper signal, evidence, and diagnostics.",
-  "/catchup":
-    "Time-window synthesis: get up to speed on what happened while you were away.",
-  "/contribute":
-    "Action queue: highest-value contributions filtered by urgency, need, and relationship leverage.",
-  "/stats":
-    "Pattern analysis: trends by user, channel, and topic with drilldown detail.",
-  "/spaces":
-    "Google Groups monitor: track ingestion health and drill into each group stream.",
-  "/wisdom":
-    "Collective knowledge: topics, patterns, and recommendations distilled from group conversations.",
-  "/chat":
-    "Rapid synthesis: ask focused questions and get grounded answers from message history.",
-  "/links": "Semantic link search: find shared resources by describing what you remember.",
-  "/settings": "System controls: tune data scope, models, and analysis behavior.",
-};
-
 export function Nav() {
-  const links = ALL_LINKS;
-  const pathname = usePathname();
-  const isWisdom = pathname === "/wisdom";
-  const activeLabel =
-    links.find((link) => link.href === pathname)?.label ??
-    (pathname === "/contribute" ? "Contribute" : pathname === "/chat" ? "Chat" : "Briefing");
-  const activeIntent = isWisdom
-    ? "Collective knowledge distilled into topic cards and drill-down guidance."
-    : PAGE_INTENT[pathname] ?? PAGE_INTENT["/"];
+  const pathname = usePathname() || "/atlas";
+
   return (
-    <nav className="sticky top-0 z-40 border-b border-slate-700/50 bg-slate-950/75 px-4 py-4 backdrop-blur-xl sm:px-6">
+    <nav className="sticky top-0 z-40 border-b-4 border-double border-[#1f1a12] bg-[#f8f4ea]/95 px-4 py-3 text-[#1f1a12] shadow-sm backdrop-blur sm:px-6">
       <div className="mx-auto max-w-6xl">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center justify-between gap-3">
-            <Link href="/atlas" className="group inline-flex items-center gap-2">
-              <Image
-                src="/icons/favicon-32x32.png"
-                alt="Vibez logo"
-                width={20}
-                height={20}
-                className="h-5 w-5 rounded-[6px] border border-cyan-300/45 shadow-[0_0_14px_rgba(34,211,238,0.55)] transition-transform group-hover:scale-105"
-              />
-              <span className="vibe-title text-base tracking-[0.08em] text-slate-100">
-                VIBEZ MONITOR
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <Link href="/atlas" className="inline-flex items-baseline gap-3">
+              <span className="font-serif text-3xl font-black tracking-normal text-[#1f1a12] sm:text-4xl">
+                The Vibez Atlas
+              </span>
+              <span className="hidden text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21] sm:inline">
+                AGI Channels Daily
               </span>
             </Link>
-            <span className="vibe-chip rounded px-2 py-0.5 text-xs sm:hidden">
-              Focus: {activeLabel}
-            </span>
+            <p className="mt-1 text-xs leading-5 text-[#5e5238]">
+              A sourced newspaper for what happened, what it means, and what deserves action.
+            </p>
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0">
-            {links.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={`vibe-nav-item rounded-md px-3 py-1.5 text-sm whitespace-nowrap ${
-                  pathname === link.href
-                    ? "vibe-nav-item-active"
-                    : ""
-                }`}
-              >
-                {link.label}
-              </Link>
-            ))}
+          <div className="flex items-center gap-2 overflow-x-auto border-y border-[#cbbf9d] py-2 lg:border-y-0 lg:py-0">
+            {PRIMARY_LINKS.map((link) => {
+              const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className={`whitespace-nowrap border px-3 py-1.5 text-sm font-bold uppercase tracking-[0.12em] transition ${
+                    active
+                      ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
+                      : "border-transparent text-[#342a1b] hover:border-[#1f1a12]"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
+            <Link
+              href="/settings"
+              className="whitespace-nowrap px-2 py-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#786846] hover:text-[#1f1a12]"
+            >
+              Settings
+            </Link>
           </div>
-          <span className="vibe-chip hidden rounded px-2 py-0.5 text-xs sm:inline-flex">
-            Focus: {activeLabel}
-          </span>
-        </div>
-        <div
-          className={`mt-2 rounded border border-slate-700/60 bg-slate-900/45 px-3 py-2 text-xs text-slate-300 ${
-            isWisdom ? "hidden sm:block" : ""
-          }`}
-        >
-          <span className="mr-2 text-slate-500">Intent:</span>
-          {activeIntent}
         </div>
       </div>
     </nav>
