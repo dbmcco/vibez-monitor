@@ -448,14 +448,14 @@ function NarrativeReport({
     ? "Sunday Edition"
     : report?.issue.edition_label || atlas.narrative.title;
   return (
-    <section className="rounded-xl border border-[#b9aa86] bg-[#f8f4ea] p-4 text-[#1f1a12] shadow-[0_18px_60px_rgba(32,24,12,0.18)] sm:p-6">
-      <div className="border-b-4 border-double border-[#1f1a12] pb-4 text-center">
+    <section className="border border-[#b9aa86] bg-[#f8f4ea] p-4 text-[#1f1a12] shadow-[0_12px_40px_rgba(32,24,12,0.12)] sm:p-6">
+      <div className="border-b border-[#1f1a12] pb-5 text-center">
         <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#786846]">
           <span>{editionLabel}</span>
           <span>|</span>
           <span>{report?.issue.date || atlas.window.end.slice(0, 10)}</span>
         </div>
-        <h2 className="mt-2 font-serif text-4xl font-black tracking-normal text-[#1f1a12] sm:text-6xl">
+        <h2 className="mt-2 font-serif text-4xl font-black tracking-normal text-[#1f1a12] sm:text-5xl">
           {report?.issue.title || "The Vibez Atlas"}
         </h2>
         <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-[#5e5238] sm:text-base">
@@ -466,22 +466,9 @@ function NarrativeReport({
         <EditionArchive
           editions={editions}
           currentDate={report?.issue.date || atlas.window.end.slice(0, 10)}
+          windowHours={windowHours}
+          onWindowHoursChange={onWindowHoursChange}
         />
-        <div className="mt-4 flex justify-center gap-2">
-          {[48, 168].map((hours) => (
-            <button
-              key={hours}
-              onClick={() => onWindowHoursChange(hours)}
-              className={`rounded border px-3 py-1.5 text-sm ${
-                windowHours === hours
-                  ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
-                  : "border-[#b9aa86] bg-transparent text-[#342a1b] hover:border-[#1f1a12]"
-              }`}
-            >
-              {hours === 48 ? "48h" : "Week"}
-            </button>
-          ))}
-        </div>
       </div>
 
       {report && leadArticle ? (
@@ -1075,9 +1062,13 @@ function RoomsDesk({
 function EditionArchive({
   editions,
   currentDate,
+  windowHours,
+  onWindowHoursChange,
 }: {
   editions: AtlasEditionSummary[];
   currentDate: string;
+  windowHours: number;
+  onWindowHoursChange: (hours: number) => void;
 }) {
   const [jumpDate, setJumpDate] = useState(currentDate);
   const [jumpHours, setJumpHours] = useState(48);
@@ -1085,69 +1076,44 @@ function EditionArchive({
     if (!jumpDate) return;
     window.location.href = `/atlas/editions/${encodeURIComponent(jumpDate)}?hours=${jumpHours}`;
   };
+  const latestEdition = editions[0] || null;
   return (
-    <div className="mx-auto mt-4 max-w-5xl border-y border-[#cbbf9d] py-3 text-left">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#7b2f20]">
-          Previous Editions
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs text-[#786846]">Durable issues, not regenerated on read.</p>
-          <Link
-            href="/atlas/editions"
-            className="border border-[#1f1a12] px-2 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
-          >
-            All editions
-          </Link>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+    <div className="mx-auto mt-5 max-w-5xl border-t border-[#cbbf9d] pt-4 text-left">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          {editions.length > 0 ? (
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {editions.map((edition) => {
-                const active = edition.date === currentDate;
-                return (
-                  <Link
-                    key={`${edition.type}-${edition.date}-${edition.window_hours}`}
-                    href={edition.href}
-                    title={edition.title}
-                    className={`min-w-[170px] border px-3 py-2 text-left transition ${
-                      active
-                        ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
-                        : "border-[#b9aa86] bg-[#fffaf0]/50 text-[#342a1b] hover:border-[#1f1a12]"
-                    }`}
-                  >
-                    <span
-                      className={`block text-[10px] font-bold uppercase tracking-[0.12em] ${
-                        active ? "text-[#f8f4ea]" : "text-[#7b2f20]"
-                      }`}
-                    >
-                      {edition.edition_label}
-                    </span>
-                    <span className="mt-1 block font-serif text-lg font-bold">{edition.date}</span>
-                    <span className={`mt-1 block truncate text-xs ${active ? "text-[#eadfca]" : "text-[#786846]"}`}>
-                      {edition.title}
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-sm text-[#5e5238]">No saved editions were found for this window yet.</p>
-          )}
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#7b2f20]">Editions</p>
+          <p className="mt-1 truncate text-sm text-[#5e5238]">
+            {latestEdition
+              ? `${latestEdition.edition_label} ${latestEdition.date}: ${latestEdition.title}`
+              : "No saved editions found for this window yet."}
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 border border-[#cbbf9d] bg-[#fffaf0]/55 p-2">
-          <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#7b2f20]">
-            Open date
-          </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex border border-[#b9aa86] bg-[#fffaf0]/70">
+            {[48, 168].map((hours) => (
+              <button
+                key={hours}
+                type="button"
+                onClick={() => onWindowHoursChange(hours)}
+                className={`min-h-9 px-3 text-sm ${
+                  windowHours === hours
+                    ? "bg-[#1f1a12] text-[#f8f4ea]"
+                    : "text-[#342a1b] hover:bg-[#f1e6cf]"
+                }`}
+              >
+                {hours === 48 ? "48h" : "Week"}
+              </button>
+            ))}
+          </div>
           <input
             type="date"
+            aria-label="Open edition date"
             value={jumpDate}
             onChange={(event) => setJumpDate(event.target.value)}
-            className="min-h-9 border px-2 text-sm"
+            className="min-h-9 w-[9.5rem] border px-2 text-sm"
           />
           <select
+            aria-label="Open edition window"
             value={jumpHours}
             onChange={(event) => setJumpHours(Number(event.target.value))}
             className="min-h-9 border px-2 text-sm"
@@ -1158,10 +1124,16 @@ function EditionArchive({
           <button
             type="button"
             onClick={openEdition}
-            className="min-h-9 border border-[#1f1a12] bg-[#1f1a12] px-3 text-xs font-bold uppercase tracking-[0.12em] text-[#f8f4ea]"
+            className="min-h-9 border border-[#1f1a12] bg-[#1f1a12] px-3 text-xs font-bold uppercase text-[#f8f4ea]"
           >
             Open
           </button>
+          <Link
+            href="/atlas/editions"
+            className="min-h-9 border border-[#b9aa86] px-3 py-2 text-xs font-bold uppercase text-[#342a1b] hover:border-[#1f1a12] hover:bg-[#fffaf0]"
+          >
+            Archive
+          </Link>
         </div>
       </div>
     </div>

@@ -4,6 +4,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { StarButton } from "@/components/StarButton";
 import { linkStarKey, useStars } from "@/lib/stars";
 
@@ -233,6 +234,16 @@ export default function LinksPage() {
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const { stars, isLinkStarred, toggleLinkStar } = useStars();
+
+  const openLink = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const openLinkFromKeyboard = useCallback((event: KeyboardEvent, url: string) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openLink(url);
+  }, [openLink]);
 
   const fetchLinks = useCallback(async (filters: LinkFilters) => {
     setLoading(true);
@@ -528,12 +539,20 @@ export default function LinksPage() {
               const author = authoredBadge(link.authored_by);
 
               return (
-                <article key={link.id} className="vibe-panel rounded-xl p-4">
+                <article
+                  key={link.id}
+                  role="link"
+                  tabIndex={0}
+                  onClick={() => openLink(link.url)}
+                  onKeyDown={(event) => openLinkFromKeyboard(event, link.url)}
+                  className="vibe-panel cursor-pointer rounded-xl p-4 transition hover:border-[#1f1a12]"
+                >
                   <div className="flex items-start gap-3">
                     <a
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
                       className="block min-w-0 flex-1"
                     >
                       <div className="flex items-center gap-2">
@@ -558,6 +577,7 @@ export default function LinksPage() {
                       }}
                     />
                   </div>
+                  <div className="mt-3 text-xs font-bold uppercase text-[#7b2f20]">Open link</div>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
                     {sharer ? (
                       <span className="rounded-full border border-slate-800/60 px-2 py-0.5">from {sharer}</span>
@@ -579,13 +599,13 @@ export default function LinksPage() {
           </div>
 
           <div className="hidden overflow-hidden rounded-lg border border-slate-800/60 sm:block">
-            <table className="w-full text-left text-sm">
+            <table className="w-full table-fixed text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-800/60 text-[10px] font-medium uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Link</th>
-                  <th className="hidden px-3 py-2 sm:table-cell">From</th>
-                  <th className="px-3 py-2 text-right">When</th>
-                  <th className="px-3 py-2 text-right">Shares</th>
+                  <th className="hidden w-24 px-3 py-2 sm:table-cell">From</th>
+                  <th className="w-20 px-3 py-2 text-right">When</th>
+                  <th className="w-24 px-3 py-2 text-right">Open</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">
@@ -597,13 +617,21 @@ export default function LinksPage() {
                   const author = authoredBadge(link.authored_by);
 
                   return (
-                    <tr key={link.id} className="group transition hover:bg-slate-800/20">
+                    <tr
+                      key={link.id}
+                      role="link"
+                      tabIndex={0}
+                      onClick={() => openLink(link.url)}
+                      onKeyDown={(event) => openLinkFromKeyboard(event, link.url)}
+                      className="group cursor-pointer transition hover:bg-[#fffaf0]/70"
+                    >
                       <td className="px-3 py-2">
                         <div className="flex items-start gap-3">
                           <a
                             href={link.url}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(event) => event.stopPropagation()}
                             className="block min-w-0 flex-1"
                           >
                             <div className="flex items-center gap-2">
@@ -638,7 +666,12 @@ export default function LinksPage() {
                         {formatDate(link.last_seen)}
                       </td>
                       <td className="px-3 py-2 text-right text-xs text-slate-500">
-                        {link.mention_count > 1 ? `${link.mention_count}x` : ""}
+                        <span className="font-bold uppercase text-[#7b2f20]">
+                          Open
+                        </span>
+                        {link.mention_count > 1 ? (
+                          <span className="ml-2 text-[#786846]">{link.mention_count}x</span>
+                        ) : null}
                       </td>
                     </tr>
                   );
