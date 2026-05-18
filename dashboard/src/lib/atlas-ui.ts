@@ -12,11 +12,8 @@ export function atlasArticleHref(issueDate: string, slug: string, hours: number)
 }
 
 export function atlasArticleDeepDiveHref(issueDate: string, slug: string, hours: number): string {
-  const params = new URLSearchParams({
-    hours: String(parseAtlasWindowHours(String(hours))),
-    deepDive: "1",
-  });
-  return `/atlas/issues/${encodeURIComponent(issueDate)}/${encodeURIComponent(slug)}?${params.toString()}`;
+  const params = new URLSearchParams({ hours: String(parseAtlasWindowHours(String(hours))) });
+  return `/atlas/issues/${encodeURIComponent(issueDate)}/${encodeURIComponent(slug)}/research-dive?${params.toString()}`;
 }
 
 export function atlasFrontPageHref(hours: number): string {

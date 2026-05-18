@@ -19,7 +19,20 @@ export interface AtlasDeeperDive {
   open_questions: string[];
   recommended_actions: string[];
   citation_refs: string[];
+  citation_details: AtlasDeeperDiveCitation[];
   generated_at: string;
+}
+
+export interface AtlasDeeperDiveCitation {
+  ref: string;
+  type: "message" | "link";
+  label: string;
+  channel?: string;
+  sender?: string;
+  timestamp?: number;
+  body?: string;
+  url?: string;
+  title?: string;
 }
 
 interface AtlasDeeperDiveDeps {
@@ -86,6 +99,16 @@ export async function generateAtlasDeeperDive(
     allowedRefs: new Set([
       ...messages.map((message) => messageRef(message.id)),
       ...links.map((link) => linkRef(link.id)),
+    ]),
+    citationDetails: new Map([
+      ...messages.map((message) => {
+        const ref = messageRef(message.id);
+        return [ref, messageToCitation(ref, message)] as const;
+      }),
+      ...links.map((link) => {
+        const ref = linkRef(link.id);
+        return [ref, linkToCitation(ref, link)] as const;
+      }),
     ]),
   });
 }
@@ -165,6 +188,7 @@ function normalizeDeeperDive(
   context: {
     retrievalMode: AtlasDeeperDive["retrieval_mode"];
     allowedRefs: Set<string>;
+    citationDetails: Map<string, AtlasDeeperDiveCitation>;
   },
 ): AtlasDeeperDive {
   if (!raw || typeof raw !== "object") {
@@ -176,6 +200,7 @@ function normalizeDeeperDive(
   if (!title || !researchQuestion) {
     throw new Error("atlas research dive is missing title or research question");
   }
+  const citationRefs = readList(payload.citation_refs).filter((ref) => context.allowedRefs.has(ref));
   const dive: AtlasDeeperDive = {
     title,
     research_question: researchQuestion,
@@ -186,7 +211,8 @@ function normalizeDeeperDive(
     tensions: readList(payload.tensions),
     open_questions: readList(payload.open_questions),
     recommended_actions: readList(payload.recommended_actions),
-    citation_refs: readList(payload.citation_refs).filter((ref) => context.allowedRefs.has(ref)),
+    citation_refs: citationRefs,
+    citation_details: citationRefs.map((ref) => context.citationDetails.get(ref)).filter(isCitationDetail),
     generated_at: new Date().toISOString(),
   };
   for (const field of [
@@ -225,6 +251,32 @@ function linkToEvidence(link: LinkRow) {
     shared_by: link.shared_by,
     source_group: link.source_group,
   };
+}
+
+function messageToCitation(ref: string, message: Message): AtlasDeeperDiveCitation {
+  return {
+    ref,
+    type: "message",
+    label: `${message.sender_name} in ${message.room_name}`,
+    channel: message.room_name,
+    sender: message.sender_name,
+    timestamp: message.timestamp,
+    body: message.body,
+  };
+}
+
+function linkToCitation(ref: string, link: LinkRow): AtlasDeeperDiveCitation {
+  return {
+    ref,
+    type: "link",
+    label: link.title || link.url,
+    title: link.title || link.url,
+    url: link.url,
+  };
+}
+
+function isCitationDetail(value: AtlasDeeperDiveCitation | undefined): value is AtlasDeeperDiveCitation {
+  return Boolean(value);
 }
 
 function messageRef(id: string): string {

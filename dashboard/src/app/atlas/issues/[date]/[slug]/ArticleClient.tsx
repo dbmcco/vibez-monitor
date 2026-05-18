@@ -61,34 +61,17 @@ interface AtlasPayload {
   editorial_error?: string | null;
 }
 
-interface AtlasDeeperDive {
-  title: string;
-  research_question: string;
-  retrieval_mode: "semantic";
-  what_else_was_said: string[];
-  why_it_matters: string[];
-  patterns: string[];
-  tensions: string[];
-  open_questions: string[];
-  recommended_actions: string[];
-  citation_refs: string[];
-}
-
 export default function AtlasArticleClient({
   articleDate,
   articleSlug,
   initialWindowHours,
   initialPayload,
-  initialDeepDive,
-  initialDeepDiveError,
   deepDiveHref,
 }: {
   articleDate: string;
   articleSlug: string;
   initialWindowHours: number;
   initialPayload: AtlasPayload | null;
-  initialDeepDive: AtlasDeeperDive | null;
-  initialDeepDiveError: string | null;
   deepDiveHref: string;
 }) {
   const [windowHours] = useState(initialWindowHours);
@@ -228,22 +211,12 @@ export default function AtlasArticleClient({
                 href={deepDiveHref}
                 className="mt-3 inline-flex border-2 border-slate-950 bg-slate-950 px-3.5 py-2.5 text-sm font-bold !text-white shadow-sm hover:bg-[#342a1b] focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2 focus:ring-offset-[#f8f4ea]"
               >
-                {initialDeepDive ? "Run research dive again" : "Spawn research dive"}
+                Open research dive
               </a>
-              {!initialDeepDive && !initialDeepDiveError && (
-                <p className="mt-2 text-xs leading-5 text-slate-500">
-                  Opens a generated research report for this story.
-                </p>
-              )}
-              {initialDeepDiveError && (
-                <div className="mt-3 border border-red-300 bg-red-50 p-3 text-sm leading-6 text-red-800">
-                  <p className="font-semibold">Research dive failed.</p>
-                  <p className="mt-1">{initialDeepDiveError}</p>
-                </div>
-              )}
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                Opens a full research report page for this story.
+              </p>
             </section>
-
-            {initialDeepDive && <DeepDivePanel dive={initialDeepDive} citations={citations} />}
 
             <ArticleRail
               title="Evidence"
@@ -356,44 +329,5 @@ function ArticleRail({
         })}
       </div>
     </section>
-  );
-}
-
-function DeepDivePanel({
-  dive,
-  citations,
-}: {
-  dive: AtlasDeeperDive;
-  citations: Record<string, AtlasCitation>;
-}) {
-  return (
-    <section className="border-2 border-slate-900 bg-white/50 p-4">
-      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-600">
-        Semantic corpus retrieval
-      </p>
-      <h2 className="mt-1 font-serif text-2xl font-bold text-slate-950">{dive.title}</h2>
-      <p className="mt-2 text-sm leading-6 text-slate-700">{dive.research_question}</p>
-      <DiveList title="What else was said" items={dive.what_else_was_said} />
-      <DiveList title="Why it matters" items={dive.why_it_matters} />
-      <DiveList title="Patterns" items={dive.patterns} />
-      <DiveList title="Tensions" items={dive.tensions} />
-      <DiveList title="Open questions" items={dive.open_questions} />
-      <DiveList title="Recommended actions" items={dive.recommended_actions} />
-      <ArticleRail title="Research citations" refs={dive.citation_refs} citations={citations} />
-    </section>
-  );
-}
-
-function DiveList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
-  return (
-    <div className="mt-4">
-      <h3 className="font-serif text-lg font-bold text-slate-950">{title}</h3>
-      <div className="mt-2 space-y-2">
-        {items.map((item, index) => (
-          <p key={index} className="text-sm leading-6 text-slate-700">{item}</p>
-        ))}
-      </div>
-    </div>
   );
 }

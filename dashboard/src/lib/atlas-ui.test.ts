@@ -16,7 +16,7 @@ describe("atlas UI helpers", () => {
 
   test("builds a real URL for spawning article deeper dives", () => {
     expect(atlasArticleDeepDiveHref("2026-05-17", "weekly story", 168)).toBe(
-      "/atlas/issues/2026-05-17/weekly%20story?hours=168&deepDive=1",
+      "/atlas/issues/2026-05-17/weekly%20story/research-dive?hours=168",
     );
   });
 

@@ -1,5 +1,4 @@
 import AtlasArticleClient from "./ArticleClient";
-import { generateAtlasDeeperDive, type AtlasDeeperDive } from "@/lib/atlas-deeper-dive";
 import { atlasArticleDeepDiveHref, parseAtlasWindowHours } from "@/lib/atlas-ui";
 import { readAtlasArtifact } from "@/lib/atlas-artifact";
 
@@ -8,10 +7,7 @@ export const revalidate = 0;
 
 type PageProps = {
   params: Promise<{ date: string; slug: string }> | { date: string; slug: string };
-  searchParams?: Promise<{ deepDive?: string | string[]; hours?: string | string[] }> | {
-    deepDive?: string | string[];
-    hours?: string | string[];
-  };
+  searchParams?: Promise<{ hours?: string | string[] }> | { hours?: string | string[] };
 };
 
 async function resolveMaybe<T>(value: Promise<T> | T): Promise<T> {
@@ -24,25 +20,8 @@ export default async function AtlasArticlePage({ params, searchParams }: PagePro
   const rawHours = Array.isArray(resolvedSearchParams.hours)
     ? resolvedSearchParams.hours[0]
     : resolvedSearchParams.hours;
-  const rawDeepDive = Array.isArray(resolvedSearchParams.deepDive)
-    ? resolvedSearchParams.deepDive[0]
-    : resolvedSearchParams.deepDive;
   const windowHours = parseAtlasWindowHours(rawHours);
   const artifact = readAtlasArtifact(windowHours);
-  const article = artifact?.editorial_report.articles.find((item) =>
-    item.slug === resolvedParams.slug,
-  ) || null;
-  let initialDeepDive: AtlasDeeperDive | null = null;
-  let initialDeepDiveError: string | null = null;
-  if (rawDeepDive === "1" && article) {
-    try {
-      initialDeepDive = await generateAtlasDeeperDive({ article, hours: windowHours });
-    } catch (error) {
-      initialDeepDiveError = error instanceof Error
-        ? error.message
-        : "Deeper dive unavailable.";
-    }
-  }
 
   return (
     <AtlasArticleClient
@@ -50,8 +29,6 @@ export default async function AtlasArticlePage({ params, searchParams }: PagePro
       articleSlug={resolvedParams.slug}
       deepDiveHref={atlasArticleDeepDiveHref(resolvedParams.date, resolvedParams.slug, windowHours)}
       initialWindowHours={windowHours}
-      initialDeepDive={initialDeepDive}
-      initialDeepDiveError={initialDeepDiveError}
       initialPayload={artifact
         ? {
           atlas: artifact.atlas,

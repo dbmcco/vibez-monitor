@@ -102,6 +102,17 @@ describe("atlas deeper dive", () => {
       retrieval_mode: "semantic",
       title: "Research dive: evaluation as proof",
       citation_refs: ["vibez:message:m2", "vibez:link:11"],
+      citation_details: [
+        expect.objectContaining({
+          ref: "vibez:message:m2",
+          label: "Lee in Tools",
+          body: "The tool catalog still needs durable records.",
+        }),
+        expect.objectContaining({
+          ref: "vibez:link:11",
+          url: "https://example.com/evals",
+        }),
+      ],
     });
     expect(dive.tensions[0]).toContain("tooling anxiety");
     const modelMessages = generator.mock.calls[0][0].messages;
