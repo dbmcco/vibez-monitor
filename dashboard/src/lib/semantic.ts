@@ -170,12 +170,21 @@ function dimensions(): number {
   return Math.max(64, Math.min(value, 3072));
 }
 
+function pgvectorUrl(): string {
+  return (
+    process.env.VIBEZ_PGVECTOR_URL ||
+    process.env.VIBEZ_DATABASE_URL ||
+    process.env.DATABASE_URL ||
+    (process.env.VIBEZ_DB_PATH ? "" : "postgresql://braydon@localhost:5432/vibez_monitor")
+  ).trim();
+}
+
 export function isPgvectorEnabled(): boolean {
-  return Boolean(process.env.VIBEZ_PGVECTOR_URL?.trim());
+  return Boolean(pgvectorUrl());
 }
 
 function getPool(): Pool | null {
-  const url = process.env.VIBEZ_PGVECTOR_URL?.trim();
+  const url = pgvectorUrl();
   if (!url) return null;
   if (!pool) {
     pool = new Pool({

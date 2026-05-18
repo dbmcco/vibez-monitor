@@ -1907,6 +1907,7 @@ export async function searchMessages(opts: {
   query: string;
   lookbackDays?: number;
   limit?: number;
+  semanticOnly?: boolean;
 }): Promise<Message[]> {
   const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
@@ -1922,6 +1923,12 @@ export async function searchMessages(opts: {
       ...row,
       sender_name: normalizeSenderName(row.sender_name, userAliases),
     }));
+  }
+  if (opts.semanticOnly) {
+    if (semanticRows === null) {
+      throw new Error("semantic message retrieval is unavailable");
+    }
+    return [];
   }
 
   return searchMessagesKeyword(opts);
@@ -4800,6 +4807,7 @@ export async function searchLinks(opts: {
   sharedBy?: string;
   authoredBy?: string;
   pinned?: boolean;
+  semanticOnly?: boolean;
 }): Promise<LinkRow[]> {
   const semanticRows = await searchHybridLinks({
     query: opts.query,
@@ -4813,6 +4821,12 @@ export async function searchLinks(opts: {
   });
   if (semanticRows && semanticRows.length > 0) {
     return semanticRows;
+  }
+  if (opts.semanticOnly) {
+    if (semanticRows === null) {
+      throw new Error("semantic link retrieval is unavailable");
+    }
+    return [];
   }
   return searchLinksFts(opts.query, opts);
 }

@@ -63,12 +63,13 @@ interface AtlasPayload {
 
 interface AtlasDeeperDive {
   title: string;
-  claim_under_review: string;
-  retrieval_mode: "semantic" | "keyword_fallback";
-  supporting_evidence: string[];
-  counterevidence: string[];
-  weak_spots: string[];
-  alternative_interpretations: string[];
+  research_question: string;
+  retrieval_mode: "semantic";
+  what_else_was_said: string[];
+  why_it_matters: string[];
+  patterns: string[];
+  tensions: string[];
+  open_questions: string[];
   recommended_actions: string[];
   citation_refs: string[];
 }
@@ -218,25 +219,25 @@ export default function AtlasArticleClient({
 
           <aside className="space-y-4">
             <section className="border border-slate-300 bg-white/35 p-4">
-              <h2 className="font-serif text-2xl font-bold text-slate-950">Spawn deeper dive</h2>
+              <h2 className="font-serif text-2xl font-bold text-slate-950">Spawn research dive</h2>
               <p className="mt-2 text-sm leading-6 text-slate-700">
-                Run retrieval and adversarial analysis against this article. This usually takes
-                20-40 seconds.
+                Search the broader AGI channel corpus for related thinking, then synthesize a
+                follow-on research report. This usually takes 20-40 seconds.
               </p>
               <a
                 href={deepDiveHref}
-                className="mt-3 inline-flex border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-semibold text-[#f8f4ea] hover:bg-[#342a1b] focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2 focus:ring-offset-[#f8f4ea]"
+                className="mt-3 inline-flex border-2 border-slate-950 bg-slate-950 px-3.5 py-2.5 text-sm font-bold !text-white shadow-sm hover:bg-[#342a1b] focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2 focus:ring-offset-[#f8f4ea]"
               >
-                {initialDeepDive ? "Run deeper dive again" : "Spawn deeper dive"}
+                {initialDeepDive ? "Run research dive again" : "Spawn research dive"}
               </a>
               {!initialDeepDive && !initialDeepDiveError && (
                 <p className="mt-2 text-xs leading-5 text-slate-500">
-                  Opens a generated deeper-dive view for this story.
+                  Opens a generated research report for this story.
                 </p>
               )}
               {initialDeepDiveError && (
                 <div className="mt-3 border border-red-300 bg-red-50 p-3 text-sm leading-6 text-red-800">
-                  <p className="font-semibold">Deeper dive failed.</p>
+                  <p className="font-semibold">Research dive failed.</p>
                   <p className="mt-1">{initialDeepDiveError}</p>
                 </div>
               )}
@@ -368,16 +369,17 @@ function DeepDivePanel({
   return (
     <section className="border-2 border-slate-900 bg-white/50 p-4">
       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-600">
-        {dive.retrieval_mode === "semantic" ? "Semantic retrieval" : "Keyword fallback"}
+        Semantic corpus retrieval
       </p>
       <h2 className="mt-1 font-serif text-2xl font-bold text-slate-950">{dive.title}</h2>
-      <p className="mt-2 text-sm leading-6 text-slate-700">{dive.claim_under_review}</p>
-      <DiveList title="Support" items={dive.supporting_evidence} />
-      <DiveList title="Counterevidence" items={dive.counterevidence} />
-      <DiveList title="Weak spots" items={dive.weak_spots} />
-      <DiveList title="Alternative readings" items={dive.alternative_interpretations} />
+      <p className="mt-2 text-sm leading-6 text-slate-700">{dive.research_question}</p>
+      <DiveList title="What else was said" items={dive.what_else_was_said} />
+      <DiveList title="Why it matters" items={dive.why_it_matters} />
+      <DiveList title="Patterns" items={dive.patterns} />
+      <DiveList title="Tensions" items={dive.tensions} />
+      <DiveList title="Open questions" items={dive.open_questions} />
       <DiveList title="Recommended actions" items={dive.recommended_actions} />
-      <ArticleRail title="Divergence citations" refs={dive.citation_refs} citations={citations} />
+      <ArticleRail title="Research citations" refs={dive.citation_refs} citations={citations} />
     </section>
   );
 }

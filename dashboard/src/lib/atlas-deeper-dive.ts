@@ -10,12 +10,13 @@ export interface AtlasDeeperDiveInput {
 
 export interface AtlasDeeperDive {
   title: string;
-  claim_under_review: string;
-  retrieval_mode: "semantic" | "keyword_fallback";
-  supporting_evidence: string[];
-  counterevidence: string[];
-  weak_spots: string[];
-  alternative_interpretations: string[];
+  research_question: string;
+  retrieval_mode: "semantic";
+  what_else_was_said: string[];
+  why_it_matters: string[];
+  patterns: string[];
+  tensions: string[];
+  open_questions: string[];
   recommended_actions: string[];
   citation_refs: string[];
   generated_at: string;
@@ -44,28 +45,33 @@ export async function generateAtlasDeeperDive(
   input: AtlasDeeperDiveInput,
   deps: AtlasDeeperDiveDeps = defaultDeps,
 ): Promise<AtlasDeeperDive> {
-  const hours = Math.max(6, Math.min(input.hours || 48, 168));
+  if (!deps.isSemanticEnabled()) {
+    throw new Error("semantic retrieval is required for Atlas research dives");
+  }
+  const lookbackDays = 30;
   const query = buildArticleQuery(input.article);
   const [messages, links] = await Promise.all([
     deps.searchMessages({
       query,
-      lookbackDays: Math.ceil(hours / 24),
-      limit: 20,
-    }).catch((error) => {
-      console.warn("atlas deeper-dive message retrieval failed:", error);
-      return [];
+      lookbackDays,
+      limit: 80,
+      semanticOnly: true,
     }),
     deps.searchLinks({
       query,
-      days: 7,
-      limit: 12,
+      days: lookbackDays,
+      limit: 40,
       sort: "value",
+      semanticOnly: true,
     }).catch((error) => {
       console.warn("atlas deeper-dive link retrieval failed:", error);
       return [];
     }),
   ]);
-  const retrievalMode = deps.isSemanticEnabled() ? "semantic" : "keyword_fallback";
+  if (messages.length === 0) {
+    throw new Error("semantic retrieval returned no messages for this research dive");
+  }
+  const retrievalMode = "semantic";
   const result = await deps.generateJson({
     taskId: "dashboard.atlas_deeper_dive",
     messages: buildDeeperDiveMessages({
@@ -78,8 +84,6 @@ export async function generateAtlasDeeperDive(
   return normalizeDeeperDive(result.parsed, {
     retrievalMode,
     allowedRefs: new Set([
-      ...input.article.evidence_refs,
-      ...input.article.link_refs,
       ...messages.map((message) => messageRef(message.id)),
       ...links.map((link) => linkRef(link.id)),
     ]),
@@ -106,27 +110,33 @@ function buildDeeperDiveMessages(input: {
     {
       role: "system",
       content: [
-        "You are an adversarial analyst for Vibez Atlas.",
-        "Challenge the article without being contrarian for sport.",
-        "Use the retrieved evidence. Do not invent facts.",
+        "You are a research editor for Vibez Atlas.",
+        "The supplied article is only a seed. Do not grade, rewrite, fact-check, or summarize the article as the main job.",
+        "Your job is to synthesize what the wider AGI practitioner community has said about this kind of topic across the retrieved channel evidence.",
+        "Write with humane, sharp newsroom judgment: clear, useful, lightly witty when the evidence supports it, never glib.",
+        "Use retrieved evidence and citations. Do not invent facts.",
         "Return strict JSON only.",
       ].join("\n"),
     },
     {
       role: "user",
       content: [
-        "Run a deeper dive on this Atlas article.",
-        "Test the claim, find supporting evidence, find counterevidence, name weak spots, offer alternative interpretations, and recommend next actions.",
+        "Write a follow-on research report seeded by this Atlas article.",
+        "Search meaning: the retrieval system already searched the broader AGI channel corpus semantically. Your job is synthesis, not article review.",
+        "Explain what else has been said about this kind of thing, why it matters, what patterns are emerging, what tensions or disagreements exist, what remains unknown, and what a community member should do next.",
+        "Refer to people as community members or practitioners, not users.",
+        "Make the report valuable to someone trying to understand the community's thinking.",
         "",
         "Return strict JSON with this shape:",
         JSON.stringify(
           {
-            title: "short deeper dive title",
-            claim_under_review: "the article claim being tested",
-            supporting_evidence: ["what supports the claim"],
-            counterevidence: ["what challenges or complicates the claim"],
-            weak_spots: ["missing evidence or weak assumptions"],
-            alternative_interpretations: ["other plausible readings"],
+            title: "short research report title",
+            research_question: "the broader question raised by the seed article",
+            what_else_was_said: ["synthesis of related channel evidence"],
+            why_it_matters: ["why the pattern matters to practitioners"],
+            patterns: ["recurring themes, behaviors, or shifts"],
+            tensions: ["disagreements, tradeoffs, or unresolved conflicts"],
+            open_questions: ["important unknowns or missing evidence"],
             recommended_actions: ["specific follow-up actions"],
             citation_refs: ["vibez:message:...", "vibez:link:..."],
           },
@@ -162,31 +172,33 @@ function normalizeDeeperDive(
   }
   const payload = raw as Record<string, unknown>;
   const title = readText(payload.title);
-  const claim = readText(payload.claim_under_review);
-  if (!title || !claim) {
-    throw new Error("atlas deeper dive is missing title or claim");
+  const researchQuestion = readText(payload.research_question);
+  if (!title || !researchQuestion) {
+    throw new Error("atlas research dive is missing title or research question");
   }
   const dive: AtlasDeeperDive = {
     title,
-    claim_under_review: claim,
+    research_question: researchQuestion,
     retrieval_mode: context.retrievalMode,
-    supporting_evidence: readList(payload.supporting_evidence),
-    counterevidence: readList(payload.counterevidence),
-    weak_spots: readList(payload.weak_spots),
-    alternative_interpretations: readList(payload.alternative_interpretations),
+    what_else_was_said: readList(payload.what_else_was_said),
+    why_it_matters: readList(payload.why_it_matters),
+    patterns: readList(payload.patterns),
+    tensions: readList(payload.tensions),
+    open_questions: readList(payload.open_questions),
     recommended_actions: readList(payload.recommended_actions),
     citation_refs: readList(payload.citation_refs).filter((ref) => context.allowedRefs.has(ref)),
     generated_at: new Date().toISOString(),
   };
   for (const field of [
-    "supporting_evidence",
-    "counterevidence",
-    "weak_spots",
-    "alternative_interpretations",
+    "what_else_was_said",
+    "why_it_matters",
+    "patterns",
+    "tensions",
+    "open_questions",
     "recommended_actions",
   ] as const) {
     if (dive[field].length === 0) {
-      throw new Error(`atlas deeper dive is missing ${field}`);
+      throw new Error(`atlas research dive is missing ${field}`);
     }
   }
   return dive;

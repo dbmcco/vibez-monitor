@@ -36,7 +36,7 @@ const article: AtlasEditorialArticle = {
 };
 
 describe("atlas deeper dive", () => {
-  test("retrieves evidence and asks the model for adversarial analysis", async () => {
+  test("retrieves broad corpus evidence and asks the model for a follow-on research report", async () => {
     const searchMessages = vi.fn().mockResolvedValue([
       {
         id: "m2",
@@ -57,12 +57,13 @@ describe("atlas deeper dive", () => {
     ]);
     const generator = vi.fn().mockResolvedValue({
       parsed: {
-        title: "Deeper dive: evaluation as proof",
-        claim_under_review: "Evaluation is now the bottleneck.",
-        supporting_evidence: ["The retrieved messages reinforce the records gap."],
-        counterevidence: ["The sample is still small."],
-        weak_spots: ["The article may overstate consensus."],
-        alternative_interpretations: ["This may be tooling anxiety rather than evaluation maturity."],
+        title: "Research dive: evaluation as proof",
+        research_question: "How has the community been thinking about evaluation as durable proof?",
+        what_else_was_said: ["The retrieved messages widen the article into a broader records gap."],
+        why_it_matters: ["Evaluation is becoming operational infrastructure, not just commentary."],
+        patterns: ["Several rooms connect evaluation, agent harnesses, and durable records."],
+        tensions: ["The sample still mixes tooling anxiety with evaluation maturity."],
+        open_questions: ["Whether the concern is shared across quiet channels remains unresolved."],
         recommended_actions: ["Interview the people in both rooms before changing roadmap."],
         citation_refs: ["vibez:message:m2", "vibez:link:11", "vibez:message:nope"],
       },
@@ -80,14 +81,16 @@ describe("atlas deeper dive", () => {
 
     expect(searchMessages).toHaveBeenCalledWith({
       query: expect.stringContaining("Evaluation becomes the work"),
-      lookbackDays: 2,
-      limit: 20,
+      lookbackDays: 30,
+      limit: 80,
+      semanticOnly: true,
     });
     expect(searchLinks).toHaveBeenCalledWith({
       query: expect.stringContaining("Evaluation becomes the work"),
-      days: 7,
-      limit: 12,
+      days: 30,
+      limit: 40,
       sort: "value",
+      semanticOnly: true,
     });
     expect(generator).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -97,14 +100,17 @@ describe("atlas deeper dive", () => {
     );
     expect(dive).toMatchObject({
       retrieval_mode: "semantic",
-      title: "Deeper dive: evaluation as proof",
+      title: "Research dive: evaluation as proof",
       citation_refs: ["vibez:message:m2", "vibez:link:11"],
     });
-    expect(dive.counterevidence[0]).toContain("small");
+    expect(dive.tensions[0]).toContain("tooling anxiety");
+    const modelMessages = generator.mock.calls[0][0].messages;
+    expect(modelMessages[1].content).toContain("follow-on research report");
+    expect(modelMessages[1].content).not.toContain("Run a deeper dive on this Atlas article.");
   });
 
-  test("discloses keyword fallback when semantic retrieval is unavailable", async () => {
-    const dive = await generateAtlasDeeperDive(
+  test("fails hard instead of silently falling back when semantic retrieval is unavailable", async () => {
+    await expect(generateAtlasDeeperDive(
       { article, hours: 48 },
       {
         searchMessages: vi.fn().mockResolvedValue([]),
@@ -112,19 +118,18 @@ describe("atlas deeper dive", () => {
         generateJson: vi.fn().mockResolvedValue({
           parsed: {
             title: "Deeper dive",
-            claim_under_review: "Claim",
-            supporting_evidence: ["Support"],
-            counterevidence: ["Counter"],
-            weak_spots: ["Weak spot"],
-            alternative_interpretations: ["Alternative"],
+            research_question: "Question",
+            what_else_was_said: ["Evidence"],
+            why_it_matters: ["Matter"],
+            patterns: ["Pattern"],
+            tensions: ["Tension"],
+            open_questions: ["Question"],
             recommended_actions: ["Action"],
             citation_refs: [],
           },
         }),
         isSemanticEnabled: () => false,
       },
-    );
-
-    expect(dive.retrieval_mode).toBe("keyword_fallback");
+    )).rejects.toThrow(/semantic retrieval/i);
   });
 });
