@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  atlasArticleDeepDiveHref,
   atlasArticleHref,
   isRenderableArticleImageUrl,
   parseAtlasWindowHours,
@@ -10,6 +11,12 @@ describe("atlas UI helpers", () => {
   test("preserves the selected evidence window in article links", () => {
     expect(atlasArticleHref("2026-05-17", "weekly-story", 168)).toBe(
       "/atlas/issues/2026-05-17/weekly-story?hours=168",
+    );
+  });
+
+  test("builds a real URL for spawning article deeper dives", () => {
+    expect(atlasArticleDeepDiveHref("2026-05-17", "weekly story", 168)).toBe(
+      "/atlas/issues/2026-05-17/weekly%20story?hours=168&deepDive=1",
     );
   });
 

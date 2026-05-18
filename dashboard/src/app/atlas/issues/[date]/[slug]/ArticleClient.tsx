@@ -78,24 +78,24 @@ export default function AtlasArticleClient({
   articleSlug,
   initialWindowHours,
   initialPayload,
+  initialDeepDive,
+  initialDeepDiveError,
+  deepDiveHref,
 }: {
   articleDate: string;
   articleSlug: string;
   initialWindowHours: number;
   initialPayload: AtlasPayload | null;
+  initialDeepDive: AtlasDeeperDive | null;
+  initialDeepDiveError: string | null;
+  deepDiveHref: string;
 }) {
   const [windowHours] = useState(initialWindowHours);
   const [payload, setPayload] = useState<AtlasPayload | null>(initialPayload);
   const [loading, setLoading] = useState(!initialPayload);
-  const [deepDive, setDeepDive] = useState<AtlasDeeperDive | null>(null);
-  const [deepDiveError, setDeepDiveError] = useState<string | null>(null);
-  const [deepDiveLoading, setDeepDiveLoading] = useState(false);
-  const [deepDiveStartedAt, setDeepDiveStartedAt] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialPayload) {
-      setPayload(initialPayload);
-      setLoading(false);
       return;
     }
     let active = true;
@@ -123,33 +123,6 @@ export default function AtlasArticleClient({
   const related = payload?.editorial_report?.articles.filter((item) =>
     article?.related_article_slugs.includes(item.slug),
   ) || [];
-
-  async function spawnDeepDive() {
-    if (!article) return;
-    setDeepDiveLoading(true);
-    setDeepDiveStartedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }));
-    setDeepDiveError(null);
-    setDeepDive(null);
-    try {
-      const response = await fetch("/api/atlas/deeper-dive", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ article, hours: windowHours }),
-      });
-      const body = await response.json() as {
-        deeper_dive: AtlasDeeperDive | null;
-        error: string | null;
-      };
-      if (!response.ok || !body.deeper_dive) {
-        throw new Error(body.error || "Deeper dive unavailable.");
-      }
-      setDeepDive(body.deeper_dive);
-    } catch (error) {
-      setDeepDiveError(error instanceof Error ? error.message : "Deeper dive unavailable.");
-    } finally {
-      setDeepDiveLoading(false);
-    }
-  }
 
   if (loading) {
     return <div className="rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-sm text-[#342a1b]">Loading article...</div>;
@@ -250,32 +223,26 @@ export default function AtlasArticleClient({
                 Run retrieval and adversarial analysis against this article. This usually takes
                 20-40 seconds.
               </p>
-              <button
-                onClick={spawnDeepDive}
-                disabled={deepDiveLoading}
-                className="mt-3 border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-semibold text-[#f8f4ea] disabled:opacity-60"
+              <a
+                href={deepDiveHref}
+                className="mt-3 inline-flex border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-semibold text-[#f8f4ea] hover:bg-[#342a1b] focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2 focus:ring-offset-[#f8f4ea]"
               >
-                {deepDiveLoading ? "Running deeper dive..." : "Spawn deeper dive"}
-              </button>
-              {deepDiveLoading && (
-                <div className="mt-3 border border-slate-300 bg-white/45 p-3 text-sm leading-6 text-slate-700">
-                  <p className="font-semibold text-slate-950">
-                    Retrieval is running{deepDiveStartedAt ? ` since ${deepDiveStartedAt}` : ""}.
-                  </p>
-                  <p className="mt-1">
-                    Atlas is checking supporting evidence, counterevidence, weak spots, and alternative readings.
-                  </p>
-                </div>
+                {initialDeepDive ? "Run deeper dive again" : "Spawn deeper dive"}
+              </a>
+              {!initialDeepDive && !initialDeepDiveError && (
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Opens a generated deeper-dive view for this story.
+                </p>
               )}
-              {deepDiveError && (
+              {initialDeepDiveError && (
                 <div className="mt-3 border border-red-300 bg-red-50 p-3 text-sm leading-6 text-red-800">
                   <p className="font-semibold">Deeper dive failed.</p>
-                  <p className="mt-1">{deepDiveError}</p>
+                  <p className="mt-1">{initialDeepDiveError}</p>
                 </div>
               )}
             </section>
 
-            {deepDive && <DeepDivePanel dive={deepDive} citations={citations} />}
+            {initialDeepDive && <DeepDivePanel dive={initialDeepDive} citations={citations} />}
 
             <ArticleRail
               title="Evidence"
