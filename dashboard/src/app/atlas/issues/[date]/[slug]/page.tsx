@@ -3,6 +3,12 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import {
+  atlasArticleHref,
+  atlasFrontPageHref,
+  isRenderableArticleImageUrl,
+  parseAtlasWindowHours,
+} from "@/lib/atlas-ui";
 
 interface AtlasCitation {
   ref: string;
@@ -71,6 +77,10 @@ interface AtlasDeeperDive {
 
 export default function AtlasArticlePage() {
   const params = useParams<{ date: string; slug: string }>();
+  const [windowHours] = useState(() => {
+    if (typeof window === "undefined") return 48;
+    return parseAtlasWindowHours(new URLSearchParams(window.location.search).get("hours"));
+  });
   const [payload, setPayload] = useState<AtlasPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [deepDive, setDeepDive] = useState<AtlasDeeperDive | null>(null);
@@ -79,7 +89,7 @@ export default function AtlasArticlePage() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/atlas?hours=48")
+    fetch(`/api/atlas?hours=${windowHours}`)
       .then((response) => response.json())
       .then((nextPayload: AtlasPayload) => {
         if (!active) return;
@@ -94,7 +104,7 @@ export default function AtlasArticlePage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [windowHours]);
 
   const article = useMemo(() => {
     return payload?.editorial_report?.articles.find((item) => item.slug === params.slug) || null;
@@ -113,7 +123,7 @@ export default function AtlasArticlePage() {
       const response = await fetch("/api/atlas/deeper-dive", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ article, hours: 48 }),
+        body: JSON.stringify({ article, hours: windowHours }),
       });
       const body = await response.json() as {
         deeper_dive: AtlasDeeperDive | null;
@@ -137,7 +147,7 @@ export default function AtlasArticlePage() {
   if (!payload?.editorial_report || !payload.atlas || !article) {
     return (
       <div className="space-y-4">
-        <Link href="/atlas" className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm text-[#342a1b]">
+        <Link href={atlasFrontPageHref(windowHours)} className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm text-[#342a1b]">
           Back to Atlas
         </Link>
         <div className="rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-sm text-[#342a1b]">
@@ -149,7 +159,7 @@ export default function AtlasArticlePage() {
 
   return (
     <div className="atlas-newspaper fade-up space-y-5">
-      <Link href="/atlas" className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm !text-[#342a1b]">
+      <Link href={atlasFrontPageHref(windowHours)} className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm !text-[#342a1b]">
         Back to front page
       </Link>
 
@@ -210,7 +220,7 @@ export default function AtlasArticlePage() {
                   {related.map((item) => (
                     <Link
                       key={item.slug}
-                      href={`/atlas/issues/${payload.editorial_report!.issue.date}/${item.slug}`}
+                      href={atlasArticleHref(payload.editorial_report!.issue.date, item.slug, windowHours)}
                       className="border border-slate-300 bg-white/35 p-3 hover:border-slate-900"
                     >
                       <span className="block font-serif text-xl font-bold text-slate-950">{item.title}</span>
@@ -266,7 +276,7 @@ export default function AtlasArticlePage() {
 }
 
 function ArticleImage({ article }: { article: AtlasEditorialArticle }) {
-  if (article.image.url) {
+  if (isRenderableArticleImageUrl(article.image.url)) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img

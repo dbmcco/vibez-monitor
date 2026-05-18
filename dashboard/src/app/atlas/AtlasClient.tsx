@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { atlasArticleHref, isRenderableArticleImageUrl } from "@/lib/atlas-ui";
 
 interface AtlasCitation {
   ref: string;
@@ -201,25 +202,25 @@ const LENSES: Array<{ key: Lens; label: string }> = [
 export default function AtlasPage({
   initialAtlas = null,
   initialEditorialReport = null,
+  initialWindowHours = 48,
 }: {
   initialAtlas?: AtlasSnapshot | null;
   initialEditorialReport?: AtlasEditorialReport | null;
+  initialWindowHours?: number;
 }) {
   const [atlas, setAtlas] = useState<AtlasSnapshot | null>(initialAtlas);
   const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(initialEditorialReport);
   const [loading, setLoading] = useState(!initialAtlas);
   const [error, setError] = useState<string | null>(null);
-  const [windowHours, setWindowHours] = useState(48);
+  const [windowHours, setWindowHours] = useState(initialWindowHours);
   const [lens, setLens] = useState<Lens>("themes");
-  const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
+  const [selectedCellKey, setSelectedCellKey] = useState<string | null>(
+    initialAtlas?.matrix[0] ? cellKey(initialAtlas.matrix[0]) : null,
+  );
   const [selectedCitationRef, setSelectedCitationRef] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialAtlas && windowHours === initialAtlas.window.hours) {
-      setAtlas(initialAtlas);
-      setEditorialReport(initialEditorialReport);
-      setSelectedCellKey(initialAtlas.matrix[0] ? cellKey(initialAtlas.matrix[0]) : null);
-      setLoading(false);
       return;
     }
     let active = true;
@@ -256,6 +257,9 @@ export default function AtlasPage({
 
   function handleWindowHoursChange(hours: number) {
     if (hours === windowHours) return;
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `/atlas?hours=${hours}`);
+    }
     setLoading(true);
     setError(null);
     setEditorialReport(null);
@@ -448,6 +452,7 @@ function NarrativeReport({
                 <NewspaperArticleCard
                   article={leftArticle}
                   issueDate={report.issue.date}
+                  windowHours={windowHours}
                   compact
                 />
               )}
@@ -455,6 +460,7 @@ function NarrativeReport({
             <NewspaperArticleCard
               article={leadArticle}
               issueDate={report.issue.date}
+              windowHours={windowHours}
               lead
             />
             <div className="space-y-5 min-[1500px]:border-l min-[1500px]:border-[#cbbf9d] min-[1500px]:pl-5">
@@ -462,6 +468,7 @@ function NarrativeReport({
                 <NewspaperArticleCard
                   article={rightArticle}
                   issueDate={report.issue.date}
+                  windowHours={windowHours}
                   compact
                 />
               )}
@@ -485,6 +492,7 @@ function NarrativeReport({
                   key={article.slug}
                   article={article}
                   issueDate={report.issue.date}
+                  windowHours={windowHours}
                   compact
                 />
               ))}
@@ -757,11 +765,13 @@ function WireList({ title, items }: { title: string; items: string[] }) {
 function NewspaperArticleCard({
   article,
   issueDate,
+  windowHours,
   lead = false,
   compact = false,
 }: {
   article: AtlasEditorialArticle;
   issueDate: string;
+  windowHours: number;
   lead?: boolean;
   compact?: boolean;
 }) {
@@ -781,7 +791,7 @@ function NewspaperArticleCard({
         {article.summary || article.dek}
       </p>
       <Link
-        href={`/atlas/issues/${issueDate}/${article.slug}`}
+        href={atlasArticleHref(issueDate, article.slug, windowHours)}
         className="mt-3 inline-flex border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold !text-[#1f1a12] hover:bg-[#1f1a12] hover:!text-[#f8f4ea]"
       >
         Read full article
@@ -791,7 +801,7 @@ function NewspaperArticleCard({
 }
 
 function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: boolean }) {
-  if (article.image.url) {
+  if (isRenderableArticleImageUrl(article.image.url)) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
