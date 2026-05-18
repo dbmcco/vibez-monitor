@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const hours = parseWindowHours(request.nextUrl.searchParams.get("hours"));
-    const artifact = readAtlasArtifact(hours);
+    const artifact = await readAtlasArtifact(hours);
     if (artifact) {
       return NextResponse.json(artifact);
     }

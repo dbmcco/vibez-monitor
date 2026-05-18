@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
 
   const atlas = suppliedAtlas || await getAtlasSnapshot({ windowHours: hours });
   const editorialReport = await generateAtlasEditorialReport(atlas);
-  const artifactPath = writeAtlasArtifact({
+  const artifactPath = await writeAtlasArtifact({
     windowHours: hours,
     atlas,
     editorialReport,

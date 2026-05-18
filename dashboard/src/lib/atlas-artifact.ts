@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Pool } from "pg";
 
 import type { AtlasSnapshot } from "./atlas";
 import type { AtlasEditorialReport } from "./atlas-report";
@@ -13,6 +14,48 @@ export interface AtlasArtifactPayload {
     window_hours: number;
     source: "configured_model_route";
   };
+}
+
+let atlasPool: Pool | null = null;
+
+function atlasPostgresUrl(): string {
+  return (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "").trim();
+}
+
+function getAtlasPool(): Pool | null {
+  const url = atlasPostgresUrl();
+  if (!url) return null;
+  if (!atlasPool) {
+    atlasPool = new Pool({
+      connectionString: url,
+      max: 2,
+      idleTimeoutMillis: 10_000,
+      allowExitOnIdle: true,
+    });
+  }
+  return atlasPool;
+}
+
+async function ensureAtlasEditionSchema(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atlas_editions (
+      edition_date TEXT NOT NULL,
+      edition_type TEXT NOT NULL,
+      window_hours INTEGER NOT NULL,
+      publication_time TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (edition_date, edition_type)
+    )
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_atlas_editions_publication_time ON atlas_editions (publication_time DESC)",
+  );
+}
+
+function editionTypeForWindow(windowHours: number): "daily" | "sunday_review" {
+  return windowHours >= 120 ? "sunday_review" : "daily";
 }
 
 export function atlasArtifactPath(windowHours: number): string {
@@ -79,7 +122,7 @@ export function readAtlasGeneratedAsset(relativePath: string): { data: Buffer; c
   };
 }
 
-export function readAtlasArtifact(windowHours: number): AtlasArtifactPayload | null {
+function readAtlasArtifactFromFile(windowHours: number): AtlasArtifactPayload | null {
   const artifactPath = process.env.VIBEZ_ATLAS_ARTIFACT_PATH
     ? atlasArtifactPath(windowHours)
     : atlasArtifactCandidates(windowHours).find((candidate) => fs.existsSync(candidate));
@@ -90,7 +133,41 @@ export function readAtlasArtifact(windowHours: number): AtlasArtifactPayload | n
   return payload;
 }
 
-export function writeAtlasArtifact({
+export async function readAtlasArtifact(
+  windowHours: number,
+  editionDate?: string,
+  editionType = editionTypeForWindow(windowHours),
+): Promise<AtlasArtifactPayload | null> {
+  const pool = getAtlasPool();
+  if (pool) {
+    try {
+      await ensureAtlasEditionSchema(pool);
+      const { rows } = editionDate
+        ? await pool.query(
+          `SELECT payload
+           FROM atlas_editions
+           WHERE edition_date = $1 AND edition_type = $2
+           LIMIT 1`,
+          [editionDate, editionType],
+        )
+        : await pool.query(
+          `SELECT payload
+           FROM atlas_editions
+           WHERE window_hours = $1 AND edition_type = $2
+           ORDER BY publication_time DESC
+           LIMIT 1`,
+          [windowHours, editionType],
+        );
+      const payload = rows[0]?.payload as AtlasArtifactPayload | undefined;
+      if (payload?.atlas && payload.editorial_report) return payload;
+    } catch (error) {
+      console.error("readAtlasArtifact postgres lookup failed:", error);
+    }
+  }
+  return readAtlasArtifactFromFile(windowHours);
+}
+
+export async function writeAtlasArtifact({
   windowHours,
   atlas,
   editorialReport,
@@ -98,7 +175,7 @@ export function writeAtlasArtifact({
   windowHours: number;
   atlas: AtlasSnapshot;
   editorialReport: AtlasEditorialReport;
-}): string {
+}): Promise<string> {
   const artifactPath = atlasArtifactPath(windowHours);
   fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
   const payload: AtlasArtifactPayload = {
@@ -112,5 +189,31 @@ export function writeAtlasArtifact({
     },
   };
   fs.writeFileSync(artifactPath, `${JSON.stringify(payload, null, 2)}\n`);
+  const pool = getAtlasPool();
+  if (pool) {
+    try {
+      await ensureAtlasEditionSchema(pool);
+      const editionType = editionTypeForWindow(windowHours);
+      await pool.query(
+        `INSERT INTO atlas_editions
+         (edition_date, edition_type, window_hours, publication_time, payload, updated_at)
+         VALUES ($1, $2, $3, $4, $5::jsonb, now())
+         ON CONFLICT (edition_date, edition_type) DO UPDATE SET
+           window_hours = EXCLUDED.window_hours,
+           publication_time = EXCLUDED.publication_time,
+           payload = EXCLUDED.payload,
+           updated_at = now()`,
+        [
+          editorialReport.issue.date,
+          editionType,
+          windowHours,
+          payload.artifact.generated_at,
+          JSON.stringify(payload),
+        ],
+      );
+    } catch (error) {
+      console.error("writeAtlasArtifact postgres archive failed:", error);
+    }
+  }
   return artifactPath;
 }

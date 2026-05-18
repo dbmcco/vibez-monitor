@@ -17,7 +17,7 @@ export default async function AtlasPage({
     ? resolvedSearchParams.hours[0]
     : resolvedSearchParams.hours;
   const windowHours = parseAtlasWindowHours(requestedHours);
-  const artifact = readAtlasArtifact(windowHours);
+  const artifact = await readAtlasArtifact(windowHours);
   return (
     <AtlasClient
       initialAtlas={artifact?.atlas || null}

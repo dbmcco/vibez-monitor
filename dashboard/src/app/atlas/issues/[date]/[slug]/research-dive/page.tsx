@@ -38,7 +38,7 @@ export default async function AtlasResearchDivePage({ params, searchParams }: Pa
     ? resolvedSearchParams.hours[0]
     : resolvedSearchParams.hours;
   const windowHours = parseAtlasWindowHours(rawHours);
-  const artifact = readAtlasArtifact(windowHours);
+  const artifact = await readAtlasArtifact(windowHours, resolvedParams.date);
   const article = artifact?.editorial_report.articles.find((item) =>
     item.slug === resolvedParams.slug,
   ) || null;
