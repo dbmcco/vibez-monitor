@@ -106,25 +106,56 @@ function normalizeExclusionList(values: string[]): string[] {
     .filter((name) => name.length > 0);
 }
 
+function isMissingTableError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01");
+}
+
+function buildEnvRoomScope(): RoomScope {
+  const excludedGroups = normalizeExclusionList(loadExcludedGroups());
+  const allowedGroups = loadAllowedGroups();
+  if (allowedGroups.length > 0) {
+    return {
+      mode: "active_groups",
+      activeGroupIds: [],
+      activeGroupNames: allowedGroups,
+      excludedGroups,
+    };
+  }
+  if (excludedGroups.length > 0) {
+    return { mode: "excluded_groups", activeGroupIds: [], activeGroupNames: [], excludedGroups };
+  }
+  return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
+}
+
 async function loadRoomScope(pool: Pool): Promise<RoomScope> {
-  const { rows: _beeperIds } = await pool.query(
-    "SELECT value FROM sync_state WHERE key = $1",
-    ["beeper_active_group_ids"],
-  );
-  const beeperActiveIdsRow = _beeperIds[0] as { value: string } | undefined;
-  const beeperActiveGroupIds = parseJsonStringArray(beeperActiveIdsRow?.value);
-  const { rows: _beeperNames } = await pool.query(
-    "SELECT value FROM sync_state WHERE key = $1",
-    ["beeper_active_group_names"],
-  );
-  const beeperActiveNamesRow = _beeperNames[0] as { value: string } | undefined;
-  const beeperActiveGroupNames = parseJsonStringArray(beeperActiveNamesRow?.value);
-  const { rows: _googleRows } = await pool.query(
-    "SELECT value FROM sync_state WHERE key = $1",
-    ["google_groups_active_group_keys"],
-  );
-  const googleGroupsRow = _googleRows[0] as { value: string } | undefined;
-  const googleGroupKeys = parseJsonStringArray(googleGroupsRow?.value);
+  let beeperActiveGroupIds: string[];
+  let beeperActiveGroupNames: string[];
+  let googleGroupKeys: string[];
+  try {
+    const { rows: _beeperIds } = await pool.query(
+      "SELECT value FROM sync_state WHERE key = $1",
+      ["beeper_active_group_ids"],
+    );
+    const beeperActiveIdsRow = _beeperIds[0] as { value: string } | undefined;
+    beeperActiveGroupIds = parseJsonStringArray(beeperActiveIdsRow?.value);
+    const { rows: _beeperNames } = await pool.query(
+      "SELECT value FROM sync_state WHERE key = $1",
+      ["beeper_active_group_names"],
+    );
+    const beeperActiveNamesRow = _beeperNames[0] as { value: string } | undefined;
+    beeperActiveGroupNames = parseJsonStringArray(beeperActiveNamesRow?.value);
+    const { rows: _googleRows } = await pool.query(
+      "SELECT value FROM sync_state WHERE key = $1",
+      ["google_groups_active_group_keys"],
+    );
+    const googleGroupsRow = _googleRows[0] as { value: string } | undefined;
+    googleGroupKeys = parseJsonStringArray(googleGroupsRow?.value);
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return buildEnvRoomScope();
+    }
+    throw error;
+  }
   const googleGroupIds = googleGroupKeys.map((key) => `googlegroup:${key}`);
 
   const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));

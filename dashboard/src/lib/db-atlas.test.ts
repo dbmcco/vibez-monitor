@@ -146,4 +146,19 @@ describe("getAtlasSnapshot", () => {
       connectionString: "postgres://pgvector-host/railway",
     }));
   });
+
+  test("falls back to all rooms when pgvector database has no sync_state table", async () => {
+    const error = new Error("relation \"sync_state\" does not exist") as Error & { code: string };
+    error.code = "42P01";
+    queryMock.mockRejectedValueOnce(error);
+
+    const { getCurrentRoomScope } = await import("./db");
+
+    await expect(getCurrentRoomScope()).resolves.toEqual({
+      mode: "all",
+      activeGroupIds: [],
+      activeGroupNames: [],
+      excludedGroups: [],
+    });
+  });
 });
