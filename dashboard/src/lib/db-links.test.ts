@@ -91,7 +91,7 @@ describe("link queries", () => {
       VIBEZ_DB_PATH: dbPath,
       VIBEZ_DATABASE_URL: "",
       DATABASE_URL: "",
-      VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
+      VIBEZ_PGVECTOR_URL: "",
     };
   });
 
@@ -115,7 +115,7 @@ describe("link queries", () => {
     });
   });
 
-  test("computes link stats from SQLite when Postgres only holds embeddings", async () => {
+  test("computes link stats from SQLite when no Postgres URL is configured", async () => {
     const { getLinkStats } = await import("./db");
 
     const stats = await getLinkStats({});
@@ -129,5 +129,29 @@ describe("link queries", () => {
     expect(stats.categories).toContainEqual({ name: "repo", count: 1 });
     expect(stats.sharers).toContainEqual({ name: "Dana", count: 1 });
     expect(stats.authors).toContainEqual({ name: "Dana", count: 1 });
+  });
+
+  test("uses Postgres when a pgvector URL is configured", async () => {
+    process.env = {
+      ...process.env,
+      VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
+    };
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{ c: "7", mentions: "12", first_seen: "2025-04-07", last_seen: "2026-05-17" }],
+      })
+      .mockResolvedValueOnce({ rows: [{ category: "repo", cnt: "4" }] })
+      .mockResolvedValueOnce({ rows: [{ shared_by: "Dana", cnt: "3" }] })
+      .mockResolvedValueOnce({ rows: [{ url: "https://github.com/example/atlas" }] })
+      .mockResolvedValueOnce({ rows: [{ authored_by: "Dana", cnt: "2" }] });
+
+    const { getLinkStats } = await import("./db");
+    const stats = await getLinkStats({});
+
+    expect(queryMock).toHaveBeenCalled();
+    expect(stats.total).toBe(7);
+    expect(stats.total_mentions).toBe(12);
+    expect(stats.sources).toEqual([{ name: "github", count: 1 }]);
+    expect(stats.categories).toEqual([{ name: "repo", count: 4 }]);
   });
 });

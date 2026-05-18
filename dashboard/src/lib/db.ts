@@ -31,7 +31,12 @@ const pool = new Pool({
 const SQLITE_DB_PATH = process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
 
 function shouldUseSqliteAtlas(): boolean {
-  return Boolean(process.env.VIBEZ_DB_PATH && !process.env.VIBEZ_DATABASE_URL && !process.env.DATABASE_URL);
+  return Boolean(
+    process.env.VIBEZ_DB_PATH &&
+      !process.env.VIBEZ_DATABASE_URL &&
+      !process.env.DATABASE_URL &&
+      !process.env.VIBEZ_PGVECTOR_URL,
+  );
 }
 
 const DEFAULT_EXCLUDED_GROUPS = [
