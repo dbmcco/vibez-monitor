@@ -62,4 +62,44 @@ describe("listAtlasEditions", () => {
       },
     ]);
   });
+
+  test("can list the whole edition archive across daily and Sunday issues", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            edition_date: "2026-05-18",
+            edition_type: "daily",
+            window_hours: 48,
+            publication_time: "2026-05-18T13:00:00Z",
+            title: "The Monday Paper",
+            subtitle: "The week starts with receipts.",
+            edition_label: "Daily Edition",
+          },
+          {
+            edition_date: "2026-05-17",
+            edition_type: "sunday_review",
+            window_hours: 168,
+            publication_time: "2026-05-17T15:00:00Z",
+            title: "The Sunday Review",
+            subtitle: "Seven days in the record.",
+            edition_label: "Sunday Edition",
+          },
+        ],
+      });
+
+    const { listAtlasEditions } = await import("./atlas-artifact");
+    const editions = await listAtlasEditions({ includeAllTypes: true, limit: 30 });
+
+    expect(queryMock).toHaveBeenLastCalledWith(
+      expect.not.stringContaining("WHERE window_hours"),
+      [30],
+    );
+    expect(editions.map((edition) => edition.href)).toEqual([
+      "/atlas/editions/2026-05-18?hours=48",
+      "/atlas/editions/2026-05-17?hours=168",
+    ]);
+  });
 });

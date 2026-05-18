@@ -185,9 +185,11 @@ export async function readAtlasArtifact(
 export async function listAtlasEditions({
   windowHours = 48,
   limit = 14,
+  includeAllTypes = false,
 }: {
   windowHours?: number;
   limit?: number;
+  includeAllTypes?: boolean;
 } = {}): Promise<AtlasEditionSummary[]> {
   const editionType = editionTypeForWindow(windowHours);
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 60);
@@ -205,10 +207,10 @@ export async function listAtlasEditions({
            payload #>> '{editorial_report,issue,subtitle}' AS subtitle,
            payload #>> '{editorial_report,issue,edition_label}' AS edition_label
          FROM atlas_editions
-         WHERE window_hours = $1 AND edition_type = $2
+         ${includeAllTypes ? "" : "WHERE window_hours = $1 AND edition_type = $2"}
          ORDER BY publication_time DESC
-         LIMIT $3`,
-        [windowHours, editionType, safeLimit],
+         LIMIT $${includeAllTypes ? "1" : "3"}`,
+        includeAllTypes ? [safeLimit] : [windowHours, editionType, safeLimit],
       );
       return rows.map((row) => ({
         date: String(row.edition_date),
@@ -223,6 +225,30 @@ export async function listAtlasEditions({
     } catch (error) {
       console.error("listAtlasEditions postgres lookup failed:", error);
     }
+  }
+
+  if (includeAllTypes) {
+    const windows = [48, 168];
+    const editions = windows
+      .map((hours) => {
+        const artifact = readAtlasArtifactFromFile(hours);
+        if (!artifact) return null;
+        const type = editionTypeForWindow(hours);
+        const date = artifact.editorial_report.issue.date || artifact.atlas.window.end.slice(0, 10);
+        return {
+          date,
+          type,
+          window_hours: hours,
+          publication_time: artifact.artifact.generated_at,
+          title: artifact.editorial_report.issue.title || "The Vibez Atlas",
+          subtitle: artifact.editorial_report.issue.subtitle || "",
+          edition_label: artifact.editorial_report.issue.edition_label || (type === "sunday_review" ? "Sunday Edition" : "Daily Edition"),
+          href: atlasEditionHref(date, hours),
+        } satisfies AtlasEditionSummary;
+      })
+      .filter((edition): edition is AtlasEditionSummary => Boolean(edition))
+      .sort((a, b) => b.publication_time.localeCompare(a.publication_time));
+    return editions.slice(0, safeLimit);
   }
 
   const artifact = readAtlasArtifactFromFile(windowHours);

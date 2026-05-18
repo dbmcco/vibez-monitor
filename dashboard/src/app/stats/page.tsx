@@ -2672,7 +2672,7 @@ const SECTION_LINKS = [
 ];
 
 export default function StatsPage() {
-  const [days, setDays] = useState<DayRange>(90);
+  const [days, setDays] = useState<DayRange>(30);
   const [stats, setStats] = useState<StatsDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);

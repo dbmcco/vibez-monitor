@@ -1076,43 +1076,90 @@ function EditionArchive({
   editions: AtlasEditionSummary[];
   currentDate: string;
 }) {
-  if (editions.length === 0) return null;
+  const [jumpDate, setJumpDate] = useState(currentDate);
+  const [jumpHours, setJumpHours] = useState(48);
+  const openEdition = () => {
+    if (!jumpDate) return;
+    window.location.href = `/atlas/editions/${encodeURIComponent(jumpDate)}?hours=${jumpHours}`;
+  };
   return (
     <div className="mx-auto mt-4 max-w-5xl border-y border-[#cbbf9d] py-3 text-left">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#7b2f20]">
           Previous Editions
         </p>
-        <p className="text-xs text-[#786846]">Durable issues, not regenerated on read.</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-[#786846]">Durable issues, not regenerated on read.</p>
+          <Link
+            href="/atlas/editions"
+            className="border border-[#1f1a12] px-2 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+          >
+            All editions
+          </Link>
+        </div>
       </div>
-      <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-        {editions.map((edition) => {
-          const active = edition.date === currentDate;
-          return (
-            <Link
-              key={`${edition.type}-${edition.date}-${edition.window_hours}`}
-              href={edition.href}
-              title={edition.title}
-              className={`min-w-[170px] border px-3 py-2 text-left transition ${
-                active
-                  ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
-                  : "border-[#b9aa86] bg-[#fffaf0]/50 text-[#342a1b] hover:border-[#1f1a12]"
-              }`}
-            >
-              <span
-                className={`block text-[10px] font-bold uppercase tracking-[0.12em] ${
-                  active ? "text-[#f8f4ea]" : "text-[#7b2f20]"
-                }`}
-              >
-                {edition.edition_label}
-              </span>
-              <span className="mt-1 block font-serif text-lg font-bold">{edition.date}</span>
-              <span className={`mt-1 block truncate text-xs ${active ? "text-[#eadfca]" : "text-[#786846]"}`}>
-                {edition.title}
-              </span>
-            </Link>
-          );
-        })}
+      <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+        <div className="min-w-0">
+          {editions.length > 0 ? (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {editions.map((edition) => {
+                const active = edition.date === currentDate;
+                return (
+                  <Link
+                    key={`${edition.type}-${edition.date}-${edition.window_hours}`}
+                    href={edition.href}
+                    title={edition.title}
+                    className={`min-w-[170px] border px-3 py-2 text-left transition ${
+                      active
+                        ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
+                        : "border-[#b9aa86] bg-[#fffaf0]/50 text-[#342a1b] hover:border-[#1f1a12]"
+                    }`}
+                  >
+                    <span
+                      className={`block text-[10px] font-bold uppercase tracking-[0.12em] ${
+                        active ? "text-[#f8f4ea]" : "text-[#7b2f20]"
+                      }`}
+                    >
+                      {edition.edition_label}
+                    </span>
+                    <span className="mt-1 block font-serif text-lg font-bold">{edition.date}</span>
+                    <span className={`mt-1 block truncate text-xs ${active ? "text-[#eadfca]" : "text-[#786846]"}`}>
+                      {edition.title}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-[#5e5238]">No saved editions were found for this window yet.</p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border border-[#cbbf9d] bg-[#fffaf0]/55 p-2">
+          <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#7b2f20]">
+            Open date
+          </label>
+          <input
+            type="date"
+            value={jumpDate}
+            onChange={(event) => setJumpDate(event.target.value)}
+            className="min-h-9 border px-2 text-sm"
+          />
+          <select
+            value={jumpHours}
+            onChange={(event) => setJumpHours(Number(event.target.value))}
+            className="min-h-9 border px-2 text-sm"
+          >
+            <option value={48}>48h</option>
+            <option value={168}>Week</option>
+          </select>
+          <button
+            type="button"
+            onClick={openEdition}
+            className="min-h-9 border border-[#1f1a12] bg-[#1f1a12] px-3 text-xs font-bold uppercase tracking-[0.12em] text-[#f8f4ea]"
+          >
+            Open
+          </button>
+        </div>
       </div>
     </div>
   );
