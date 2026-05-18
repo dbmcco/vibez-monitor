@@ -45,6 +45,8 @@ const DEFAULT_EXCLUDED_GROUPS = [
   "MTB Rides",
   "Plum",
 ];
+const DEFAULT_STATS_RECORD_START_DATE = "2025-03-01";
+const STATS_RECORD_START_TS = parseStatsRecordStartTs();
 
 interface RoomScope {
   mode: "active_groups" | "excluded_groups" | "all";
@@ -103,6 +105,18 @@ function loadAllowedGroups(): string[] {
 function isPublicModeEnabled(): boolean {
   const raw = process.env.VIBEZ_PUBLIC_MODE || process.env.NEXT_PUBLIC_VIBEZ_PUBLIC_MODE;
   return typeof raw === "string" && ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+function parseStatsRecordStartTs(): number {
+  const raw = (process.env.VIBEZ_STATS_RECORD_START_DATE || DEFAULT_STATS_RECORD_START_DATE).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00Z` : raw;
+  const parsed = Date.parse(normalized);
+  if (Number.isFinite(parsed)) return parsed;
+  return Date.parse(`${DEFAULT_STATS_RECORD_START_DATE}T00:00:00Z`);
+}
+
+function isStatsRecordTimestamp(ts: number): boolean {
+  return ts >= STATS_RECORD_START_TS;
 }
 
 function normalizeExclusionList(values: string[]): string[] {
@@ -2224,10 +2238,13 @@ function summarizeStatsHistoryRows(
   const members = new Set<string>();
   let firstTs: number | null = null;
   let lastTs: number | null = null;
+  let messageCount = 0;
 
   for (const row of rows) {
     const ts = coerceTimestampMs(row.timestamp);
     if (ts === null) continue;
+    if (!isStatsRecordTimestamp(ts)) continue;
+    messageCount += 1;
     firstTs = firstTs === null ? ts : Math.min(firstTs, ts);
     lastTs = lastTs === null ? ts : Math.max(lastTs, ts);
     const rawName = String(row.sender_name || "").trim();
@@ -2238,7 +2255,7 @@ function summarizeStatsHistoryRows(
   return {
     first_seen: firstTs === null ? null : dateKeyFromTs(firstTs),
     last_seen: lastTs === null ? null : dateKeyFromTs(lastTs),
-    messages: rows.length,
+    messages: messageCount,
     members_observed: members.size,
   };
 }
@@ -2971,6 +2988,8 @@ function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashb
       whereParts.push(roomScope.clause);
       params.push(...roomScope.params);
     }
+    whereParts.push("m.timestamp >= ?");
+    params.push(STATS_RECORD_START_TS);
     if (cutoffTs !== null) {
       whereParts.push("m.timestamp >= ?");
       params.push(cutoffTs);
@@ -2995,14 +3014,20 @@ function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashb
         relevance_score: number | null;
       }>;
 
-    const historyWhere = roomScope.clause ? `WHERE ${roomScope.clause}` : "";
+    const historyWhereParts: string[] = ["m.timestamp >= ?"];
+    const historyParams: unknown[] = [STATS_RECORD_START_TS];
+    if (roomScope.clause) {
+      historyWhereParts.unshift(roomScope.clause);
+      historyParams.unshift(...roomScope.params);
+    }
+    const historyWhere = `WHERE ${historyWhereParts.join(" AND ")}`;
     const historyRows = db
       .prepare(
         `SELECT m.timestamp, m.sender_id, m.sender_name
          FROM messages m
          ${historyWhere}`,
       )
-      .all(...roomScope.params) as Array<{
+      .all(...historyParams) as Array<{
         timestamp: unknown;
         sender_id: string | null;
         sender_name: string | null;
@@ -3312,6 +3337,8 @@ export async function getStatsDashboard(
     windowWhereParts.push(roomScope.clause);
     windowParams.push(...roomScope.params);
   }
+  windowWhereParts.push(`m.timestamp >= $${pi++}`);
+  windowParams.push(STATS_RECORD_START_TS);
   if (cutoffTs !== null) {
     windowWhereParts.push(`m.timestamp >= $${pi++}`);
     windowParams.push(cutoffTs);
@@ -3347,7 +3374,7 @@ export async function getStatsDashboard(
       body: string;
       topics: string | null;
       relevance_score: number | null;
-    } => row.timestamp !== null);
+    } => row.timestamp !== null && isStatsRecordTimestamp(row.timestamp));
 
   const allTopicQuery = scopedWhere
     ? `SELECT m.timestamp, c.topics
@@ -3441,6 +3468,7 @@ export async function getStatsDashboard(
   for (const row of allTopicRows) {
     const ts = coerceTimestampMs(row.timestamp);
     if (ts === null) continue;
+    if (!isStatsRecordTimestamp(ts)) continue;
     for (const topic of new Set(parseTopics(row.topics))) {
       const prev = topicFirstSeenEver.get(topic);
       if (prev === undefined || ts < prev) {

@@ -163,6 +163,7 @@ describe("getAtlasSnapshot", () => {
   });
 
   test("buckets Postgres bigint timestamp strings in Stats timelines", async () => {
+    const oldSeedTs = Date.parse("2024-02-18T12:00:00Z");
     const firstTs = Date.parse("2026-05-16T12:00:00Z");
     const secondTs = Date.parse("2026-05-17T12:00:00Z");
     queryMock
@@ -171,6 +172,15 @@ describe("getAtlasSnapshot", () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [
+          {
+            timestamp: String(oldSeedTs),
+            sender_id: "@seed:example",
+            sender_name: "Seed",
+            room_name: "Agents",
+            body: "A pre-archive seed row should not drive Stats history.",
+            topics: JSON.stringify(["seed"]),
+            relevance_score: 1,
+          },
           {
             timestamp: String(firstTs),
             sender_id: "@dana:example",
@@ -193,12 +203,14 @@ describe("getAtlasSnapshot", () => {
       })
       .mockResolvedValueOnce({
         rows: [
+          { timestamp: String(oldSeedTs), topics: JSON.stringify(["seed"]) },
           { timestamp: String(firstTs), topics: JSON.stringify(["agents"]) },
           { timestamp: String(secondTs), topics: JSON.stringify(["agents"]) },
         ],
       })
       .mockResolvedValueOnce({
         rows: [
+          { timestamp: String(oldSeedTs), sender_id: "@seed:example", sender_name: "Seed" },
           { timestamp: String(firstTs), sender_id: "@dana:example", sender_name: "Dana" },
           { timestamp: String(secondTs), sender_id: "@lee:example", sender_name: "Lee" },
         ],
@@ -213,5 +225,6 @@ describe("getAtlasSnapshot", () => {
       { date: "2026-05-17", count: 1 },
     ]);
     expect(stats.totals.users).toBe(2);
+    expect(stats.history).toMatchObject({ first_seen: "2026-05-16", messages: 2, members_observed: 2 });
   });
 });
