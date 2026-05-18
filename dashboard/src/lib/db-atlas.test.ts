@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { Pool } from "pg";
 
 const queryMock = vi.fn();
 
@@ -39,6 +40,7 @@ describe("getAtlasSnapshot", () => {
   beforeEach(() => {
     vi.resetModules();
     queryMock.mockReset();
+    vi.mocked(Pool).mockClear();
     process.env = {
       ...ORIGINAL_ENV,
       VIBEZ_EXCLUDED_GROUPS: "",
@@ -128,5 +130,20 @@ describe("getAtlasSnapshot", () => {
       message_count_7d: 1,
     });
     expect(atlas.people.new_faces[0].detection_reasons).toContain("first_seen");
+  });
+
+  test("uses the pgvector URL as the dashboard Postgres fallback", async () => {
+    process.env = {
+      ...ORIGINAL_ENV,
+      DATABASE_URL: "",
+      VIBEZ_DATABASE_URL: "",
+      VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
+    };
+
+    await import("./db");
+
+    expect(Pool).toHaveBeenCalledWith(expect.objectContaining({
+      connectionString: "postgres://pgvector-host/railway",
+    }));
   });
 });
