@@ -69,6 +69,11 @@ function editionTypeForWindow(windowHours: number): "daily" | "sunday_review" {
   return windowHours >= 120 ? "sunday_review" : "daily";
 }
 
+function editionLabelFor(type: "daily" | "sunday_review", label?: string | null): string {
+  if (type === "sunday_review") return "Sunday Edition";
+  return String(label || "Daily Edition");
+}
+
 function atlasEditionHref(date: string, windowHours: number): string {
   return `/atlas/editions/${encodeURIComponent(date)}?hours=${windowHours}`;
 }
@@ -219,7 +224,7 @@ export async function listAtlasEditions({
         publication_time: String(row.publication_time),
         title: String(row.title || "The Vibez Atlas"),
         subtitle: String(row.subtitle || ""),
-        edition_label: String(row.edition_label || (editionType === "sunday_review" ? "Sunday Edition" : "Daily Edition")),
+        edition_label: editionLabelFor(row.edition_type === "sunday_review" ? "sunday_review" : "daily", row.edition_label),
         href: atlasEditionHref(String(row.edition_date), Number(row.window_hours) || windowHours),
       }));
     } catch (error) {
@@ -242,7 +247,7 @@ export async function listAtlasEditions({
           publication_time: artifact.artifact.generated_at,
           title: artifact.editorial_report.issue.title || "The Vibez Atlas",
           subtitle: artifact.editorial_report.issue.subtitle || "",
-          edition_label: artifact.editorial_report.issue.edition_label || (type === "sunday_review" ? "Sunday Edition" : "Daily Edition"),
+          edition_label: editionLabelFor(type, artifact.editorial_report.issue.edition_label),
           href: atlasEditionHref(date, hours),
         } satisfies AtlasEditionSummary;
       })
@@ -261,7 +266,7 @@ export async function listAtlasEditions({
     publication_time: artifact.artifact.generated_at,
     title: artifact.editorial_report.issue.title || "The Vibez Atlas",
     subtitle: artifact.editorial_report.issue.subtitle || "",
-    edition_label: artifact.editorial_report.issue.edition_label || (editionType === "sunday_review" ? "Sunday Edition" : "Daily Edition"),
+    edition_label: editionLabelFor(editionType, artifact.editorial_report.issue.edition_label),
     href: atlasEditionHref(date, windowHours),
   }];
 }

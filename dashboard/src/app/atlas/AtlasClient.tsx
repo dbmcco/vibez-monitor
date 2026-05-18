@@ -444,11 +444,14 @@ function NarrativeReport({
   const leftArticle = sideArticles[0] || null;
   const rightArticle = sideArticles[1] || null;
   const belowArticles = sideArticles.slice(2);
+  const editionLabel = windowHours >= 120
+    ? "Sunday Edition"
+    : report?.issue.edition_label || atlas.narrative.title;
   return (
     <section className="rounded-xl border border-[#b9aa86] bg-[#f8f4ea] p-4 text-[#1f1a12] shadow-[0_18px_60px_rgba(32,24,12,0.18)] sm:p-6">
       <div className="border-b-4 border-double border-[#1f1a12] pb-4 text-center">
         <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#786846]">
-          <span>{report?.issue.edition_label || atlas.narrative.title}</span>
+          <span>{editionLabel}</span>
           <span>|</span>
           <span>{report?.issue.date || atlas.window.end.slice(0, 10)}</span>
         </div>
