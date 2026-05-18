@@ -207,7 +207,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "Do not label the paragraphs; use the five-paragraph arc as structure beneath the prose.",
         "At least the first four article paragraphs should carry citation_refs. The fifth should carry citations when the action depends on a source.",
         "Every article must carry citations: include at least one valid evidence_refs entry, and use citation refs to support every major claim.",
-        "Every article image must include a generated image brief: image.kind must be generated unless a real source image URL exists, image.prompt must describe the visual scene, and image.alt must describe the image for the page.",
+        "Every article image must include a generated image brief: image.kind must be generated unless a real source image URL exists, image.prompt must describe a NYTimes-style documentary editorial photograph grounded in the article context, with dry clever nerd humor or nerd-meme references only when they serve the story. Avoid visible text, logos, cartoons, and glossy AI aesthetics. image.alt must describe the image for the page.",
         "Answer these questions plainly:",
         "1. What happened?",
         "2. What does this mean?",
@@ -262,7 +262,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 channels: ["channel name"],
                 image: {
                   kind: "generated",
-                  prompt: "editorial image prompt grounded in the article",
+                  prompt: "NYTimes-style documentary editorial photograph grounded in the article, with dry clever nerd humor when useful",
                   alt: "short accessible image description",
                 },
                 related_article_slugs: ["related article title or slug"],
@@ -286,7 +286,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 channels: ["channel name"],
                 image: {
                   kind: "generated",
-                  prompt: "editorial image prompt",
+                  prompt: "NYTimes-style documentary editorial photograph grounded in the article, with dry clever nerd humor when useful",
                   alt: "short accessible image description",
                 },
                 related_article_slugs: [],
@@ -310,7 +310,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 channels: ["channel name"],
                 image: {
                   kind: "generated",
-                  prompt: "editorial image prompt",
+                  prompt: "NYTimes-style documentary editorial photograph grounded in the article, with dry clever nerd humor when useful",
                   alt: "short accessible image description",
                 },
                 related_article_slugs: [],
@@ -671,6 +671,7 @@ export function buildAtlasArticleRepairMessages({
         "Do not prefix paragraphs with labels. Write the actual prose.",
         "Each article must include at least one valid evidence_refs citation from the evidence pack.",
         "Each article image must include kind, prompt, and alt; kind should be generated unless a real source image URL exists.",
+        "Image prompts must describe a NYTimes-style documentary editorial photograph grounded in the article context, with dry clever nerd humor or nerd-meme references only when they serve the story. Avoid visible text, logos, cartoons, and glossy AI aesthetics.",
         "Section labels must be plain theme labels, not jokes or decorative text.",
         "",
         "Return shape:",
@@ -696,7 +697,7 @@ export function buildAtlasArticleRepairMessages({
                 channels: ["channel name"],
                 image: {
                   kind: "generated",
-                  prompt: "plain editorial image prompt",
+                  prompt: "NYTimes-style documentary editorial photograph with dry clever nerd humor when useful",
                   alt: "short accessible image description",
                 },
                 related_article_slugs: [],
@@ -842,6 +843,7 @@ export function buildAtlasSingleArticleRepairMessages({
         "Weak: \"AI agents are becoming more important, and the community should pay attention.\"",
         "Better: \"Dana named the evaluation loop as the blocker, and Lee tied the same problem to durable records before the weekly readout.\"",
         "Set image.kind to generated and include image.prompt and image.alt.",
+        "The image.prompt must describe a NYTimes-style documentary editorial photograph grounded in the article context, with dry clever nerd humor or nerd-meme references only when they serve the story. Avoid visible text, logos, cartoons, and glossy AI aesthetics.",
         "Return shape:",
         JSON.stringify(
           {
@@ -864,7 +866,7 @@ export function buildAtlasSingleArticleRepairMessages({
               channels: ["channel name"],
               image: {
                 kind: "generated",
-                prompt: "plain editorial image prompt",
+                prompt: "NYTimes-style documentary editorial photograph with dry clever nerd humor when useful",
                 alt: "short accessible image description",
               },
               related_article_slugs: [],
@@ -964,6 +966,7 @@ export function buildAtlasReportRepairMessages({
         "- at least the first four article paragraphs should include citation_refs from the evidence pack.",
         "- every article must include at least one valid evidence_refs citation from the evidence pack.",
         "- every article image must include kind, prompt, and alt; kind should be generated unless a real source image URL exists.",
+        "- image prompts must describe a NYTimes-style documentary editorial photograph grounded in the article context, with dry clever nerd humor or nerd-meme references only when they serve the story. Avoid visible text, logos, cartoons, and glossy AI aesthetics.",
         "- If the invalid JSON has fewer than three valid articles, write enough complete secondary articles from the evidence pack to reach three.",
         "- use only refs present in the evidence pack.",
         "",
@@ -1004,7 +1007,7 @@ export function buildAtlasReportRepairMessages({
               evidence_refs: ["vibez:message:..."],
               link_refs: [],
               channels: ["channel name"],
-              image: { kind: "generated", prompt: "plain editorial prompt", alt: "plain image description" },
+              image: { kind: "generated", prompt: "NYTimes-style documentary editorial photograph with dry clever nerd humor when useful", alt: "plain image description" },
               related_article_slugs: [],
             },
             {
@@ -1024,7 +1027,7 @@ export function buildAtlasReportRepairMessages({
               evidence_refs: ["vibez:message:..."],
               link_refs: [],
               channels: ["channel name"],
-              image: { kind: "generated", prompt: "plain editorial prompt", alt: "plain image description" },
+              image: { kind: "generated", prompt: "NYTimes-style documentary editorial photograph with dry clever nerd humor when useful", alt: "plain image description" },
               related_article_slugs: [],
             },
             {
@@ -1044,7 +1047,7 @@ export function buildAtlasReportRepairMessages({
               evidence_refs: ["vibez:message:..."],
               link_refs: [],
               channels: ["channel name"],
-              image: { kind: "generated", prompt: "plain editorial prompt", alt: "plain image description" },
+              image: { kind: "generated", prompt: "NYTimes-style documentary editorial photograph with dry clever nerd humor when useful", alt: "plain image description" },
               related_article_slugs: [],
             },
           ],
@@ -1291,7 +1294,7 @@ function readArticles(
       evidence_refs: report.main_topic.evidence_refs,
       link_refs: [],
       channels: [],
-      image: { kind: "generated", prompt: `Editorial illustration for ${report.headline}` },
+      image: { kind: "generated", prompt: `NYTimes-style documentary editorial photograph for ${report.headline}` },
       related_article_slugs: [],
     });
   }
@@ -1387,7 +1390,7 @@ function cleanSectionLabel(value: string): string {
 
 function readImage(value: unknown, title: string): AtlasEditorialImage {
   if (!value || typeof value !== "object") {
-    return { kind: "generated", prompt: `Editorial newspaper image for ${title}` };
+    return { kind: "generated", prompt: `NYTimes-style documentary editorial photograph for ${title}` };
   }
   const payload = value as Record<string, unknown>;
   const rawKind = readText(payload.kind);

@@ -45,6 +45,40 @@ function atlasArtifactCandidates(windowHours: number): string[] {
   return Array.from(new Set(roots.map((root) => path.join(root, filename))));
 }
 
+export function atlasGeneratedAssetCandidates(relativePath: string): string[] {
+  const safePath = relativePath
+    .split(/[\\/]+/)
+    .filter((part) => part && part !== "." && part !== "..")
+    .join(path.sep);
+  if (!safePath) return [];
+  const cwd = /* turbopackIgnore: true */ process.cwd();
+  const roots = [
+    defaultArtifactRoot(),
+    path.join(cwd, "generated"),
+    path.join(cwd, "dashboard", ".generated"),
+    path.join(cwd, "dashboard", "generated"),
+  ];
+  return Array.from(new Set(roots.map((root) => path.join(root, safePath))));
+}
+
+export function readAtlasGeneratedAsset(relativePath: string): { data: Buffer; contentType: string } | null {
+  const assetPath = atlasGeneratedAssetCandidates(relativePath).find((candidate) => fs.existsSync(candidate));
+  if (!assetPath) return null;
+  const ext = path.extname(assetPath).toLowerCase();
+  const contentType =
+    ext === ".jpg" || ext === ".jpeg"
+      ? "image/jpeg"
+      : ext === ".webp"
+        ? "image/webp"
+        : ext === ".svg"
+          ? "image/svg+xml"
+          : "image/png";
+  return {
+    data: fs.readFileSync(assetPath),
+    contentType,
+  };
+}
+
 export function readAtlasArtifact(windowHours: number): AtlasArtifactPayload | null {
   const artifactPath = process.env.VIBEZ_ATLAS_ARTIFACT_PATH
     ? atlasArtifactPath(windowHours)

@@ -90,6 +90,7 @@ export default function AtlasArticleClient({
   const [deepDive, setDeepDive] = useState<AtlasDeeperDive | null>(null);
   const [deepDiveError, setDeepDiveError] = useState<string | null>(null);
   const [deepDiveLoading, setDeepDiveLoading] = useState(false);
+  const [deepDiveStartedAt, setDeepDiveStartedAt] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialPayload) {
@@ -126,6 +127,7 @@ export default function AtlasArticleClient({
   async function spawnDeepDive() {
     if (!article) return;
     setDeepDiveLoading(true);
+    setDeepDiveStartedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }));
     setDeepDiveError(null);
     setDeepDive(null);
     try {
@@ -245,17 +247,31 @@ export default function AtlasArticleClient({
             <section className="border border-slate-300 bg-white/35 p-4">
               <h2 className="font-serif text-2xl font-bold text-slate-950">Spawn deeper dive</h2>
               <p className="mt-2 text-sm leading-6 text-slate-700">
-                Run vector retrieval and adversarial analysis against this article.
+                Run retrieval and adversarial analysis against this article. This usually takes
+                20-40 seconds.
               </p>
               <button
                 onClick={spawnDeepDive}
                 disabled={deepDiveLoading}
                 className="mt-3 border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-semibold text-[#f8f4ea] disabled:opacity-60"
               >
-                {deepDiveLoading ? "Running..." : "Spawn deeper dive"}
+                {deepDiveLoading ? "Running deeper dive..." : "Spawn deeper dive"}
               </button>
+              {deepDiveLoading && (
+                <div className="mt-3 border border-slate-300 bg-white/45 p-3 text-sm leading-6 text-slate-700">
+                  <p className="font-semibold text-slate-950">
+                    Retrieval is running{deepDiveStartedAt ? ` since ${deepDiveStartedAt}` : ""}.
+                  </p>
+                  <p className="mt-1">
+                    Atlas is checking supporting evidence, counterevidence, weak spots, and alternative readings.
+                  </p>
+                </div>
+              )}
               {deepDiveError && (
-                <p className="mt-3 text-sm leading-6 text-red-700">{deepDiveError}</p>
+                <div className="mt-3 border border-red-300 bg-red-50 p-3 text-sm leading-6 text-red-800">
+                  <p className="font-semibold">Deeper dive failed.</p>
+                  <p className="mt-1">{deepDiveError}</p>
+                </div>
               )}
             </section>
 
