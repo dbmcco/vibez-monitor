@@ -215,11 +215,15 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
-def _days_since_iso(iso_timestamp: str | None) -> int:
+def _days_since_iso(iso_timestamp: str | datetime | None) -> int:
     if not iso_timestamp:
         return 0
     try:
-        parsed = datetime.fromisoformat(iso_timestamp)
+        parsed = (
+            iso_timestamp
+            if isinstance(iso_timestamp, datetime)
+            else datetime.fromisoformat(str(iso_timestamp))
+        )
     except ValueError:
         return 0
     if parsed.tzinfo is None:
@@ -340,7 +344,7 @@ def upsert_message_links(
                 """INSERT INTO links (url, url_hash, title, category, relevance,
                    shared_by, source_group, first_seen, last_seen, mention_count,
                    value_score, report_date)
-                   VALUES (%s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, '')""",
+                   VALUES (%s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, NULL)""",
                 (url, h, domain, context, senders,
                  ", ".join(sorted(data["rooms"])),
                  earliest_iso, latest_iso, data["count"], score),

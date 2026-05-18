@@ -122,6 +122,9 @@ describe("link queries", () => {
 
     expect(queryMock).not.toHaveBeenCalled();
     expect(stats.total).toBe(2);
+    expect(stats.total_mentions).toBe(4);
+    expect(stats.first_seen).toBe("2026-05-10T10:00:00.000Z");
+    expect(stats.last_seen).toBe("2026-05-17T11:00:00.000Z");
     expect(stats.sources[0]).toEqual({ name: "github", count: 1 });
     expect(stats.categories).toContainEqual({ name: "repo", count: 1 });
     expect(stats.sharers).toContainEqual({ name: "Dana", count: 1 });

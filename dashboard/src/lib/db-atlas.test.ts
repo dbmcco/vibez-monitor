@@ -161,4 +161,57 @@ describe("getAtlasSnapshot", () => {
       excludedGroups: [],
     });
   });
+
+  test("buckets Postgres bigint timestamp strings in Stats timelines", async () => {
+    const firstTs = Date.parse("2026-05-16T12:00:00Z");
+    const secondTs = Date.parse("2026-05-17T12:00:00Z");
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            timestamp: String(firstTs),
+            sender_id: "@dana:example",
+            sender_name: "Dana",
+            room_name: "Agents",
+            body: "Agents need evaluated workflows.",
+            topics: JSON.stringify(["agents"]),
+            relevance_score: 7,
+          },
+          {
+            timestamp: String(secondTs),
+            sender_id: "@lee:example",
+            sender_name: "Lee",
+            room_name: "Agents",
+            body: "A second day should land in the chart.",
+            topics: JSON.stringify(["agents"]),
+            relevance_score: 8,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { timestamp: String(firstTs), topics: JSON.stringify(["agents"]) },
+          { timestamp: String(secondTs), topics: JSON.stringify(["agents"]) },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { timestamp: String(firstTs), sender_id: "@dana:example", sender_name: "Dana" },
+          { timestamp: String(secondTs), sender_id: "@lee:example", sender_name: "Lee" },
+        ],
+      });
+
+    const { getStatsDashboard } = await import("./db");
+    const stats = await getStatsDashboard(null);
+    const nonzeroDays = stats.timeline.filter((day) => day.count > 0);
+
+    expect(nonzeroDays).toEqual([
+      { date: "2026-05-16", count: 1 },
+      { date: "2026-05-17", count: 1 },
+    ]);
+    expect(stats.totals.users).toBe(2);
+  });
 });

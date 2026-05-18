@@ -26,6 +26,9 @@ interface Link {
 
 interface LinkStats {
   total: number;
+  total_mentions: number;
+  first_seen: string | null;
+  last_seen: string | null;
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
   categories: { name: string; count: number }[];
@@ -191,6 +194,13 @@ function formatDate(iso: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function formatArchiveDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function firstName(name: string): string {
   return name.split(",")[0].split(" ")[0];
 }
@@ -340,6 +350,10 @@ export default function LinksPage() {
     ? links.filter((link) => Boolean(stars.links[linkStarKey(link.url)]))
     : links;
   const starredCount = Object.keys(stars.links).length;
+  const archiveRange =
+    stats?.first_seen && stats.last_seen
+      ? `${formatArchiveDate(stats.first_seen)} to ${formatArchiveDate(stats.last_seen)}`
+      : "Archive range loading";
 
   return (
     <div className="newspaper-section atlas-newspaper fade-up space-y-5">
@@ -356,6 +370,10 @@ export default function LinksPage() {
           {starredCount} starred · {stats ? stats.total.toLocaleString() : ""} links
         </div>
       </header>
+      <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] px-3 py-2 text-xs text-[#5b4f3b]">
+        Link archive: {archiveRange}
+        {stats ? ` · ${stats.total_mentions.toLocaleString()} mentions` : ""}
+      </div>
 
       <input
         type="text"

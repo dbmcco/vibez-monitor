@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vibez.beeper_sync import load_allowed_groups
 from vibez.config import Config
-from vibez.db import init_db
+from vibez.db import close_db_connection, init_db
 from vibez.links import refresh_message_links
 
 
@@ -48,6 +48,7 @@ def main() -> None:
         f"Links refresh complete: scanned={result['messages_scanned']} "
         f"new_links={result['links_inserted']} latest_timestamp={result['latest_timestamp']}"
     )
+    close_db_connection()
 
 
 if __name__ == "__main__":

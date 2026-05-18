@@ -2133,6 +2133,12 @@ export interface StatsDashboard {
     topics: number;
     avg_relevance: number | null;
   };
+  history: {
+    first_seen: string | null;
+    last_seen: string | null;
+    messages: number;
+    members_observed: number;
+  };
   timeline: DailyCount[];
   coverage: {
     classified: DailyCount[];
@@ -2189,12 +2195,47 @@ export interface TopicDrilldown {
   recent_messages: TopicDrilldownMessage[];
 }
 
-function dateKeyFromTs(ts: number): string {
-  const d = new Date(ts);
+function coerceTimestampMs(value: unknown): number | null {
+  if (value instanceof Date) return value.getTime();
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.abs(numeric) < 100_000_000_000 ? numeric * 1000 : numeric;
+}
+
+function dateKeyFromTs(ts: number | string): string {
+  const timestamp = coerceTimestampMs(ts);
+  if (timestamp === null) return "";
+  const d = new Date(timestamp);
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function summarizeStatsHistoryRows(
+  rows: Array<{ timestamp: unknown; sender_id?: unknown; sender_name?: unknown }>,
+  userAliases: UserAliasMap,
+): StatsDashboard["history"] {
+  const members = new Set<string>();
+  let firstTs: number | null = null;
+  let lastTs: number | null = null;
+
+  for (const row of rows) {
+    const ts = coerceTimestampMs(row.timestamp);
+    if (ts === null) continue;
+    firstTs = firstTs === null ? ts : Math.min(firstTs, ts);
+    lastTs = lastTs === null ? ts : Math.max(lastTs, ts);
+    const rawName = String(row.sender_name || "").trim();
+    const rawId = String(row.sender_id || "").trim();
+    members.add(rawName ? normalizeSenderName(rawName, userAliases) : rawId || "Unknown");
+  }
+
+  return {
+    first_seen: firstTs === null ? null : dateKeyFromTs(firstTs),
+    last_seen: lastTs === null ? null : dateKeyFromTs(lastTs),
+    messages: rows.length,
+    members_observed: members.size,
+  };
 }
 
 function parseTopics(raw: string | null): string[] {
@@ -2949,6 +2990,20 @@ function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashb
         relevance_score: number | null;
       }>;
 
+    const historyWhere = roomScope.clause ? `WHERE ${roomScope.clause}` : "";
+    const historyRows = db
+      .prepare(
+        `SELECT m.timestamp, m.sender_id, m.sender_name
+         FROM messages m
+         ${historyWhere}`,
+      )
+      .all(...roomScope.params) as Array<{
+        timestamp: unknown;
+        sender_id: string | null;
+        sender_name: string | null;
+      }>;
+    const history = summarizeStatsHistoryRows(historyRows, userAliases);
+
     const timelineDays =
       resolvedWindow === null
         ? rowsData.length > 0
@@ -3172,6 +3227,7 @@ function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashb
         topics: topics.size,
         avg_relevance: relevanceCount > 0 ? Number((relevanceTotal / relevanceCount).toFixed(2)) : null,
       },
+      history,
       timeline,
       coverage: { classified, with_topics, avg_topic_coverage: avgTopicCoverage },
       users: Array.from(users.entries())
@@ -3265,15 +3321,28 @@ export async function getStatsDashboard(
      ORDER BY m.timestamp ASC`,
     windowParams,
   );
-  const rowsData = rows as {
-    timestamp: number;
+  const rowsData = (rows as {
+    timestamp: unknown;
     sender_id: string | null;
     sender_name: string;
     room_name: string;
     body: string;
     topics: string | null;
     relevance_score: number | null;
-  }[];
+  }[])
+    .map((row) => ({
+      ...row,
+      timestamp: coerceTimestampMs(row.timestamp),
+    }))
+    .filter((row): row is {
+      timestamp: number;
+      sender_id: string | null;
+      sender_name: string;
+      room_name: string;
+      body: string;
+      topics: string | null;
+      relevance_score: number | null;
+    } => row.timestamp !== null);
 
   const allTopicQuery = scopedWhere
     ? `SELECT m.timestamp, c.topics
@@ -3285,11 +3354,21 @@ export async function getStatsDashboard(
        LEFT JOIN classifications c ON m.id = c.message_id
        WHERE c.topics IS NOT NULL`;
   const { rows: allTopicRows } = await pool.query(allTopicQuery, scopedParams);
+  const { rows: historyRows } = await pool.query(
+    `SELECT m.timestamp, m.sender_id, m.sender_name
+     FROM messages m
+     ${scopedWhere}`,
+    scopedParams,
+  );
+  const history = summarizeStatsHistoryRows(
+    historyRows as Array<{ timestamp: unknown; sender_id?: unknown; sender_name?: unknown }>,
+    userAliases,
+  );
 
   const timelineDays =
     resolvedWindow === null
-      ? rows.length > 0
-        ? enumerateDaysFromTs(rows[0].timestamp, Date.now())
+      ? rowsData.length > 0
+        ? enumerateDaysFromTs(rowsData[0].timestamp, Date.now())
         : enumerateDays(30)
       : enumerateDays(resolvedWindow);
   const windowDaysValue = timelineDays.length;
@@ -3355,7 +3434,8 @@ export async function getStatsDashboard(
   }
 
   for (const row of allTopicRows) {
-    const ts = row.timestamp;
+    const ts = coerceTimestampMs(row.timestamp);
+    if (ts === null) continue;
     for (const topic of new Set(parseTopics(row.topics))) {
       const prev = topicFirstSeenEver.get(topic);
       if (prev === undefined || ts < prev) {
@@ -3830,6 +3910,7 @@ export async function getStatsDashboard(
           ? Number((relevanceTotal / relevanceCount).toFixed(2))
           : null,
     },
+    history,
     timeline,
     coverage: {
       classified,
@@ -3909,15 +3990,28 @@ export async function getTopicDrilldown(
      ORDER BY m.timestamp ASC`,
     windowParams,
   );
-  const rowsData = rows as {
+  const rowsData = (rows as {
     id: string;
-    timestamp: number;
+    timestamp: unknown;
     room_name: string;
     sender_name: string;
     body: string;
     relevance_score: number | null;
     topics: string | null;
-  }[];
+  }[])
+    .map((row) => ({
+      ...row,
+      timestamp: coerceTimestampMs(row.timestamp),
+    }))
+    .filter((row): row is {
+      id: string;
+      timestamp: number;
+      room_name: string;
+      sender_name: string;
+      body: string;
+      relevance_score: number | null;
+      topics: string | null;
+    } => row.timestamp !== null);
 
   const { rows: allScopedRows } = await pool.query(
     `SELECT m.timestamp, c.topics
@@ -3967,9 +4061,11 @@ export async function getTopicDrilldown(
   const lastSeenWindowTs = topicRows[topicRows.length - 1].timestamp;
   let firstSeenEverTs = firstSeenWindowTs;
   for (const row of allScopedRows) {
+    const ts = coerceTimestampMs(row.timestamp);
+    if (ts === null) continue;
     for (const topic of parseTopics(row.topics)) {
       if (topic.toLowerCase() === needle) {
-        if (row.timestamp < firstSeenEverTs) firstSeenEverTs = row.timestamp;
+        if (ts < firstSeenEverTs) firstSeenEverTs = ts;
         break;
       }
     }
@@ -4569,6 +4665,9 @@ export interface LinkRow {
 
 export interface LinkStats {
   total: number;
+  total_mentions: number;
+  first_seen: string | null;
+  last_seen: string | null;
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
   categories: { name: string; count: number }[];
@@ -4671,7 +4770,10 @@ function getLinkStatsFromSqlite(opts: { days?: number }): LinkStats {
   const db = new Database(SQLITE_DB_PATH, { readonly: true });
   try {
     const { whereSql, params } = sqliteLinkWhere({ days: opts.days });
-    const totalRow = db.prepare(`SELECT COUNT(*) as c FROM links ${whereSql}`).get(...params) as { c: number };
+    const totalRow = db.prepare(
+      `SELECT COUNT(*) as c, COALESCE(SUM(mention_count), 0) as mentions, MIN(first_seen) as first_seen, MAX(last_seen) as last_seen
+       FROM links ${whereSql}`,
+    ).get(...params) as { c: number; mentions: number; first_seen: string | null; last_seen: string | null };
     const catRows = db
       .prepare(`SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`)
       .all(...params) as { category: string | null; cnt: number }[];
@@ -4694,13 +4796,16 @@ function getLinkStatsFromSqlite(opts: { days?: number }): LinkStats {
     }
 
     return {
-      total: totalRow.c,
+      total: Number(totalRow.c || 0),
+      total_mentions: Number(totalRow.mentions || 0),
+      first_seen: totalRow.first_seen,
+      last_seen: totalRow.last_seen,
       sources: Object.entries(sourceCounts)
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count),
-      sharers: sharerRows.map((row) => ({ name: row.shared_by, count: row.cnt })),
-      categories: catRows.map((row) => ({ name: row.category || "uncategorized", count: row.cnt })),
-      authors: authorRows.map((row) => ({ name: row.authored_by, count: row.cnt })),
+      sharers: sharerRows.map((row) => ({ name: row.shared_by, count: Number(row.cnt || 0) })),
+      categories: catRows.map((row) => ({ name: row.category || "uncategorized", count: Number(row.cnt || 0) })),
+      authors: authorRows.map((row) => ({ name: row.authored_by, count: Number(row.cnt || 0) })),
     };
   } finally {
     db.close();
@@ -4751,8 +4856,13 @@ export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> 
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-  const { rows: totalRows } = await pool.query(`SELECT COUNT(*) as c FROM links ${whereSql}`, params);
-  const total = (totalRows[0] as { c: number }).c;
+  const { rows: totalRows } = await pool.query(
+    `SELECT COUNT(*) as c, COALESCE(SUM(mention_count), 0) as mentions, MIN(first_seen) as first_seen, MAX(last_seen) as last_seen
+     FROM links ${whereSql}`,
+    params,
+  );
+  const totalRow = totalRows[0] as { c: unknown; mentions: unknown; first_seen: string | null; last_seen: string | null };
+  const total = Number(totalRow.c || 0);
 
   const { rows: catRows } = await pool.query(
     `SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`,
@@ -4782,10 +4892,13 @@ export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> 
 
   return {
     total,
+    total_mentions: Number(totalRow.mentions || 0),
+    first_seen: totalRow.first_seen,
+    last_seen: totalRow.last_seen,
     sources,
-    sharers: (sharerRows as { shared_by: string; cnt: number }[]).map((r: { shared_by: string; cnt: number }) => ({ name: r.shared_by, count: r.cnt })),
-    categories: (catRows as { category: string; cnt: number }[]).map((r: { category: string; cnt: number }) => ({ name: r.category || "uncategorized", count: r.cnt })),
-    authors: (authorRows as { authored_by: string; cnt: number }[]).map((r: { authored_by: string; cnt: number }) => ({ name: r.authored_by, count: r.cnt })),
+    sharers: (sharerRows as { shared_by: string; cnt: unknown }[]).map((r) => ({ name: r.shared_by, count: Number(r.cnt || 0) })),
+    categories: (catRows as { category: string; cnt: unknown }[]).map((r) => ({ name: r.category || "uncategorized", count: Number(r.cnt || 0) })),
+    authors: (authorRows as { authored_by: string; cnt: unknown }[]).map((r) => ({ name: r.authored_by, count: Number(r.cnt || 0) })),
   };
 }
 

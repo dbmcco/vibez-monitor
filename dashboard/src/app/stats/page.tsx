@@ -157,6 +157,12 @@ interface StatsDashboard {
     topics: number;
     avg_relevance: number | null;
   };
+  history: {
+    first_seen: string | null;
+    last_seen: string | null;
+    messages: number;
+    members_observed: number;
+  };
   timeline: DailyCount[];
   coverage: {
     classified: DailyCount[];
@@ -2672,7 +2678,7 @@ const SECTION_LINKS = [
 ];
 
 export default function StatsPage() {
-  const [days, setDays] = useState<DayRange>(30);
+  const [days, setDays] = useState<DayRange>("all");
   const [stats, setStats] = useState<StatsDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
@@ -2856,6 +2862,10 @@ export default function StatsPage() {
       : stats.scope.mode === "excluded_groups"
         ? `Scoped by exclusions (${stats.scope.excluded_groups.length} filtered names)`
         : "Using all channels in DB";
+  const historyLabel =
+    stats.history.first_seen && stats.history.last_seen
+      ? `Record: ${stats.history.first_seen} to ${stats.history.last_seen}`
+      : "Record range unavailable";
   const coveragePercent = Math.round(stats.coverage.avg_topic_coverage * 100);
   const recentWindow = Math.min(21, stats.timeline.length);
   const recentMessages = sumCounts(stats.timeline.slice(-recentWindow));
@@ -2919,7 +2929,7 @@ export default function StatsPage() {
       </div>
 
       <div className="rounded-lg border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-xs text-cyan-100">
-        {scopeLabel}
+        {scopeLabel} · {historyLabel}
       </div>
 
       <section className="vibe-panel rounded-xl p-4">
@@ -2937,14 +2947,18 @@ export default function StatsPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
         <div className="vibe-panel rounded-xl p-4">
-          <div className="text-xs text-slate-400">Messages</div>
+          <div className="text-xs text-slate-400">Window messages</div>
           <div className="vibe-title mt-1 text-2xl">{stats.totals.messages}</div>
         </div>
         <div className="vibe-panel rounded-xl p-4">
-          <div className="text-xs text-slate-400">Users</div>
+          <div className="text-xs text-slate-400">Active people</div>
           <div className="vibe-title mt-1 text-2xl">{stats.totals.users}</div>
+        </div>
+        <div className="vibe-panel rounded-xl p-4">
+          <div className="text-xs text-slate-400">Members observed</div>
+          <div className="vibe-title mt-1 text-2xl">{stats.history.members_observed}</div>
         </div>
         <div className="vibe-panel rounded-xl p-4">
           <div className="text-xs text-slate-400">Channels</div>

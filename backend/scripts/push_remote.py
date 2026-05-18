@@ -126,8 +126,10 @@ def fetch_records(
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
     conn = get_connection()
     cur = conn.cursor()
+    where_sql = "WHERE m.timestamp >= %s" if cutoff_ts is not None else ""
+    query_params: tuple[Any, ...] = (cutoff_ts,) if cutoff_ts is not None else ()
     cur.execute(
-        """
+        f"""
         SELECT
             m.id,
             m.room_id,
@@ -146,10 +148,10 @@ def fetch_records(
             c.alert_level
         FROM messages m
         LEFT JOIN classifications c ON c.message_id = m.id
-        WHERE (%s IS NULL OR m.timestamp >= %s)
+        {where_sql}
         ORDER BY m.timestamp ASC
         """,
-        (cutoff_ts, cutoff_ts),
+        query_params,
     )
     columns = [desc.name for desc in cur.description]
     rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
