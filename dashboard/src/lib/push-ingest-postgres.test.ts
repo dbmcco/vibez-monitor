@@ -137,4 +137,63 @@ describe("Postgres push ingestion", () => {
       String(sql).includes("ON CONFLICT (url_hash) DO UPDATE SET"),
     )).toBe(true);
   });
+
+  test("persists canonical Beeper raw events idempotently with watermarks", async () => {
+    queryMock.mockImplementation((sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("INSERT INTO raw_events")) {
+        const callCount = queryMock.mock.calls.filter(([previousSql]) =>
+          String(previousSql).includes("INSERT INTO raw_events"),
+        ).length;
+        return Promise.resolve(callCount === 1
+          ? { rows: [{ id: "raw-1" }], rowCount: 1 }
+          : { rows: [], rowCount: 0 });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const { applyBeeperBatchPayload } = await import("./push-ingest");
+
+    const result = await applyBeeperBatchPayload({
+      source: "beeper",
+      batch_key: "batch-2026-05-19T04:30:00-04:00",
+      events: [
+        {
+          source_event_key: "room-1:event-1",
+          source_room_id: "room-1",
+          room_name: "Agent Harnesses",
+          sender_key: "member-1",
+          sender_display_name: "Dana",
+          source_timestamp: "2026-05-19T08:30:00.000Z",
+          body: "Worth saving: https://example.com/harness",
+          raw_payload_json: { event_id: "event-1" },
+        },
+        {
+          source_event_key: "room-1:event-1",
+          source_room_id: "room-1",
+          room_name: "Agent Harnesses",
+          sender_key: "member-1",
+          sender_display_name: "Dana",
+          source_timestamp: "2026-05-19T08:30:00.000Z",
+          body: "Worth saving: https://example.com/harness",
+          raw_payload_json: { event_id: "event-1" },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      source: "beeper",
+      batch_key: "batch-2026-05-19T04:30:00-04:00",
+      record_count: 2,
+      inserted_count: 1,
+      deduped_count: 1,
+    });
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS ingest_batches"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS source_watermarks"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS raw_events"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS raw_event_links"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO raw_event_links"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO source_watermarks"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("UPDATE ingest_batches"))).toBe(true);
+  });
 });

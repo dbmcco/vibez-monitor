@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { Pool } from "pg";
 
 const ALLOWED_SYNC_STATE_KEYS = new Set([
@@ -159,6 +160,33 @@ export interface PushResult {
   message_embeddings_written: number;
   link_embeddings_written: number;
   sync_state_written: number;
+}
+
+export interface RawBeeperEventPayload {
+  source_event_key: string;
+  source_room_id: string;
+  room_name: string;
+  sender_key: string;
+  sender_display_name: string;
+  source_timestamp: string | number;
+  body: string;
+  attachments_json?: unknown;
+  raw_payload_json?: unknown;
+}
+
+export interface BeeperBatchPayload {
+  source?: string;
+  batch_key: string;
+  events: RawBeeperEventPayload[];
+}
+
+export interface BeeperBatchIngestResult {
+  ok: true;
+  source: string;
+  batch_key: string;
+  record_count: number;
+  inserted_count: number;
+  deduped_count: number;
 }
 
 export interface PgvectorWriter {
@@ -332,6 +360,288 @@ export async function ensurePostgresCoreSchema(pool: Pool): Promise<void> {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_room_name ON messages (room_name)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen DESC)");
+}
+
+export async function ensureCanonicalIngestSchema(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ingest_batches (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      batch_key TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'running',
+      record_count INTEGER NOT NULL DEFAULT 0,
+      inserted_count INTEGER NOT NULL DEFAULT 0,
+      deduped_count INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      UNIQUE (source, batch_key)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS source_watermarks (
+      source TEXT NOT NULL,
+      room_id TEXT NOT NULL,
+      latest_source_event_id TEXT,
+      latest_source_timestamp TIMESTAMPTZ,
+      last_successful_batch_id BIGINT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (source, room_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS raw_events (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_event_key TEXT NOT NULL,
+      source_room_id TEXT NOT NULL,
+      room_name TEXT NOT NULL,
+      sender_key TEXT NOT NULL,
+      sender_display_name TEXT NOT NULL,
+      source_timestamp TIMESTAMPTZ NOT NULL,
+      body TEXT NOT NULL,
+      attachments_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      body_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (source, source_event_key)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS raw_event_links (
+      raw_event_id BIGINT NOT NULL REFERENCES raw_events(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      normalized_url TEXT NOT NULL,
+      host TEXT,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (raw_event_id, normalized_url, position)
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_raw_events_timestamp ON raw_events (source_timestamp DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_raw_events_room ON raw_events (source_room_id)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_raw_event_links_host ON raw_event_links (host)");
+}
+
+function stableJson(value: unknown, defaultValue: unknown): string {
+  if (value === undefined || value === null) return JSON.stringify(defaultValue);
+  if (typeof value === "string") {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      return JSON.stringify(value);
+    }
+  }
+  return JSON.stringify(value);
+}
+
+function bodyHash(body: string): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+function normalizeSourceTimestamp(value: string | number): string {
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Invalid source_timestamp in Beeper batch.");
+  }
+  return date.toISOString();
+}
+
+function isValidRawBeeperEvent(event: RawBeeperEventPayload): boolean {
+  return Boolean(
+    event?.source_event_key &&
+      event.source_room_id &&
+      event.room_name &&
+      event.sender_key &&
+      event.sender_display_name &&
+      typeof event.body === "string" &&
+      event.source_timestamp !== undefined &&
+      event.source_timestamp !== null,
+  );
+}
+
+function extractLinks(body: string): Array<{ url: string; normalized_url: string; host: string | null; position: number }> {
+  const matches = body.matchAll(/https?:\/\/[^\s<>"']+/gi);
+  const links: Array<{ url: string; normalized_url: string; host: string | null; position: number }> = [];
+  for (const match of matches) {
+    const url = match[0].replace(/[),.;!?]+$/, "");
+    let normalizedUrl = url;
+    let host: string | null = null;
+    try {
+      const parsed = new URL(url);
+      parsed.hash = "";
+      normalizedUrl = parsed.toString();
+      host = parsed.host.toLowerCase();
+    } catch {
+      normalizedUrl = url.trim();
+    }
+    links.push({
+      url,
+      normalized_url: normalizedUrl,
+      host,
+      position: match.index ?? links.length,
+    });
+  }
+  return links;
+}
+
+export async function applyBeeperBatchPayload(
+  payload: BeeperBatchPayload,
+  pool: Pool | null = getPgPool(),
+): Promise<BeeperBatchIngestResult> {
+  if (!pool) {
+    throw new Error("Postgres is not configured for Beeper ingest.");
+  }
+  const source = (payload.source || "beeper").trim();
+  const batchKey = String(payload.batch_key || "").trim();
+  const events = asArray<RawBeeperEventPayload>(payload.events);
+  if (!source || !batchKey) {
+    throw new Error("Beeper batch requires source and batch_key.");
+  }
+  if (events.length === 0) {
+    throw new Error("Beeper batch requires at least one event.");
+  }
+
+  await ensureCanonicalIngestSchema(pool);
+  await pool.query("BEGIN");
+  let batchId: number | string | null = null;
+  let insertedCount = 0;
+  try {
+    const batchResult = await pool.query(
+      `
+        INSERT INTO ingest_batches
+          (source, batch_key, started_at, status, record_count, inserted_count, deduped_count, error)
+        VALUES ($1, $2, now(), 'running', $3, 0, 0, NULL)
+        ON CONFLICT (source, batch_key) DO UPDATE SET
+          started_at = now(),
+          status = 'running',
+          record_count = EXCLUDED.record_count,
+          error = NULL
+        RETURNING id
+      `,
+      [source, batchKey, events.length],
+    );
+    batchId = batchResult.rows?.[0]?.id ?? null;
+
+    const latestByRoom = new Map<string, RawBeeperEventPayload>();
+    for (const event of events) {
+      if (!isValidRawBeeperEvent(event)) {
+        throw new Error("Invalid event in Beeper batch.");
+      }
+      const timestamp = normalizeSourceTimestamp(event.source_timestamp);
+      const insertResult = await pool.query(
+        `
+          INSERT INTO raw_events
+            (source, source_event_key, source_room_id, room_name, sender_key,
+             sender_display_name, source_timestamp, body, attachments_json,
+             raw_payload_json, body_hash)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9::jsonb, $10::jsonb, $11)
+          ON CONFLICT (source, source_event_key) DO NOTHING
+          RETURNING id
+        `,
+        [
+          source,
+          event.source_event_key.trim(),
+          event.source_room_id.trim(),
+          event.room_name.trim(),
+          event.sender_key.trim(),
+          event.sender_display_name.trim(),
+          timestamp,
+          event.body,
+          stableJson(event.attachments_json, []),
+          stableJson(event.raw_payload_json, {}),
+          bodyHash(event.body),
+        ],
+      );
+      const rawEventId = insertResult.rows?.[0]?.id;
+      if (insertResult.rowCount && rawEventId) {
+        insertedCount += 1;
+        for (const link of extractLinks(event.body)) {
+          await pool.query(
+            `
+              INSERT INTO raw_event_links
+                (raw_event_id, url, normalized_url, host, position)
+              VALUES ($1, $2, $3, $4, $5)
+              ON CONFLICT (raw_event_id, normalized_url, position) DO NOTHING
+            `,
+            [rawEventId, link.url, link.normalized_url, link.host, link.position],
+          );
+        }
+      }
+      const previous = latestByRoom.get(event.source_room_id);
+      if (!previous || normalizeSourceTimestamp(previous.source_timestamp) <= timestamp) {
+        latestByRoom.set(event.source_room_id, event);
+      }
+    }
+
+    for (const [roomId, event] of latestByRoom.entries()) {
+      await pool.query(
+        `
+          INSERT INTO source_watermarks
+            (source, room_id, latest_source_event_id, latest_source_timestamp,
+             last_successful_batch_id, updated_at)
+          VALUES ($1, $2, $3, $4::timestamptz, $5, now())
+          ON CONFLICT (source, room_id) DO UPDATE SET
+            latest_source_event_id = CASE
+              WHEN source_watermarks.latest_source_timestamp IS NULL
+                OR EXCLUDED.latest_source_timestamp >= source_watermarks.latest_source_timestamp
+              THEN EXCLUDED.latest_source_event_id
+              ELSE source_watermarks.latest_source_event_id
+            END,
+            latest_source_timestamp = GREATEST(
+              COALESCE(source_watermarks.latest_source_timestamp, '-infinity'::timestamptz),
+              EXCLUDED.latest_source_timestamp
+            ),
+            last_successful_batch_id = EXCLUDED.last_successful_batch_id,
+            updated_at = now()
+        `,
+        [
+          source,
+          roomId,
+          event.source_event_key.trim(),
+          normalizeSourceTimestamp(event.source_timestamp),
+          batchId,
+        ],
+      );
+    }
+
+    const dedupedCount = events.length - insertedCount;
+    await pool.query(
+      `
+        UPDATE ingest_batches
+        SET completed_at = now(),
+            status = 'succeeded',
+            inserted_count = $3,
+            deduped_count = $4,
+            error = NULL
+        WHERE source = $1 AND batch_key = $2
+      `,
+      [source, batchKey, insertedCount, dedupedCount],
+    );
+    await pool.query("COMMIT");
+    return {
+      ok: true,
+      source,
+      batch_key: batchKey,
+      record_count: events.length,
+      inserted_count: insertedCount,
+      deduped_count: dedupedCount,
+    };
+  } catch (error) {
+    await pool.query("ROLLBACK");
+    await pool.query(
+      `
+        UPDATE ingest_batches
+        SET completed_at = now(),
+            status = 'failed',
+            error = $3
+        WHERE source = $1 AND batch_key = $2
+      `,
+      [source, batchKey, error instanceof Error ? error.message : String(error || "unknown error")],
+    );
+    throw error;
+  }
 }
 
 function isValidMessageEmbedding(row: MessageEmbeddingPayload): boolean {
