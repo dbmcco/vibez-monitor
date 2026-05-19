@@ -226,6 +226,9 @@ try {
       fail(`${viewport.name} renders no contextual useful-link actions`);
     }
     if (allowNoImages) {
+      if (new URL(targetUrl).searchParams.get("images") === "off" && metrics.articleImageCount > 0) {
+        fail(`${viewport.name} images=off rendered ${metrics.articleImageCount} real article images`);
+      }
       if (metrics.fakeImageCount > 0 || metrics.hasImagePlaceholder) {
         fail(`${viewport.name} renders fake SVG or legacy image placeholders`);
       }

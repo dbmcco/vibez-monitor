@@ -12,6 +12,7 @@ Make the Railway Atlas newspaper viewable and testable while real article images
 
 - Keep the AtlasCloud route in place but do not require `VIBEZ_ATLASCLOUD_API_KEY` for viewing existing editions.
 - Replace fake SVG editorial image fallbacks with an explicit no-photo treatment.
+- Support `images=off` for deterministic no-image review while provider credentials are pending.
 - Add a Playwright UX gate that can validate the no-images state.
 - Run desktop and mobile browser checks against Railway before handing the site back.
 
@@ -33,7 +34,7 @@ Make the Railway Atlas newspaper viewable and testable while real article images
 
 ## Browser Acceptance
 
-- `/atlas?hours=48` renders the newspaper.
+- `/atlas?hours=48&images=off` renders the newspaper without real article media.
 - The edition selector and `/atlas/editions` are reachable.
 - At least five `Read full article` links are present.
 - A clicked full article renders body text, citations, and `Spawn deeper dive`.

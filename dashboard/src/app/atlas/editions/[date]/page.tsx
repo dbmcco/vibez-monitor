@@ -8,7 +8,8 @@ export const revalidate = 0;
 
 type PageProps = {
   params: Promise<{ date: string }> | { date: string };
-  searchParams?: Promise<{ hours?: string | string[] }> | { hours?: string | string[] };
+  searchParams?: Promise<{ hours?: string | string[]; images?: string | string[] }> |
+    { hours?: string | string[]; images?: string | string[] };
 };
 
 async function resolveMaybe<T>(value: Promise<T> | T): Promise<T> {
@@ -21,6 +22,9 @@ export default async function AtlasEditionPage({ params, searchParams }: PagePro
   const rawHours = Array.isArray(resolvedSearchParams.hours)
     ? resolvedSearchParams.hours[0]
     : resolvedSearchParams.hours;
+  const rawImages = Array.isArray(resolvedSearchParams.images)
+    ? resolvedSearchParams.images[0]
+    : resolvedSearchParams.images;
   const windowHours = parseAtlasWindowHours(rawHours);
   const artifact = await readAtlasArtifact(windowHours, resolvedParams.date);
   if (!artifact) {
@@ -51,6 +55,7 @@ export default async function AtlasEditionPage({ params, searchParams }: PagePro
       initialAtlas={artifact.atlas}
       initialEditorialReport={artifact.editorial_report}
       initialWindowHours={windowHours}
+      hideArticleImages={rawImages === "off"}
     />
   );
 }

@@ -69,12 +69,14 @@ export default function AtlasArticleClient({
   initialWindowHours,
   initialPayload,
   deepDiveHref,
+  hideArticleImages = false,
 }: {
   articleDate: string;
   articleSlug: string;
   initialWindowHours: number;
   initialPayload: AtlasPayload | null;
   deepDiveHref: string;
+  hideArticleImages?: boolean;
 }) {
   const [windowHours] = useState(initialWindowHours);
   const [payload, setPayload] = useState<AtlasPayload | null>(initialPayload);
@@ -99,7 +101,7 @@ export default function AtlasArticleClient({
   if (!payload?.editorial_report || !payload.atlas || !article) {
     return (
       <div className="space-y-4">
-        <Link href={atlasFrontPageHref(windowHours)} className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm text-[#342a1b]">
+        <Link href={hideArticleImages ? `${atlasFrontPageHref(windowHours)}&images=off` : atlasFrontPageHref(windowHours)} className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm text-[#342a1b]">
           Back to Atlas
         </Link>
         <div className="rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-sm text-[#342a1b]">
@@ -111,7 +113,7 @@ export default function AtlasArticleClient({
 
   return (
     <div className="atlas-newspaper fade-up space-y-5">
-      <Link href={atlasFrontPageHref(windowHours)} className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm !text-[#342a1b]">
+      <Link href={hideArticleImages ? `${atlasFrontPageHref(windowHours)}&images=off` : atlasFrontPageHref(windowHours)} className="inline-flex rounded border border-[#cbbf9d] bg-[#f8f4ea] px-3 py-1.5 text-sm !text-[#342a1b]">
         Back to front page
       </Link>
 
@@ -134,7 +136,7 @@ export default function AtlasArticleClient({
 
         <div className="mt-6 grid gap-7 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.65fr)]">
           <main>
-            <ArticleImage article={article} />
+            <ArticleImage article={article} hideImage={hideArticleImages} />
             <div className="mt-6 space-y-4 text-base leading-8 text-slate-800 sm:text-lg">
               {article.body.map((paragraph, index) => (
                 <p key={index}>{cleanAtlasReaderText(paragraph)}</p>
@@ -228,8 +230,8 @@ export default function AtlasArticleClient({
   );
 }
 
-function ArticleImage({ article }: { article: AtlasEditorialArticle }) {
-  if (isRenderableArticleImageUrl(article.image.url)) {
+function ArticleImage({ article, hideImage }: { article: AtlasEditorialArticle; hideImage: boolean }) {
+  if (!hideImage && isRenderableArticleImageUrl(article.image.url)) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img

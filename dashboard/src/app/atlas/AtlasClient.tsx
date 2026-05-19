@@ -226,10 +226,12 @@ export default function AtlasPage({
   initialAtlas = null,
   initialEditorialReport = null,
   initialWindowHours = 48,
+  hideArticleImages = false,
 }: {
   initialAtlas?: AtlasSnapshot | null;
   initialEditorialReport?: AtlasEditorialReport | null;
   initialWindowHours?: number;
+  hideArticleImages?: boolean;
 }) {
   const [atlas, setAtlas] = useState<AtlasSnapshot | null>(initialAtlas);
   const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(initialEditorialReport);
@@ -299,7 +301,9 @@ export default function AtlasPage({
   function handleWindowHoursChange(hours: number) {
     if (hours === windowHours) return;
     if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", `/atlas?hours=${hours}`);
+      const params = new URLSearchParams({ hours: String(hours) });
+      if (hideArticleImages) params.set("images", "off");
+      window.history.replaceState(null, "", `/atlas?${params.toString()}`);
     }
     setLoading(true);
     setError(null);
@@ -353,6 +357,7 @@ export default function AtlasPage({
         editorialReport={editorialReport}
         editions={editions}
         windowHours={windowHours}
+        hideArticleImages={hideArticleImages}
         onWindowHoursChange={handleWindowHoursChange}
         onOpenCitation={setSelectedCitationRef}
       />
@@ -442,6 +447,7 @@ function NarrativeReport({
   editorialReport,
   editions,
   windowHours,
+  hideArticleImages,
   onWindowHoursChange,
   onOpenCitation,
 }: {
@@ -449,6 +455,7 @@ function NarrativeReport({
   editorialReport: AtlasEditorialReport | null;
   editions: AtlasEditionSummary[];
   windowHours: number;
+  hideArticleImages: boolean;
   onWindowHoursChange: (hours: number) => void;
   onOpenCitation: (ref: string) => void;
 }) {
@@ -492,6 +499,7 @@ function NarrativeReport({
                   article={article}
                   issueDate={report.issue.date}
                   windowHours={windowHours}
+                  hideImage={hideArticleImages}
                   compact
                 />
               ))}
@@ -501,6 +509,7 @@ function NarrativeReport({
                 article={leadArticle}
                 issueDate={report.issue.date}
                 windowHours={windowHours}
+                hideImage={hideArticleImages}
                 lead
               />
             </div>
@@ -511,6 +520,7 @@ function NarrativeReport({
                   article={article}
                   issueDate={report.issue.date}
                   windowHours={windowHours}
+                  hideImage={hideArticleImages}
                   compact
                 />
               ))}
@@ -525,6 +535,7 @@ function NarrativeReport({
                   article={article}
                   issueDate={report.issue.date}
                   windowHours={windowHours}
+                  hideImage={hideArticleImages}
                   compact
                 />
               ))}
@@ -800,16 +811,19 @@ function NewspaperArticleCard({
   windowHours,
   lead = false,
   compact = false,
+  hideImage = false,
 }: {
   article: AtlasEditorialArticle;
   issueDate: string;
   windowHours: number;
   lead?: boolean;
   compact?: boolean;
+  hideImage?: boolean;
 }) {
+  const articleHref = atlasArticleHref(issueDate, article.slug, windowHours);
   return (
     <article className={lead ? "" : "border-b border-[#cbbf9d] pb-4 last:border-b-0"}>
-      <ImageBlock article={article} lead={lead} />
+      <ImageBlock article={article} lead={lead} hideImage={hideImage} />
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em]">
         <span className="text-[#8b5f21]">{article.section}</span>
         {lead && <span className="text-[#786846]">Lead Story</span>}
@@ -823,7 +837,7 @@ function NewspaperArticleCard({
         {article.summary || article.dek}
       </p>
       <Link
-        href={atlasArticleHref(issueDate, article.slug, windowHours)}
+        href={hideImage ? `${articleHref}&images=off` : articleHref}
         className="mt-3 inline-flex border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold !text-[#1f1a12] hover:bg-[#1f1a12] hover:!text-[#f8f4ea]"
       >
         Read full article
@@ -832,8 +846,16 @@ function NewspaperArticleCard({
   );
 }
 
-function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: boolean }) {
-  if (isRenderableArticleImageUrl(article.image?.url)) {
+function ImageBlock({
+  article,
+  lead,
+  hideImage,
+}: {
+  article: AtlasEditorialArticle;
+  lead: boolean;
+  hideImage: boolean;
+}) {
+  if (!hideImage && isRenderableArticleImageUrl(article.image?.url)) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img

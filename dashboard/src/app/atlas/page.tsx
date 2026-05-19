@@ -16,6 +16,9 @@ export default async function AtlasPage({
   const requestedHours = Array.isArray(resolvedSearchParams.hours)
     ? resolvedSearchParams.hours[0]
     : resolvedSearchParams.hours;
+  const requestedImages = Array.isArray(resolvedSearchParams.images)
+    ? resolvedSearchParams.images[0]
+    : resolvedSearchParams.images;
   const windowHours = parseAtlasWindowHours(requestedHours);
   const artifact = await readAtlasArtifact(windowHours);
   return (
@@ -23,6 +26,7 @@ export default async function AtlasPage({
       initialAtlas={artifact?.atlas || null}
       initialEditorialReport={artifact?.editorial_report || null}
       initialWindowHours={windowHours}
+      hideArticleImages={requestedImages === "off"}
     />
   );
 }
