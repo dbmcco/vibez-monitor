@@ -48,6 +48,11 @@ export interface AtlasPublishJob {
   edition_type: AtlasPublishEditionType;
   window_hours: number;
   status: AtlasPublishJobStatus;
+  stage_status?: Record<string, AtlasPublishStageStatus>;
+  stage_errors?: Record<string, string>;
+  started_at?: string;
+  completed_at?: string | null;
+  updated_at?: string;
 }
 
 export interface AtlasAssetRecord {
@@ -530,6 +535,43 @@ export async function updateAtlasPublishStage({
       overallStatus,
     ],
   );
+}
+
+export async function getAtlasPublishJob(jobId: string): Promise<AtlasPublishJob | null> {
+  const pool = getAtlasPool();
+  if (!pool) return null;
+  await ensureAtlasPublishSchema(pool);
+  const { rows } = await pool.query(
+    `SELECT
+       id,
+       edition_date,
+       edition_type,
+       window_hours,
+       status,
+       stage_status,
+       stage_errors,
+       started_at,
+       completed_at,
+       updated_at
+     FROM atlas_publish_jobs
+     WHERE id = $1
+     LIMIT 1`,
+    [jobId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    edition_date: String(row.edition_date),
+    edition_type: row.edition_type === "sunday_review" ? "sunday_review" : "daily",
+    window_hours: Number(row.window_hours) || 48,
+    status: row.status === "succeeded" || row.status === "failed" ? row.status : "running",
+    stage_status: row.stage_status || {},
+    stage_errors: row.stage_errors || {},
+    started_at: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+    completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+  };
 }
 
 export async function listAtlasEditions({

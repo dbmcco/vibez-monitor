@@ -73,6 +73,8 @@ export interface RailwayEnrichmentOptions {
   linkEmbeddingLimit?: number;
   rebuildAtlas?: boolean;
   atlasHours?: number;
+  publishJobId?: string;
+  prestartedPublishJob?: boolean;
 }
 
 export interface RailwayEnrichmentResult {
@@ -510,12 +512,23 @@ export async function refreshRailwayEnrichment(
   await ensurePostgresCoreSchema(pool);
   const atlasHours = clampInt(options.atlasHours, 48, 6, 168);
   const shouldRebuildAtlas = options.rebuildAtlas !== false;
+  const editionType = editionTypeForWindow(atlasHours);
+  const editionDate = new Date().toISOString().slice(0, 10);
   const publishJob = shouldRebuildAtlas
-    ? await startAtlasPublishJob({
-      editionDate: new Date().toISOString().slice(0, 10),
-      editionType: editionTypeForWindow(atlasHours),
-      windowHours: atlasHours,
-    })
+    ? options.prestartedPublishJob && options.publishJobId
+      ? {
+        id: options.publishJobId,
+        edition_date: editionDate,
+        edition_type: editionType,
+        window_hours: atlasHours,
+        status: "running" as const,
+      }
+      : await startAtlasPublishJob({
+        jobId: options.publishJobId,
+        editionDate,
+        editionType,
+        windowHours: atlasHours,
+      })
     : null;
 
   let classificationsWritten = 0;

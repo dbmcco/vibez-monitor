@@ -6,6 +6,8 @@ const baseUrl = process.env.VIBEZ_LOCAL_APP_URL || "http://localhost:3102";
 const accessCode = process.env.VIBEZ_ACCESS_CODE || "";
 const pushKey = process.env.VIBEZ_PUSH_API_KEY || "";
 const hours = Number.parseInt(process.argv[2] || process.env.VIBEZ_ATLAS_HOURS || "48", 10);
+const pollIntervalMs = Number.parseInt(process.env.VIBEZ_ENRICH_POLL_INTERVAL_MS || "5000", 10);
+const pollTimeoutMs = Number.parseInt(process.env.VIBEZ_ENRICH_POLL_TIMEOUT_MS || "2700000", 10);
 
 function readIntEnv(name) {
   const raw = process.env[name];
@@ -50,6 +52,10 @@ function requestJson(url, options = {}, body) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 if (!pushKey.trim()) {
   console.error("VIBEZ_PUSH_API_KEY is required for Railway enrichment.");
   process.exit(1);
@@ -61,9 +67,12 @@ if (accessCode.trim()) {
   cookie = auth.headers["set-cookie"]?.map((value) => value.split(";")[0]).join("; ") || "";
 }
 
+const rebuildAtlas = process.env.VIBEZ_DAILY_REFRESH_ATLAS !== "0";
+const useAsync = rebuildAtlas && process.env.VIBEZ_ENRICH_ASYNC !== "0";
 const payload = {
-  rebuildAtlas: process.env.VIBEZ_DAILY_REFRESH_ATLAS !== "0",
+  rebuildAtlas,
   atlasHours: hours,
+  ...(useAsync ? { async: true } : {}),
 };
 const classifyLimit = readIntEnv("VIBEZ_DAILY_CLASSIFY_LIMIT");
 const messageEmbeddingLimit = readIntEnv("VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT");
@@ -84,6 +93,59 @@ const result = await requestJson(
 
 if (result.status !== 200 || !result.json?.ok) {
   console.error(JSON.stringify(result.json, null, 2));
+  process.exit(1);
+}
+
+if (result.json?.mode === "async") {
+  const jobId = result.json.job?.id;
+  if (!jobId) {
+    console.error(JSON.stringify(result.json, null, 2));
+    process.exit(1);
+  }
+
+  const startedAt = Date.now();
+  let latest = result.json.job;
+  while (Date.now() - startedAt < pollTimeoutMs) {
+    await sleep(Math.max(pollIntervalMs, 1000));
+    const status = await requestJson(
+      `${baseUrl}/api/admin/enrich?jobId=${encodeURIComponent(jobId)}`,
+      { method: "GET", headers },
+    );
+    if (status.status !== 200 || !status.json?.ok) {
+      console.error(JSON.stringify(status.json, null, 2));
+      process.exit(1);
+    }
+    latest = status.json.job;
+    const stageSummary = latest.stage_status || {};
+    console.log(JSON.stringify({
+      ok: true,
+      mode: "async",
+      job_id: jobId,
+      status: latest.status,
+      stage_summary: stageSummary,
+      updated_at: latest.updated_at || null,
+    }, null, 2));
+    if (latest.status === "succeeded") {
+      process.exit(0);
+    }
+    if (latest.status === "failed") {
+      console.error(JSON.stringify({
+        ok: false,
+        job_id: jobId,
+        status: latest.status,
+        stage_summary: latest.stage_status || {},
+        stage_errors: latest.stage_errors || {},
+      }, null, 2));
+      process.exit(1);
+    }
+  }
+  console.error(JSON.stringify({
+    ok: false,
+    error: "Timed out waiting for enrichment job.",
+    job_id: jobId,
+    status: latest?.status || "unknown",
+    stage_summary: latest?.stage_status || {},
+  }, null, 2));
   process.exit(1);
 }
 
