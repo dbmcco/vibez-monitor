@@ -191,6 +191,31 @@ function atlasArtifactCandidates(windowHours: number): string[] {
   return Array.from(new Set(roots.map((root) => path.join(root, filename))));
 }
 
+function atlasEditionArtifactPath(
+  windowHours: number,
+  editionDate: string,
+  editionType: AtlasPublishEditionType,
+): string {
+  const safeDate = editionDate.replace(/[^0-9-]/g, "") || "unknown-date";
+  const filename = `${safeDate}-${editionType}-${windowHours}.json`;
+  const configured = process.env.VIBEZ_ATLAS_ARTIFACT_PATH;
+  if (configured) return path.join(path.dirname(configured), "editions", filename);
+  return path.join(defaultArtifactRoot(), "atlas", "editions", filename);
+}
+
+function atlasEditionArtifactDirs(): string[] {
+  const cwd = /* turbopackIgnore: true */ process.cwd();
+  const configured = process.env.VIBEZ_ATLAS_ARTIFACT_PATH;
+  if (configured) return [path.join(path.dirname(configured), "editions")];
+  const roots = [
+    defaultArtifactRoot(),
+    path.join(cwd, "generated"),
+    path.join(cwd, "dashboard", ".generated"),
+    path.join(cwd, "dashboard", "generated"),
+  ];
+  return Array.from(new Set(roots.map((root) => path.join(root, "atlas", "editions"))));
+}
+
 export function atlasGeneratedAssetCandidates(relativePath: string): string[] {
   const safePath = relativePath
     .split(/[\\/]+/)
@@ -364,13 +389,26 @@ export async function readAtlasStoredAsset(relativePath: string): Promise<{ data
   };
 }
 
-function readAtlasArtifactFromFile(windowHours: number): AtlasArtifactPayload | null {
-  const artifactPath = process.env.VIBEZ_ATLAS_ARTIFACT_PATH
-    ? atlasArtifactPath(windowHours)
-    : atlasArtifactCandidates(windowHours).find((candidate) => fs.existsSync(candidate));
-  if (!artifactPath) return null;
+function readAtlasArtifactFromFile(
+  windowHours: number,
+  editionDate?: string,
+  editionType = editionTypeForWindow(windowHours),
+): AtlasArtifactPayload | null {
+  const artifactPath = editionDate
+    ? atlasEditionArtifactDirs()
+      .map((dir) => path.join(dir, `${editionDate}-${editionType}-${windowHours}.json`))
+      .find((candidate) => fs.existsSync(candidate))
+    : process.env.VIBEZ_ATLAS_ARTIFACT_PATH
+      ? atlasArtifactPath(windowHours)
+      : atlasArtifactCandidates(windowHours).find((candidate) => fs.existsSync(candidate));
+  if (!artifactPath) {
+    if (!editionDate) return null;
+    const latest = readAtlasArtifactFromFile(windowHours, undefined, editionType);
+    return latest?.editorial_report.issue.date === editionDate ? latest : null;
+  }
   const payload = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as AtlasArtifactPayload;
   if (payload.artifact?.window_hours !== windowHours) return null;
+  if (editionDate && payload.editorial_report?.issue.date !== editionDate) return null;
   if (!payload.atlas || !payload.editorial_report) return null;
   return payload;
 }
@@ -406,7 +444,7 @@ export async function readAtlasArtifact(
       console.error("readAtlasArtifact postgres lookup failed:", error);
     }
   }
-  return readAtlasArtifactFromFile(windowHours);
+  return readAtlasArtifactFromFile(windowHours, editionDate, editionType);
 }
 
 export async function startAtlasPublishJob({
@@ -540,33 +578,50 @@ export async function listAtlasEditions({
   }
 
   if (includeAllTypes) {
-    const windows = [48, 168];
-    const editions = windows
-      .map((hours) => {
-        const artifact = readAtlasArtifactFromFile(hours);
-        if (!artifact) return null;
-        const type = editionTypeForWindow(hours);
-        const date = artifact.editorial_report.issue.date || artifact.atlas.window.end.slice(0, 10);
-        return {
-          date,
-          type,
-          window_hours: hours,
-          publication_time: artifact.artifact.generated_at,
-          title: artifact.editorial_report.issue.title || "The Vibez Atlas",
-          subtitle: artifact.editorial_report.issue.subtitle || "",
-          edition_label: editionLabelFor(type, artifact.editorial_report.issue.edition_label),
-          href: atlasEditionHref(date, hours),
-        } satisfies AtlasEditionSummary;
-      })
-      .filter((edition): edition is AtlasEditionSummary => Boolean(edition))
-      .sort((a, b) => b.publication_time.localeCompare(a.publication_time));
+    const editions = listAtlasEditionArtifacts()
+      .sort(compareAtlasEditionsNewestFirst);
     return editions.slice(0, safeLimit);
   }
 
+  const editions = listAtlasEditionArtifacts()
+    .filter((edition) => edition.window_hours === windowHours && edition.type === editionType)
+    .sort(compareAtlasEditionsNewestFirst);
+  if (editions.length) return editions.slice(0, safeLimit);
+
   const artifact = readAtlasArtifactFromFile(windowHours);
   if (!artifact) return [];
+  return [editionSummaryFromArtifact(artifact, windowHours, editionType)];
+}
+
+function listAtlasEditionArtifacts(): AtlasEditionSummary[] {
+  const summaries = new Map<string, AtlasEditionSummary>();
+  for (const dir of atlasEditionArtifactDirs()) {
+    if (!fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir)) {
+      if (!entry.endsWith(".json")) continue;
+      const artifactPath = path.join(dir, entry);
+      try {
+        const payload = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as AtlasArtifactPayload;
+        if (!payload.atlas || !payload.editorial_report) continue;
+        const hours = Number(payload.artifact?.window_hours) || payload.atlas.window.hours || 48;
+        const type = editionTypeForWindow(hours);
+        const summary = editionSummaryFromArtifact(payload, hours, type);
+        summaries.set(`${summary.date}:${summary.type}:${summary.window_hours}`, summary);
+      } catch {
+        continue;
+      }
+    }
+  }
+  return Array.from(summaries.values());
+}
+
+function editionSummaryFromArtifact(
+  artifact: AtlasArtifactPayload,
+  windowHours: number,
+  editionType: AtlasPublishEditionType,
+): AtlasEditionSummary {
   const date = artifact.editorial_report.issue.date || artifact.atlas.window.end.slice(0, 10);
-  return [{
+  return {
     date,
     type: editionType,
     window_hours: windowHours,
@@ -575,7 +630,15 @@ export async function listAtlasEditions({
     subtitle: artifact.editorial_report.issue.subtitle || "",
     edition_label: editionLabelFor(editionType, artifact.editorial_report.issue.edition_label),
     href: atlasEditionHref(date, windowHours),
-  }];
+  };
+}
+
+function compareAtlasEditionsNewestFirst(a: AtlasEditionSummary, b: AtlasEditionSummary): number {
+  return (
+    b.publication_time.localeCompare(a.publication_time) ||
+    b.date.localeCompare(a.date) ||
+    b.window_hours - a.window_hours
+  );
 }
 
 export async function writeAtlasArtifact({
@@ -600,11 +663,18 @@ export async function writeAtlasArtifact({
     },
   };
   fs.writeFileSync(artifactPath, `${JSON.stringify(payload, null, 2)}\n`);
+  const editionType = editionTypeForWindow(windowHours);
+  const editionPath = atlasEditionArtifactPath(
+    windowHours,
+    editorialReport.issue.date || atlas.window.end.slice(0, 10),
+    editionType,
+  );
+  fs.mkdirSync(path.dirname(editionPath), { recursive: true });
+  fs.writeFileSync(editionPath, `${JSON.stringify(payload, null, 2)}\n`);
   const pool = getAtlasPool();
   if (pool) {
     try {
       await ensureAtlasEditionSchema(pool);
-      const editionType = editionTypeForWindow(windowHours);
       await pool.query(
         `INSERT INTO atlas_editions
          (edition_date, edition_type, window_hours, publication_time, payload, updated_at)

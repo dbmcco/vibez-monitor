@@ -1555,7 +1555,6 @@ function CitationButton({ citation, onOpen }: { citation?: AtlasCitation; onOpen
       className="block w-full min-w-0 rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-3 py-2 text-left text-xs text-[#5e5238] hover:border-[#1f1a12]"
     >
       <span className="block break-words font-medium text-[#1f1a12]">{citation.label}</span>
-      <span className="mt-0.5 block break-all text-[#786846]">{citation.ref}</span>
     </button>
   );
 }
@@ -1577,7 +1576,6 @@ function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClos
           </button>
         </div>
         <dl className="mt-5 grid gap-3 text-sm">
-          <EvidenceRow label="Ref" value={citation.ref} />
           {citation.channel && <EvidenceRow label="Channel" value={citation.channel} />}
           {citation.sender && <EvidenceRow label="Sender" value={citation.sender} />}
           {citation.timestamp && <EvidenceRow label="Time" value={formatTimestamp(citation.timestamp)} />}
@@ -1590,7 +1588,7 @@ function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClos
         </dl>
         {citation.body && (
           <p className="mt-5 rounded-lg border border-[#cbbf9d] bg-[#fffaf0]/55 p-3 text-sm leading-relaxed text-[#342a1b]">
-            {citation.body}
+            {cleanReaderText(citation.body)}
           </p>
         )}
         {citation.url && (

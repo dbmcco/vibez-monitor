@@ -7,6 +7,7 @@ import {
 } from "@/lib/atlas-deeper-dive";
 import { atlasArticleHref, parseAtlasWindowHours } from "@/lib/atlas-ui";
 import { readAtlasArtifact } from "@/lib/atlas-artifact";
+import { cleanAtlasReaderText } from "@/lib/atlas-text";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -176,7 +177,9 @@ function ReportSection({
       <h2 className="font-serif text-2xl font-bold text-slate-950 sm:text-3xl">{title}</h2>
       <div className="mt-3 space-y-3">
         {items.map((item, index) => (
-          <p key={index} className="text-base leading-8 text-slate-800 sm:text-lg">{item}</p>
+          <p key={index} className="text-base leading-8 text-slate-800 sm:text-lg">
+            {cleanAtlasReaderText(item)}
+          </p>
         ))}
       </div>
     </section>
@@ -187,9 +190,10 @@ function CitationCard({ citation }: { citation: AtlasDeeperDiveCitation }) {
   return (
     <div className="border-b border-slate-300 pb-3 last:border-b-0">
       <p className="text-sm font-semibold text-slate-950">{citation.label}</p>
-      <p className="mt-1 break-words text-xs text-slate-500">{citation.ref}</p>
       {citation.body && (
-        <p className="mt-2 text-sm leading-6 text-slate-700">{citation.body}</p>
+        <p className="mt-2 text-sm leading-6 text-slate-700">
+          {cleanAtlasReaderText(citation.body)}
+        </p>
       )}
       {citation.url && (
         <a

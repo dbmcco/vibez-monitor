@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const queryMock = vi.fn();
@@ -192,3 +195,124 @@ describe("listAtlasEditions", () => {
     });
   });
 });
+
+describe("file-backed Atlas edition archive", () => {
+  let tempDir = "";
+
+  beforeEach(() => {
+    vi.resetModules();
+    queryMock.mockReset();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-editions-"));
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_DATABASE_URL: "",
+      DATABASE_URL: "",
+      VIBEZ_PGVECTOR_URL: "",
+      VIBEZ_ATLAS_ARTIFACT_PATH: path.join(tempDir, "atlas-48.json"),
+    };
+  });
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test("keeps previous day editions when the latest artifact pointer is overwritten", async () => {
+    const { listAtlasEditions, readAtlasArtifact, writeAtlasArtifact } = await import("./atlas-artifact");
+
+    await writeAtlasArtifact({
+      windowHours: 48,
+      atlas: sampleAtlas("2026-05-17"),
+      editorialReport: sampleEditorialReport("2026-05-17", "The May 17 Paper"),
+    });
+    await writeAtlasArtifact({
+      windowHours: 48,
+      atlas: sampleAtlas("2026-05-19"),
+      editorialReport: sampleEditorialReport("2026-05-19", "The May 19 Paper"),
+    });
+
+    const editions = await listAtlasEditions({ windowHours: 48, limit: 10 });
+    expect(editions.map((edition) => edition.date)).toEqual(["2026-05-19", "2026-05-17"]);
+
+    const may17 = await readAtlasArtifact(48, "2026-05-17");
+    expect(may17?.editorial_report.issue.title).toBe("The May 17 Paper");
+
+    const latest = await readAtlasArtifact(48);
+    expect(latest?.editorial_report.issue.title).toBe("The May 19 Paper");
+    expect(fs.existsSync(path.join(tempDir, "editions", "2026-05-17-daily-48.json"))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, "editions", "2026-05-19-daily-48.json"))).toBe(true);
+  });
+
+  test("opens the latest issue by date even before an edition archive file exists", async () => {
+    const { readAtlasArtifact, writeAtlasArtifact } = await import("./atlas-artifact");
+
+    await writeAtlasArtifact({
+      windowHours: 48,
+      atlas: sampleAtlas("2026-05-19"),
+      editorialReport: sampleEditorialReport("2026-05-19", "The May 19 Paper"),
+    });
+    fs.rmSync(path.join(tempDir, "editions"), { recursive: true, force: true });
+
+    const may19 = await readAtlasArtifact(48, "2026-05-19");
+    expect(may19?.editorial_report.issue.title).toBe("The May 19 Paper");
+
+    const may17 = await readAtlasArtifact(48, "2026-05-17");
+    expect(may17).toBeNull();
+  });
+});
+
+function sampleAtlas(date: string) {
+  return {
+    generated_at: `${date}T12:00:00Z`,
+    window: { start: `${date}T00:00:00Z`, end: `${date}T12:00:00Z`, hours: 48 },
+    overview: { messages: 0, people: 0, channels: 0, topics: 0, links: 0 },
+    channels: [],
+    topics: [],
+    matrix: [],
+    concerns: [],
+    links: [],
+    citations: {},
+    people: { window_days: 7, generated_at: `${date}T12:00:00Z`, new_faces: [], top_contributors: [] },
+    narrative: {
+      title: "Atlas",
+      summary: "",
+      report: {
+        headline: "",
+        kicker: "",
+        lead: "",
+        what_matters: [],
+        what_to_watch: [],
+        evidence_refs: [],
+      },
+      paragraphs: [],
+      main_topic: { title: "", topic: null, paragraphs: [], citation_refs: [] },
+      week_in_review: { title: "", bullets: [] },
+    },
+  } as never;
+}
+
+function sampleEditorialReport(date: string, title: string) {
+  return {
+    issue: {
+      date,
+      title,
+      subtitle: "Archived issue",
+      edition_label: "Daily Edition",
+    },
+    headline: title,
+    dek: "",
+    what_happened: [],
+    what_it_means: [],
+    why_care: [],
+    valuable: [],
+    actions: [],
+    main_topic: { title: "", paragraphs: [], evidence_refs: [] },
+    articles: [],
+    briefs: [],
+    crosscurrents: [],
+    channel_reports: [],
+    themes: [],
+    evidence: [],
+    generated_at: `${date}T12:00:00Z`,
+  } as never;
+}

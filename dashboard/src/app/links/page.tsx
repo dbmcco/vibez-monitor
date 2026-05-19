@@ -90,12 +90,36 @@ function hostname(url: string): string {
   }
 }
 
+function cleanLinkText(value: string | null | undefined): string {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|div|li|ul|ol)>/gi, " ")
+    .replace(/<a\b[^>]*>/gi, " ")
+    .replace(/<\/a>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function smartTitle(link: Link): string {
   const { url, title } = link;
+  const cleanedTitle = cleanLinkText(title);
   // Use stored title if it's actually meaningful (not just the domain/hostname)
   const host = hostname(url);
-  if (title && title !== host && !title.endsWith(".com") && !title.endsWith(".io") && !title.endsWith(".org") && title.length > host.length + 3) {
-    return title;
+  if (
+    cleanedTitle &&
+    cleanedTitle !== host &&
+    !cleanedTitle.endsWith(".com") &&
+    !cleanedTitle.endsWith(".io") &&
+    !cleanedTitle.endsWith(".org") &&
+    cleanedTitle.length > host.length + 3
+  ) {
+    return cleanedTitle;
   }
   try {
     const parsed = new URL(url);
@@ -119,7 +143,7 @@ function smartTitle(link: Link): string {
     }
     // YouTube: use title if available, else "YouTube video"
     if (parsed.hostname.includes("youtube.com") || parsed.hostname === "youtu.be") {
-      return title || "YouTube video";
+      return cleanedTitle || "YouTube video";
     }
     // Substack: user.substack.com/p/slug → humanise slug
     if (parsed.hostname.endsWith(".substack.com") && parts[0] === "p" && parts[1]) {
@@ -157,7 +181,7 @@ function categoryBadge(cat: string | null): { color: string; label: string } | n
 }
 
 function extractDescription(link: Link): string {
-  const title = link.title || "";
+  const title = cleanLinkText(link.title);
   const domain = hostname(link.url);
 
   if (title && title !== domain && title.length > domain.length + 5) {
@@ -165,7 +189,7 @@ function extractDescription(link: Link): string {
   }
 
   if (link.relevance) {
-    let text = link.relevance;
+    let text = cleanLinkText(link.relevance);
     text = text.replace(/\s*\[[\w\s,+\-.'()]+\s+topics:.*?\]\s*/g, "");
     text = text.replace(/https?:\/\/\S+/g, "");
     const chunks = text.split(/\s*\|\s*/).filter((chunk) => chunk.trim().length > 10);

@@ -7,6 +7,7 @@ import {
   atlasFrontPageHref,
   isRenderableArticleImageUrl,
 } from "@/lib/atlas-ui";
+import { cleanAtlasReaderText } from "@/lib/atlas-text";
 
 interface AtlasCitation {
   ref: string;
@@ -76,29 +77,11 @@ export default function AtlasArticleClient({
 }) {
   const [windowHours] = useState(initialWindowHours);
   const [payload, setPayload] = useState<AtlasPayload | null>(initialPayload);
-  const [loading, setLoading] = useState(!initialPayload);
+  const [loading] = useState(false);
 
   useEffect(() => {
-    if (initialPayload) {
-      return;
-    }
-    let active = true;
-    fetch(`/api/atlas?hours=${windowHours}`)
-      .then((response) => response.json())
-      .then((nextPayload: AtlasPayload) => {
-        if (!active) return;
-        setPayload(nextPayload);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!active) return;
-        setPayload(null);
-        setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [initialPayload, windowHours]);
+    setPayload(initialPayload);
+  }, [initialPayload]);
 
   const article = useMemo(() => {
     return payload?.editorial_report?.articles.find((item) => item.slug === articleSlug) || null;
@@ -143,7 +126,9 @@ export default function AtlasArticleClient({
           <h1 className="mt-2 max-w-5xl font-serif text-4xl font-black leading-none tracking-normal text-slate-950 sm:text-6xl">
             {article.title}
           </h1>
-          <p className="mt-4 max-w-4xl text-lg leading-8 text-slate-700">{article.dek}</p>
+          <p className="mt-4 max-w-4xl text-lg leading-8 text-slate-700">
+            {cleanAtlasReaderText(article.dek)}
+          </p>
         </header>
 
         <div className="mt-6 grid gap-7 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.65fr)]">
@@ -151,7 +136,7 @@ export default function AtlasArticleClient({
             <ArticleImage article={article} />
             <div className="mt-6 space-y-4 text-base leading-8 text-slate-800 sm:text-lg">
               {article.body.map((paragraph, index) => (
-                <p key={index}>{paragraph}</p>
+                <p key={index}>{cleanAtlasReaderText(paragraph)}</p>
               ))}
             </div>
             {article.evidence_refs.length > 0 && (
@@ -164,7 +149,6 @@ export default function AtlasArticleClient({
                     return (
                       <div key={ref} className="border border-slate-300 bg-white/35 p-3">
                         <p className="text-sm font-semibold text-slate-950">{citation.label}</p>
-                        <p className="mt-1 break-words text-xs text-slate-500">{ref}</p>
                       </div>
                     );
                   })}
@@ -176,7 +160,9 @@ export default function AtlasArticleClient({
                 <h2 className="font-serif text-2xl font-bold text-slate-950">What to do next</h2>
                 <div className="mt-3 space-y-2">
                   {article.actions.map((action, index) => (
-                    <p key={index} className="text-sm leading-6 text-slate-700">{action}</p>
+                    <p key={index} className="text-sm leading-6 text-slate-700">
+                      {cleanAtlasReaderText(action)}
+                    </p>
                   ))}
                 </div>
               </section>
@@ -310,9 +296,10 @@ function ArticleRail({
           return (
             <div key={ref} className="border-b border-slate-300 pb-3 last:border-b-0">
               <p className="text-sm font-semibold text-slate-950">{citation.label}</p>
-              <p className="mt-1 break-words text-xs text-slate-500">{ref}</p>
               {citation.body && (
-                <p className="mt-2 text-sm leading-6 text-slate-700">{citation.body}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  {cleanAtlasReaderText(citation.body)}
+                </p>
               )}
               {citation.url && (
                 <a
