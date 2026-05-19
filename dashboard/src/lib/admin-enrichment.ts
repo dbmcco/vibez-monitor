@@ -406,6 +406,11 @@ async function rebuildAtlas(
       stage: "write_articles",
       status: "succeeded",
     });
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "write_channel_reports",
+      status: editorialReport.channel_reports?.length ? "succeeded" : "skipped",
+    });
   } catch (error) {
     await updateAtlasPublishStage({
       jobId: publishJob?.id,

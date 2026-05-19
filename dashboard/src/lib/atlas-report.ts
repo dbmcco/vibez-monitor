@@ -71,6 +71,15 @@ export interface AtlasEditorialCrosscurrent {
   evidence_refs: string[];
 }
 
+export interface AtlasEditorialChannelReport {
+  channel: string;
+  headline: string;
+  summary: string;
+  why_it_matters: string;
+  action: string;
+  evidence_refs: string[];
+}
+
 export interface AtlasEditorialReport {
   issue: AtlasEditorialIssue;
   headline: string;
@@ -84,6 +93,7 @@ export interface AtlasEditorialReport {
   articles: AtlasEditorialArticle[];
   briefs: AtlasEditorialBrief[];
   crosscurrents: AtlasEditorialCrosscurrent[];
+  channel_reports: AtlasEditorialChannelReport[];
   themes: AtlasEditorialTheme[];
   evidence: AtlasEditorialEvidence[];
   generated_at: string;
@@ -211,6 +221,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "At least the first four article paragraphs should carry citation_refs. The fifth should carry citations when the action depends on a source.",
         "Every article must carry citations: include at least one valid evidence_refs entry, and use citation refs to support every major claim.",
         "Every article image must include a generated image brief: image.kind must be generated unless a real source image URL exists, image.prompt must describe a NYTimes-style documentary editorial photograph grounded in the article context, with dry clever nerd humor or nerd-meme references only when they serve the story. Avoid visible text, logos, cartoons, and glossy AI aesthetics. image.alt must describe the image for the page.",
+        "Write channel_reports for rooms where the evidence supports a useful room-level report. Each must answer what happened there, why it matters, what to watch or action, and cite evidence refs.",
         "Answer these questions plainly:",
         "1. What happened?",
         "2. What does this mean?",
@@ -331,6 +342,16 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
                 title: "how rooms relate",
                 text: "where channels converge, diverge, or talk past each other",
                 channels: ["channel name"],
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
+            channel_reports: [
+              {
+                channel: "channel name",
+                headline: "what happened in this room",
+                summary: "short reported summary of the room-level signal",
+                why_it_matters: "why this room signal matters to a reader",
+                action: "what to watch or do next",
                 evidence_refs: ["vibez:message:..."],
               },
             ],
@@ -501,6 +522,9 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
         "Prefer useful, surprising, human, decision-relevant story angles over generic channel summaries.",
         "Keep article seeds grounded in citations across different active channels where the evidence supports it.",
         "Do not merge unrelated citations into one story just to make the page look tidy.",
+        "Also write channel_reports for the rooms where the evidence supports a useful room-level read.",
+        "Each channel report must be model-written from channel evidence and answer what happened there, why it matters, what to watch or action, and which citation refs support it.",
+        "Do not output a channel report for a room if the evidence pack does not support a useful report.",
         "If evidence is thin or odd, say so plainly.",
         "Never refer to people as users. Say community members, practitioners, contributors, or people.",
         "Return strict JSON with this shape:",
@@ -571,6 +595,16 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
                 title: "how rooms relate",
                 text: "where channels converge, diverge, or talk past each other",
                 channels: ["channel name"],
+                evidence_refs: ["vibez:message:..."],
+              },
+            ],
+            channel_reports: [
+              {
+                channel: "channel name",
+                headline: "what happened in this room",
+                summary: "short reported summary of the room-level signal",
+                why_it_matters: "why this room signal matters to a reader",
+                action: "what to watch or do next",
                 evidence_refs: ["vibez:message:..."],
               },
             ],
@@ -1121,6 +1155,7 @@ export function normalizeAtlasEditorialReport(
     articles: [],
     briefs: readBriefs(payload.briefs, allowedRefs),
     crosscurrents: readCrosscurrents(payload.crosscurrents, allowedRefs),
+    channel_reports: readChannelReports(payload.channel_reports, allowedRefs),
     themes: readThemes(payload.themes, allowedRefs),
     evidence: readEvidence(payload.evidence, allowedRefs),
     generated_at: new Date().toISOString(),
@@ -1175,6 +1210,7 @@ function normalizeAtlasEditorialShell(
     main_topic: readMainTopic(payload.main_topic, allowedRefs, shellFallbackParagraphs(payload)),
     briefs: readBriefs(payload.briefs, allowedRefs),
     crosscurrents: readCrosscurrents(payload.crosscurrents, allowedRefs),
+    channel_reports: readChannelReports(payload.channel_reports, allowedRefs),
     themes: readThemes(payload.themes, allowedRefs),
     evidence: readEvidence(payload.evidence, allowedRefs),
     article_seeds: articleSeeds,
@@ -1508,6 +1544,32 @@ function readCrosscurrents(value: unknown, allowedRefs: Set<string>): AtlasEdito
     })
     .filter((item): item is AtlasEditorialCrosscurrent => Boolean(item))
     .slice(0, 5);
+}
+
+function readChannelReports(value: unknown, allowedRefs: Set<string>): AtlasEditorialChannelReport[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const payload = item as Record<string, unknown>;
+      const channel = readText(payload.channel);
+      const headline = readText(payload.headline);
+      const summary = readText(payload.summary);
+      const whyItMatters = readText(payload.why_it_matters);
+      const action = readText(payload.action);
+      const evidenceRefs = readTextList(payload.evidence_refs).filter((ref) => allowedRefs.has(ref));
+      if (!channel || !headline || !summary || !whyItMatters || !action || evidenceRefs.length === 0) return null;
+      return {
+        channel,
+        headline,
+        summary,
+        why_it_matters: whyItMatters,
+        action,
+        evidence_refs: evidenceRefs,
+      };
+    })
+    .filter((item): item is AtlasEditorialChannelReport => Boolean(item))
+    .slice(0, 8);
 }
 
 function readEvidence(value: unknown, allowedRefs: Set<string>): AtlasEditorialEvidence[] {

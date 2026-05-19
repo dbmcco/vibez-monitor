@@ -403,6 +403,16 @@ describe("atlas editorial report", () => {
             evidence_refs: ["vibez:message:m1", "vibez:message:nope"],
           },
         ],
+        channel_reports: [
+          {
+            channel: "Agents",
+            headline: "Agents turned evaluation into the room's operating question",
+            summary: "The channel treated evaluation as the blocker worth resolving.",
+            why_it_matters: "That makes the room useful for readers tracking operational maturity.",
+            action: "Watch whether the next pass names an owner for the evaluation loop.",
+            evidence_refs: ["vibez:message:m1", "vibez:message:nope"],
+          },
+        ],
         evidence: [
           {
             ref: "vibez:message:m1",
@@ -415,6 +425,10 @@ describe("atlas editorial report", () => {
     );
 
     expect(report.themes[0].evidence_refs).toEqual(["vibez:message:m1"]);
+    expect(report.channel_reports[0]).toMatchObject({
+      channel: "Agents",
+      evidence_refs: ["vibez:message:m1"],
+    });
     expect(report.main_topic.paragraphs).toHaveLength(5);
     expect(report.main_topic.evidence_refs).toEqual(["vibez:message:m1"]);
     expect(report.evidence[0].why_it_matters).toContain("blocker");

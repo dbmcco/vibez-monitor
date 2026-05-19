@@ -157,6 +157,14 @@ interface AtlasEditorialReport {
     channels: string[];
     evidence_refs: string[];
   }>;
+  channel_reports: Array<{
+    channel: string;
+    headline: string;
+    summary: string;
+    why_it_matters: string;
+    action: string;
+    evidence_refs: string[];
+  }>;
   themes: Array<{
     title: string;
     analysis: string;
@@ -350,7 +358,7 @@ export default function AtlasPage({
       />
 
       <PeopleDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
-      <RoomsDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
+      <RoomsDesk atlas={atlas} report={editorialReport} onOpenCitation={setSelectedCitationRef} />
 
       <section className="rounded border border-[#cbbf9d] bg-[#f7edd9] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1017,12 +1025,14 @@ function PeopleDesk({
 
 function RoomsDesk({
   atlas,
+  report,
   onOpenCitation,
 }: {
   atlas: AtlasSnapshot;
+  report: AtlasEditorialReport | null;
   onOpenCitation: (ref: string) => void;
 }) {
-  const rooms = atlas.channels.slice(0, 6);
+  const reports = report?.channel_reports || [];
   return (
     <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#cbbf9d] pb-3">
@@ -1038,39 +1048,36 @@ function RoomsDesk({
         </p>
       </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        {rooms.map((room) => {
-          const topTopic = room.top_topics[0] || null;
-          const secondTopic = room.top_topics[1] || null;
-          return (
-            <article key={room.name} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
-              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
-                {room.message_count.toLocaleString()} messages · {room.people.length.toLocaleString()} people
+        {reports.slice(0, 6).map((roomReport) => (
+          <article key={`${roomReport.channel}-${roomReport.headline}`} className="min-w-0 border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+            <p className="break-words text-[11px] font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+              {roomReport.channel}
+            </p>
+            <h3 className="mt-2 break-words font-serif text-xl font-bold leading-6 text-[#1f1a12]">
+              {roomReport.headline}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-[#5e5238]">{roomReport.summary}</p>
+            <div className="mt-3 grid gap-3 border-t border-[#d8cba9] pt-3 text-sm leading-6">
+              <p className="text-[#342a1b]">
+                <span className="font-semibold">Why it matters: </span>
+                {roomReport.why_it_matters}
               </p>
-              <h3 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">{room.name}</h3>
-              <p className="mt-2 text-sm leading-6 text-[#5e5238]">
-                {topTopic
-                  ? `${topTopic.name} led the room, with ${topTopic.count.toLocaleString()} visible signals.`
-                  : "Atlas did not find a dominant theme in this room."}
-                {secondTopic ? ` ${secondTopic.name} was the next thread to watch.` : ""}
+              <p className="text-[#342a1b]">
+                <span className="font-semibold">Watch/action: </span>
+                {roomReport.action}
               </p>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {room.top_topics.slice(0, 4).map((topic) => (
-                  <span key={topic.name} className="border border-[#d8cba9] bg-[#f8f4ea] px-2 py-0.5 text-xs text-[#342a1b]">
-                    {topic.name} · {topic.count}
-                  </span>
-                ))}
-              </div>
-              <CitationList
-                atlas={atlas}
-                refs={room.citation_refs.slice(0, 2)}
-                onOpenCitation={onOpenCitation}
-              />
-            </article>
-          );
-        })}
-        {rooms.length === 0 && (
+            </div>
+            <CitationList
+              atlas={atlas}
+              refs={roomReport.evidence_refs.slice(0, 3)}
+              onOpenCitation={onOpenCitation}
+            />
+          </article>
+        ))}
+        {reports.length === 0 && (
           <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4 text-sm leading-6 text-[#5e5238] lg:col-span-3">
-            No room-level activity was available for this edition.
+            This edition has no model-written channel reports. The next publish should fill this
+            desk when the evidence supports room-level reporting.
           </div>
         )}
       </div>

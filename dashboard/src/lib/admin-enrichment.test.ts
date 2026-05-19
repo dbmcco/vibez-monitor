@@ -181,6 +181,12 @@ describe("Railway admin enrichment", () => {
         { section: "Agent Architecture" },
         { section: "AI Writing" },
       ],
+      channel_reports: [
+        {
+          channel: "Agents",
+          headline: "Agents made evaluation operational",
+        },
+      ],
     });
     writeAtlasArtifactMock.mockResolvedValue("/tmp/atlas-48.json");
     process.env.VIBEZ_ATLAS_ARTIFACT_WRITE = "1";
@@ -212,6 +218,11 @@ describe("Railway admin enrichment", () => {
       jobId: "atlas-job-1",
       stage: "write_articles",
       status: "running",
+    });
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: "atlas-job-1",
+      stage: "write_channel_reports",
+      status: "succeeded",
     });
     expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
       jobId: "atlas-job-1",

@@ -55,6 +55,7 @@ function sampleReport(): AtlasEditorialReport {
     ],
     briefs: [],
     crosscurrents: [],
+    channel_reports: [],
     themes: [],
     evidence: [],
     generated_at: "2026-05-19T10:00:00Z",
