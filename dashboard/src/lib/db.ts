@@ -119,6 +119,44 @@ function isStatsRecordTimestamp(ts: number): boolean {
   return ts >= STATS_RECORD_START_TS;
 }
 
+function relationshipEvidenceLabel(edge: {
+  dm_signals: number;
+  mentions: number;
+  replies: number;
+  turns: number;
+}): RelationshipEdge["evidence_label"] {
+  if (edge.dm_signals > 0) return "dm/offline";
+  if (edge.mentions >= edge.replies && edge.mentions > 0) return "mention";
+  if (edge.replies > 0) return "reply";
+  return "turn";
+}
+
+function relationshipConfidence(edge: {
+  dm_signals: number;
+  mentions: number;
+  replies: number;
+  turns: number;
+}): number {
+  const raw =
+    edge.dm_signals * 0.44 +
+    edge.mentions * 0.32 +
+    edge.replies * 0.28 +
+    edge.turns * 0.08;
+  return Number(Math.min(0.99, raw).toFixed(2));
+}
+
+function identityStatusForPerson(name: string, possiblePhone: boolean): RelationshipNode["identity_status"] {
+  if (possiblePhone || PHONE_LIKE_RE.test(name)) return "phone";
+  if (!name || name.toLowerCase() === "unknown") return "unknown";
+  return "named";
+}
+
+function communityRoleForPerson(messages: number, bridgeScore: number): RelationshipNode["community_role"] {
+  if (bridgeScore >= 12 || (bridgeScore >= 8 && messages >= 30)) return "bridge";
+  if (messages >= 100 || bridgeScore >= 6) return "hub";
+  return "participant";
+}
+
 function normalizeExclusionList(values: string[]): string[] {
   return values
     .map((name) => name.trim().toLowerCase())
@@ -2094,6 +2132,9 @@ export interface RelationshipNode {
   replies_out: number;
   replies_in: number;
   dm_signals: number;
+  identity_status: "named" | "phone" | "unknown";
+  bridge_score: number;
+  community_role: "hub" | "bridge" | "participant";
   top_topics: string[];
 }
 
@@ -2105,6 +2146,8 @@ export interface RelationshipEdge {
   mentions: number;
   dm_signals: number;
   turns: number;
+  evidence_label: "dm/offline" | "mention" | "reply" | "turn";
+  confidence: number;
 }
 
 export interface TopicAlignmentEdge {
@@ -3101,7 +3144,7 @@ function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashb
         ids.add(senderId);
         userIds.set(sender, ids);
       }
-      if (PHONE_LIKE_RE.test(senderId) || PHONE_LIKE_RE.test(row.sender_name || "")) {
+      if (PHONE_LIKE_RE.test(row.sender_name || "") || PHONE_LIKE_RE.test(sender)) {
         userPossiblePhone.set(sender, true);
       }
 
@@ -3237,6 +3280,9 @@ function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashb
         replies_out: 0,
         replies_in: 0,
         dm_signals: 0,
+        identity_status: identityStatusForPerson(name, userPossiblePhone.get(name) || false),
+        bridge_score: 0,
+        community_role: "participant" as const,
         top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
       }))
       .sort((a, b) => b.messages - a.messages)
@@ -3447,6 +3493,8 @@ export async function getStatsDashboard(
       mentions: 0,
       dm_signals: 0,
       turns: 0,
+      evidence_label: "turn",
+      confidence: 0,
     };
     existing.replies += delta.replies ?? 0;
     existing.mentions += delta.mentions ?? 0;
@@ -3460,6 +3508,8 @@ export async function getStatsDashboard(
         existing.turns * 0.8
       ).toFixed(3),
     );
+    existing.evidence_label = relationshipEvidenceLabel(existing);
+    existing.confidence = relationshipConfidence(existing);
     relationshipEdges.set(key, existing);
     relationshipOutbound.set(source, (relationshipOutbound.get(source) || 0) + 1);
     relationshipInbound.set(target, (relationshipInbound.get(target) || 0) + 1);
@@ -3521,7 +3571,7 @@ export async function getStatsDashboard(
       ids.add(senderId);
       userIds.set(sender, ids);
     }
-    if (PHONE_LIKE_RE.test(senderId) || PHONE_LIKE_RE.test(row.sender_name || "")) {
+    if (PHONE_LIKE_RE.test(row.sender_name || "") || PHONE_LIKE_RE.test(sender)) {
       userPossiblePhone.set(sender, true);
     }
 
@@ -3843,15 +3893,32 @@ export async function getStatsDashboard(
   };
 
   const relationshipNodes: RelationshipNode[] = Array.from(users.entries())
-    .map(([name, acc]) => ({
-      id: name,
-      messages: acc.messages,
-      channels: userChannels.get(name)?.size || 0,
-      replies_out: relationshipOutbound.get(name) || 0,
-      replies_in: relationshipInbound.get(name) || 0,
-      dm_signals: dmSignalsByUser.get(name) || 0,
-      top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
-    }))
+    .map(([name, acc]) => {
+      const channelsForUser = userChannels.get(name)?.size || 0;
+      const repliesOut = relationshipOutbound.get(name) || 0;
+      const repliesIn = relationshipInbound.get(name) || 0;
+      const dmSignals = dmSignalsByUser.get(name) || 0;
+      const bridgeScore = Number(
+        (
+          Math.log1p(repliesOut) * 1.2 +
+          Math.log1p(repliesIn) * 1.4 +
+          Math.log1p(dmSignals) * 1.1 +
+          Math.max(0, channelsForUser - 1) * 0.45
+        ).toFixed(2),
+      );
+      return {
+        id: name,
+        messages: acc.messages,
+        channels: channelsForUser,
+        replies_out: repliesOut,
+        replies_in: repliesIn,
+        dm_signals: dmSignals,
+        identity_status: identityStatusForPerson(name, userPossiblePhone.get(name) || false),
+        bridge_score: bridgeScore,
+        community_role: communityRoleForPerson(acc.messages, bridgeScore),
+        top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
+      };
+    })
     .sort((a, b) => b.messages - a.messages)
     .slice(0, 220);
 
@@ -3867,13 +3934,31 @@ export async function getStatsDashboard(
     .slice(0, 1800);
 
   const alignmentNodes = relationshipNodes.slice(0, 120);
+  const topicUserFrequency = new Map<string, number>();
+  for (const topicMap of userTopicCounts.values()) {
+    for (const topic of topicMap.keys()) {
+      topicUserFrequency.set(topic, (topicUserFrequency.get(topic) || 0) + 1);
+    }
+  }
+  const comparedUsers = Math.max(1, userTopicCounts.size);
+  const weightedTopicCounts = new Map<string, Map<string, number>>();
+  for (const [name, topicMap] of userTopicCounts.entries()) {
+    const weighted = new Map<string, number>();
+    for (const [topic, count] of topicMap.entries()) {
+      const frequency = topicUserFrequency.get(topic) || 1;
+      const idf = Math.log((comparedUsers + 1) / (frequency + 1)) + 1;
+      const broadTopicPenalty = frequency / comparedUsers > 0.5 ? 0.45 : 1;
+      weighted.set(topic, Number((Math.sqrt(count) * idf * broadTopicPenalty).toFixed(4)));
+    }
+    weightedTopicCounts.set(name, weighted);
+  }
   const alignmentEdges: TopicAlignmentEdge[] = [];
   for (let i = 0; i < alignmentNodes.length; i += 1) {
     for (let j = i + 1; j < alignmentNodes.length; j += 1) {
       const left = alignmentNodes[i];
       const right = alignmentNodes[j];
-      const leftTopics = userTopicCounts.get(left.id) || new Map<string, number>();
-      const rightTopics = userTopicCounts.get(right.id) || new Map<string, number>();
+      const leftTopics = weightedTopicCounts.get(left.id) || new Map<string, number>();
+      const rightTopics = weightedTopicCounts.get(right.id) || new Map<string, number>();
       if (leftTopics.size === 0 || rightTopics.size === 0) continue;
 
       const similarity = cosineSimilarity(leftTopics, rightTopics);

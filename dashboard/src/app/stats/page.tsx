@@ -80,6 +80,9 @@ interface RelationshipNode {
   replies_out: number;
   replies_in: number;
   dm_signals: number;
+  identity_status: "named" | "phone" | "unknown";
+  bridge_score: number;
+  community_role: "hub" | "bridge" | "participant";
   top_topics: string[];
 }
 
@@ -91,6 +94,8 @@ interface RelationshipEdge {
   mentions: number;
   dm_signals: number;
   turns: number;
+  evidence_label: "dm/offline" | "mention" | "reply" | "turn";
+  confidence: number;
 }
 
 interface TopicAlignmentEdge {
@@ -1011,7 +1016,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
   const [focusedNode, setFocusedNode] = useState<string | null>(null);
   const [personInput, setPersonInput] = useState("");
   const [minRelationshipWeight, setMinRelationshipWeight] = useState(2.8);
-  const [minAlignmentSimilarity, setMinAlignmentSimilarity] = useState(0.56);
+  const [minAlignmentSimilarity, setMinAlignmentSimilarity] = useState(0.68);
   const [neighborLimit, setNeighborLimit] = useState(60);
   const [showNeighborEdges, setShowNeighborEdges] = useState(false);
   const [hideIsolated, setHideIsolated] = useState(true);
@@ -1057,6 +1062,25 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
     () => [...baseNodes].sort((a, b) => b.messages - a.messages),
     [baseNodes],
   );
+  const unresolvedIdentityCount = useMemo(
+    () => sortedNodes.filter((node) => node.identity_status !== "named").length,
+    [sortedNodes],
+  );
+  const bridgePeople = useMemo(
+    () =>
+      [...sortedNodes]
+        .filter((node) => node.bridge_score > 0)
+        .sort((a, b) => {
+          if (b.bridge_score !== a.bridge_score) return b.bridge_score - a.bridge_score;
+          return b.messages - a.messages;
+        })
+        .slice(0, 8),
+    [sortedNodes],
+  );
+  const modeLabel = isRelationship ? "Conversation Map" : "Theme Map";
+  const modeDescription = isRelationship
+    ? "Edges are inferred from mentions, replies, nearby turns, and DM/offline intent signals."
+    : "Edges compare each person's weighted topic profile, with broad topics down-weighted.";
   const nodeById = useMemo(
     () => new Map(sortedNodes.map((node) => [node.id, node])),
     [sortedNodes],
@@ -1962,7 +1986,16 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
   }, [hoveredNode, displayedEdges]);
 
   const labelNodeSet = useMemo(
-    () => new Set(displayedNodes.slice(0, 24).map((node) => node.id)),
+    () =>
+      new Set(
+        [...displayedNodes]
+          .sort((a, b) => {
+            if (b.bridge_score !== a.bridge_score) return b.bridge_score - a.bridge_score;
+            return b.messages - a.messages;
+          })
+          .slice(0, 12)
+          .map((node) => node.id),
+      ),
     [displayedNodes],
   );
 
@@ -2138,7 +2171,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
           }}
           className={`rounded px-3 py-1 text-sm ${isRelationship ? "vibe-button" : "vibe-chip"}`}
         >
-          Relationships
+          Conversation Map
         </button>
         <button
           onClick={() => {
@@ -2151,7 +2184,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
           }}
           className={`rounded px-3 py-1 text-sm ${!isRelationship ? "vibe-button" : "vibe-chip"}`}
         >
-          Topic Alignment
+          Theme Map
         </button>
         <span className="text-xs text-slate-400">
           {isRelationship
@@ -2159,13 +2192,37 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
             : `${network.topic_alignment.summaries.included_nodes} people compared`}
         </span>
         <span className="text-xs text-slate-500">
-          communities {community.clusters.length} · visible {clusterSummaries.length}
+          communities {community.clusters.length} · clusters shown {clusterSummaries.length}
+        </span>
+        <span className="text-xs text-amber-300/80">
+          identity cleanup {unresolvedIdentityCount}
         </span>
         {personQuery ? (
           <span className="text-xs text-cyan-300/85">
             search filter active · {displayedNodes.length} people in graph
           </span>
         ) : null}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] p-3 text-xs text-[#5b4f3b] md:col-span-2">
+          <div className="font-semibold uppercase tracking-wide text-[#7b2f20]">{modeLabel}</div>
+          <p className="mt-1 leading-relaxed">{modeDescription}</p>
+        </div>
+        <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] p-3 text-xs text-[#5b4f3b]">
+          <div className="font-semibold uppercase tracking-wide text-[#7b2f20]">Map Health</div>
+          <p className="mt-1">
+            {displayedNodes.length} people · {displayedEdges.length} visible edges · {unresolvedIdentityCount} unresolved identities.
+          </p>
+        </div>
+        <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] p-3 text-xs text-[#5b4f3b]">
+          <div className="font-semibold uppercase tracking-wide text-[#7b2f20]">Bridge People</div>
+          <p className="mt-1 line-clamp-2">
+            {bridgePeople.length > 0
+              ? bridgePeople.slice(0, 4).map((node) => node.id).join(", ")
+              : "No bridge signals at this threshold."}
+          </p>
+        </div>
       </div>
 
       <div className="grid gap-3 rounded-lg border border-slate-700/70 bg-slate-900/45 p-3 lg:grid-cols-6">
@@ -2502,6 +2559,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
           const isFocused = resolvedFocus === node.id;
           const isNeighbor = hoveredNode !== null && hoveredNeighbors.has(node.id);
           const muted = hoveredNode !== null && !isHovered && !isNeighbor;
+          const identityNeedsCleanup = node.identity_status !== "named";
           const radius =
             5.4 +
             Math.sqrt(node.messages / maxMessages) * 11 +
@@ -2525,8 +2583,15 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                 fillOpacity={
                   isHovered ? 0.96 : isNeighbor || isFocused ? 0.8 : muted ? 0.2 : 0.58
                 }
-                stroke={isHovered || isFocused ? "#e2e8f0" : "#0f172a"}
-                strokeWidth={isHovered || isFocused ? 1.8 : 1}
+                stroke={
+                  identityNeedsCleanup
+                    ? "#b45309"
+                    : isHovered || isFocused
+                      ? "#e2e8f0"
+                      : "#0f172a"
+                }
+                strokeWidth={identityNeedsCleanup ? 2 : isHovered || isFocused ? 1.8 : 1}
+                strokeDasharray={identityNeedsCleanup ? "3 2" : undefined}
               />
               {shouldLabel ? (
                 <text
@@ -2571,6 +2636,19 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                 {activeNode.replies_in}
                 {isRelationship ? ` · dm/offline ${activeNode.dm_signals}` : ""}
               </div>
+              <div className="flex flex-wrap gap-2 text-[11px]">
+                <span className="rounded border border-slate-700/70 px-2 py-0.5 text-slate-300">
+                  role: {activeNode.community_role}
+                </span>
+                <span className="rounded border border-slate-700/70 px-2 py-0.5 text-slate-300">
+                  bridge {activeNode.bridge_score.toFixed(1)}
+                </span>
+                {activeNode.identity_status !== "named" ? (
+                  <span className="rounded border border-amber-700/60 bg-amber-950/30 px-2 py-0.5 text-amber-200">
+                    identity needs cleanup: {activeNode.identity_status}
+                  </span>
+                ) : null}
+              </div>
               <div className="text-slate-400">
                 Connections at threshold: {activeVisibleConnectionCount} visible / {activeConnectionCount} total
               </div>
@@ -2586,8 +2664,9 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                       const edge = item.edge.detail as RelationshipEdge;
                       return (
                         <div key={`${item.other}-${index}`}>
-                          {item.other} · w={item.edge.metric.toFixed(1)} · r{edge.replies} · m
-                          {edge.mentions} · dm{edge.dm_signals}
+                          {item.other} · {edge.evidence_label} · w={item.edge.metric.toFixed(1)} · conf{" "}
+                          {(edge.confidence * 100).toFixed(0)}% · r{edge.replies} · m{edge.mentions} · dm
+                          {edge.dm_signals}
                         </div>
                       );
                     }
@@ -2617,7 +2696,8 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                 const targetCluster = community.clusterByNode.get(edge.target) || "c0";
                 return isRelationship ? (
                   <div key={`${edge.source}-${edge.target}-${index}`}>
-                    {edge.source} → {edge.target} · w={edge.metric.toFixed(1)} ·{" "}
+                    {edge.source} → {edge.target} · {(edge.detail as RelationshipEdge).evidence_label} · w=
+                    {edge.metric.toFixed(1)} · conf {((edge.detail as RelationshipEdge).confidence * 100).toFixed(0)}% ·{" "}
                     {sourceCluster.toUpperCase()}
                     {sourceCluster === targetCluster ? "" : ` to ${targetCluster.toUpperCase()}`}
                   </div>
@@ -2667,7 +2747,7 @@ const SECTION_LINKS = [
   { id: "coverage-trend", label: "Coverage" },
   { id: "semantic-arcs", label: "Semantic Arcs" },
   { id: "topic-explorer", label: "Topics" },
-  { id: "people-network", label: "People Network" },
+  { id: "people-network", label: "Community Map" },
   { id: "topic-graph", label: "Graph" },
   { id: "contributors", label: "Users + Channels" },
   { id: "people-directory", label: "Directory" },
@@ -3142,11 +3222,9 @@ export default function StatsPage() {
       </section>
 
       <section id="people-network" className="vibe-panel scroll-mt-28 rounded-xl p-5">
-        <h2 className="vibe-title mb-3 text-lg">People Relationship Network</h2>
-        <p className="mb-3 text-sm text-slate-300">
-          Nodes represent participants. Relationship edges are inferred from explicit mentions,
-          conversational replies/turns, and DM-offline signals. Topic Alignment edges show who has
-          similar interest distributions.
+        <h2 className="vibe-title mb-3 text-lg">Community Map</h2>
+        <p className="mb-3 max-w-3xl text-sm text-[#5f5544]">
+          A working map of conversation ties, shared themes, bridge people, and identity cleanup spots across the archive.
         </p>
         <PeopleNetworkGraph network={stats.network} />
       </section>
