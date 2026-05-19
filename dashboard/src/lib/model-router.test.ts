@@ -119,9 +119,11 @@ describe("model-router", () => {
       manifestPath,
     });
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toMatchObject({
       model: "mxbai-embed-large:latest",
       truncate: true,
     });
+    expect(body.input[0].length).toBeLessThanOrEqual(1600);
   });
 });

@@ -15,6 +15,7 @@ PROVIDER_CREDENTIAL_ENVS = {
     "anthropic": ("VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
     "openrouter": ("VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
 }
+DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS = 1600
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,22 @@ def _normalize_embedding_dimensions(
     if norm <= 0:
         return shortened
     return [value / norm for value in shortened]
+
+
+def _ollama_embedding_input_max_chars() -> int:
+    raw = os.environ.get("VIBEZ_OLLAMA_EMBEDDING_INPUT_MAX_CHARS", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS
+    if value <= 0:
+        return DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS
+    return max(256, min(value, 8000))
+
+
+def _normalize_ollama_embedding_inputs(texts: list[str]) -> list[str]:
+    max_chars = _ollama_embedding_input_max_chars()
+    return [str(text or "")[:max_chars] for text in texts]
 
 
 def _build_messages(
@@ -251,7 +268,8 @@ def _embed_ollama(
         f"{base_url.rstrip('/')}/api/embed",
         json={
             "model": route.model,
-            "input": texts,
+            "input": _normalize_ollama_embedding_inputs(texts),
+            "truncate": True,
         },
         timeout=max(route.timeout_ms / 1000, 1),
     )

@@ -38,6 +38,7 @@ export interface ModelEmbeddingResult {
 }
 
 const ROUTE_CACHE = new Map<string, Record<string, ModelRoute>>();
+const DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS = 1600;
 const PROVIDER_CREDENTIAL_ENVS = {
   openai: ["VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"],
   anthropic: ["VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
@@ -122,6 +123,17 @@ function normalizeEmbeddingDimensions(
   );
   if (norm <= 0) return shortened;
   return shortened.map((value) => value / norm);
+}
+
+function ollamaEmbeddingInputMaxChars(): number {
+  const value = Number.parseInt(process.env.VIBEZ_OLLAMA_EMBEDDING_INPUT_MAX_CHARS || "", 10);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS;
+  return Math.max(256, Math.min(value, 8000));
+}
+
+function normalizeOllamaEmbeddingInputs(inputs: string[]): string[] {
+  const maxChars = ollamaEmbeddingInputMaxChars();
+  return inputs.map((input) => String(input || "").slice(0, maxChars));
 }
 
 function buildMessages({
@@ -346,7 +358,7 @@ async function runOllamaEmbeddingRoute(
       signal: AbortSignal.timeout(route.timeout_ms),
       body: JSON.stringify({
         model: route.model,
-        input: inputs,
+        input: normalizeOllamaEmbeddingInputs(inputs),
         truncate: true,
       }),
     });

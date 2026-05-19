@@ -5,6 +5,7 @@ import pytest
 
 from vibez.model_router import (
     ModelRoute,
+    embed_texts,
     generate_text,
     get_route,
     load_routes,
@@ -193,3 +194,52 @@ def test_ollama_text_route_defaults_to_localhost(tmp_path: Path, monkeypatch: py
     generate_text("classification.inline", prompt="classify", manifest_path=manifest)
 
     assert captured["url"] == "http://localhost:11434/api/chat"
+
+
+def test_ollama_embedding_route_caps_input_length(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = tmp_path / "model-routing.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "routes": {
+                    "embedding.semantic": {
+                        "provider": "ollama",
+                        "model": "mxbai-embed-large:latest",
+                        "mode": "embedding",
+                        "max_tokens": 0,
+                        "temperature": 0,
+                        "timeout_ms": 30000,
+                        "dimensions": 64,
+                    },
+                },
+            }
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"embeddings": [[0.25] * 64]}
+
+    def fake_post(url: str, **kwargs: object) -> Response:
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return Response()
+
+    monkeypatch.setattr("vibez.model_router.httpx.post", fake_post)
+
+    embed_texts(
+        "embedding.semantic",
+        ["x" * 20_000],
+        dimensions=64,
+        manifest_path=manifest,
+    )
+
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert payload["truncate"] is True
+    assert len(payload["input"][0]) <= 1600
