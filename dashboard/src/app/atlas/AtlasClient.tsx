@@ -213,11 +213,11 @@ interface AtlasEditionSummary {
   href: string;
 }
 
-type Lens = "themes" | "rooms" | "evidence" | "diagnostics";
+type Lens = "value" | "rooms" | "evidence" | "diagnostics";
 
 const LENSES: Array<{ key: Lens; label: string }> = [
-  { key: "themes", label: "Themes" },
-  { key: "rooms", label: "Rooms" },
+  { key: "value", label: "Reader Value" },
+  { key: "rooms", label: "Channels" },
   { key: "evidence", label: "Evidence" },
   { key: "diagnostics", label: "Diagnostics" },
 ];
@@ -237,7 +237,7 @@ export default function AtlasPage({
   const [loading, setLoading] = useState(!initialAtlas);
   const [error, setError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState(initialWindowHours);
-  const [lens, setLens] = useState<Lens>("themes");
+  const [lens, setLens] = useState<Lens>("value");
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(
     initialAtlas?.matrix[0] ? cellKey(initialAtlas.matrix[0]) : null,
   );
@@ -365,8 +365,8 @@ export default function AtlasPage({
           <div>
             <h2 className="font-serif text-xl font-bold text-[#1f1a12]">Below the Fold</h2>
             <p className="mt-1 text-sm text-[#5e5238]">
-              The front page explains the story. This section shows value, evidence, rooms, links,
-              and the raw diagnostic map.
+              The front page explains the story. This section turns the record into signals,
+              unresolved questions, evidence, and links worth opening.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -387,11 +387,15 @@ export default function AtlasPage({
         </div>
       </section>
 
-      <ValueAssessment report={editorialReport} atlas={atlas} />
-
       <section className="grid gap-4 xl:grid-cols-[1.4fr_0.8fr]">
         <div className="space-y-4">
-          {lens === "themes" && <TopicLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
+          {lens === "value" && (
+            <BelowFoldValueDesk
+              report={editorialReport}
+              atlas={atlas}
+              onOpenCitation={setSelectedCitationRef}
+            />
+          )}
           {lens === "rooms" && <ChannelLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
           {lens === "evidence" && <EvidenceLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
           {lens === "diagnostics" && (
@@ -1166,42 +1170,120 @@ function EditionArchive({
   );
 }
 
-function ValueAssessment({
+function BelowFoldValueDesk({
   report,
   atlas,
+  onOpenCitation,
 }: {
   report: AtlasEditorialReport | null;
   atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
 }) {
-  const valueItems = report?.valuable.length ? report.valuable : atlas.narrative.report.what_matters;
-  const actionItems = report?.actions.length ? report.actions : atlas.narrative.report.what_to_watch;
-  const themeItems = report?.themes.length
-    ? report.themes.slice(0, 3).map((theme) => `${theme.title}: ${theme.analysis}`)
-    : atlas.topics.slice(0, 3).map((topic) => `${topic.name}: ${topic.message_count} messages across ${topic.channels.length} rooms.`);
+  const signals = [
+    ...(report?.valuable || []),
+    ...(report?.actions || []).map((action) => `Action: ${action}`),
+  ].slice(0, 6);
+  const unresolved = atlas.concerns
+    .filter((concern) => concern.kind === "unresolved_question" || concern.kind === "hot_alert")
+    .slice(0, 4);
+  const evidence = report?.evidence?.slice(0, 5) || [];
+  const usefulLinks = atlas.links.slice(0, 6);
 
   return (
-    <section className="grid gap-4 lg:grid-cols-3">
-      <AssessmentColumn title="What is valuable here" items={valueItems} />
-      <AssessmentColumn title="What needs action" items={actionItems} />
-      <AssessmentColumn title="Themes to watch" items={themeItems} />
+    <section className="grid gap-4 lg:grid-cols-2">
+      <BelowFoldPanel title="Signals Worth Acting On">
+        <div className="space-y-3">
+          {signals.map((item, index) => (
+            <p key={index} className="border-t border-[#d8cba9] pt-2 text-sm leading-6 text-[#342a1b] first:border-t-0 first:pt-0">
+              {item}
+            </p>
+          ))}
+          {signals.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              No model-written action signal was published for this edition.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
+
+      <BelowFoldPanel title="Unresolved Questions">
+        <div className="space-y-3">
+          {unresolved.map((concern) => (
+            <article key={concern.title} className="border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
+              <h3 className="break-words font-serif text-lg font-bold leading-6 text-[#1f1a12]">
+                {concern.title}
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">{concern.detail}</p>
+              <CitationList
+                atlas={atlas}
+                refs={concern.citation_refs.slice(0, 2)}
+                onOpenCitation={onOpenCitation}
+              />
+            </article>
+          ))}
+          {unresolved.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              No unresolved-question signal stood out in this edition.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
+
+      <BelowFoldPanel title="Evidence Desk">
+        <div className="space-y-3">
+          {evidence.map((item) => (
+            <article key={item.ref} className="border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
+              <button
+                type="button"
+                onClick={() => onOpenCitation(item.ref)}
+                className="text-left font-serif text-lg font-bold leading-6 text-[#1f1a12] underline decoration-[#cbbf9d] underline-offset-4 hover:text-[#8b5f21]"
+              >
+                {item.label}
+              </button>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">{item.why_it_matters}</p>
+            </article>
+          ))}
+          {evidence.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              The edition did not publish a curated evidence desk.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
+
+      <BelowFoldPanel title="Useful Links">
+        <div className="space-y-3">
+          {usefulLinks.map((link) => (
+            <a
+              key={link.ref}
+              href={link.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block min-w-0 border-t border-[#d8cba9] pt-3 text-sm leading-6 text-[#342a1b] first:border-t-0 first:pt-0 hover:text-[#8b5f21]"
+            >
+              <span className="block break-words font-semibold">{link.title}</span>
+              <span className="block text-xs text-[#786846]">
+                {link.source_group || "source unavailable"}
+                {link.shared_by ? ` · shared by ${link.shared_by}` : ""}
+              </span>
+            </a>
+          ))}
+          {usefulLinks.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              No links were captured in this reporting window.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
     </section>
   );
 }
 
-function AssessmentColumn({ title, items }: { title: string; items: string[] }) {
+function BelowFoldPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4">
       <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
-      <div className="mt-3 space-y-3">
-        {items.slice(0, 4).map((item, index) => (
-          <p key={index} className="border-t border-[#d8cba9] pt-2 text-sm leading-6 text-[#5e5238] first:border-t-0 first:pt-0">
-            {item}
-          </p>
-        ))}
-        {items.length === 0 && (
-          <p className="text-sm leading-6 text-[#786846]">No clear signal in this window.</p>
-        )}
-      </div>
+      <div className="mt-3">{children}</div>
     </section>
   );
 }
@@ -1410,23 +1492,6 @@ function ChannelLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCi
             ))}
           </div>
           <CitationList atlas={atlas} refs={channel.citation_refs} onOpenCitation={onOpenCitation} />
-        </article>
-      ))}
-    </LensGrid>
-  );
-}
-
-function TopicLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitation: (ref: string) => void }) {
-  return (
-    <LensGrid>
-      {atlas.topics.map((topic) => (
-        <article key={topic.name} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
-          <p className="text-sm font-semibold text-[#1f1a12]">{topic.name}</p>
-          <p className="mt-1 text-xs text-[#786846]">
-            {topic.message_count} messages | {topic.channels.length} channels
-          </p>
-          <p className="mt-2 text-xs text-[#786846]">{topic.channels.slice(0, 5).join(", ")}</p>
-          <CitationList atlas={atlas} refs={topic.citation_refs} onOpenCitation={onOpenCitation} />
         </article>
       ))}
     </LensGrid>
