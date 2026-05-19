@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const queryMock = vi.fn();
 const generateJsonMock = vi.fn();
 const embedTextsMock = vi.fn();
+const getAtlasSnapshotMock = vi.fn();
+const generateAtlasEditorialReportMock = vi.fn();
+const writeAtlasArtifactMock = vi.fn();
+const startAtlasPublishJobMock = vi.fn();
+const updateAtlasPublishStageMock = vi.fn();
 
 vi.mock("pg", () => ({
   Pool: vi.fn(() => ({
@@ -16,15 +21,18 @@ vi.mock("./model-router", () => ({
 }));
 
 vi.mock("./db", () => ({
-  getAtlasSnapshot: vi.fn(),
+  getAtlasSnapshot: getAtlasSnapshotMock,
 }));
 
 vi.mock("./atlas-report", () => ({
-  generateAtlasEditorialReport: vi.fn(),
+  generateAtlasEditorialReport: generateAtlasEditorialReportMock,
 }));
 
 vi.mock("./atlas-artifact", () => ({
-  writeAtlasArtifact: vi.fn(),
+  writeAtlasArtifact: writeAtlasArtifactMock,
+  startAtlasPublishJob: startAtlasPublishJobMock,
+  updateAtlasPublishStage: updateAtlasPublishStageMock,
+  editionTypeForWindow: (windowHours: number) => windowHours >= 120 ? "sunday_review" : "daily",
 }));
 
 const ORIGINAL_ENV = process.env;
@@ -35,6 +43,11 @@ describe("Railway admin enrichment", () => {
     queryMock.mockReset();
     generateJsonMock.mockReset();
     embedTextsMock.mockReset();
+    getAtlasSnapshotMock.mockReset();
+    generateAtlasEditorialReportMock.mockReset();
+    writeAtlasArtifactMock.mockReset();
+    startAtlasPublishJobMock.mockReset();
+    updateAtlasPublishStageMock.mockReset();
     process.env = {
       ...ORIGINAL_ENV,
       VIBEZ_DATABASE_URL: "postgres://railway-db",
@@ -138,5 +151,73 @@ describe("Railway admin enrichment", () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO classifications"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_message_embeddings"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_link_embeddings"))).toBe(true);
+  });
+
+  test("records publish job stages around an Atlas rebuild", async () => {
+    queryMock.mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("SELECT to_regclass")) {
+        return { rows: [{ table_name: null }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    embedTextsMock.mockResolvedValue({ vectors: [] });
+    startAtlasPublishJobMock.mockResolvedValue({ id: "atlas-job-1" });
+    getAtlasSnapshotMock.mockResolvedValue({
+      generated_at: "2026-05-19T10:00:00Z",
+      window: {
+        start: "2026-05-17T10:00:00Z",
+        end: "2026-05-19T10:00:00Z",
+        hours: 48,
+      },
+    });
+    generateAtlasEditorialReportMock.mockResolvedValue({
+      issue: { date: "2026-05-19" },
+      articles: [
+        { section: "Agent Architecture" },
+        { section: "AI Writing" },
+      ],
+    });
+    writeAtlasArtifactMock.mockResolvedValue("/tmp/atlas-48.json");
+    process.env.VIBEZ_ATLAS_ARTIFACT_WRITE = "1";
+
+    const { refreshRailwayEnrichment } = await import("./admin-enrichment");
+    const result = await refreshRailwayEnrichment({
+      classifyLimit: 0,
+      messageEmbeddingLimit: 0,
+      linkEmbeddingLimit: 0,
+      rebuildAtlas: true,
+      atlasHours: 48,
+    });
+
+    expect(startAtlasPublishJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      editionType: "daily",
+      windowHours: 48,
+    }));
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: "atlas-job-1",
+      stage: "enrich",
+      status: "running",
+    });
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: "atlas-job-1",
+      stage: "enrich",
+      status: "succeeded",
+    });
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: "atlas-job-1",
+      stage: "write_articles",
+      status: "running",
+    });
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: "atlas-job-1",
+      stage: "publish",
+      status: "succeeded",
+    });
+    expect(result.atlas).toMatchObject({
+      rebuilt: true,
+      publish_job_id: "atlas-job-1",
+      articles: 2,
+    });
   });
 });

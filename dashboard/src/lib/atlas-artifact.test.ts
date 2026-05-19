@@ -102,4 +102,47 @@ describe("listAtlasEditions", () => {
       "/atlas/editions/2026-05-17?hours=168",
     ]);
   });
+
+  test("creates durable publish job and asset schema before inserting a job", async () => {
+    queryMock.mockResolvedValue({ rows: [], rowCount: 1 });
+
+    const { startAtlasPublishJob } = await import("./atlas-artifact");
+    const job = await startAtlasPublishJob({
+      jobId: "job-2026-05-19",
+      editionDate: "2026-05-19",
+      editionType: "daily",
+      windowHours: 48,
+      sourceWindowStart: "2026-05-17T10:00:00Z",
+      sourceWindowEnd: "2026-05-19T10:00:00Z",
+    });
+
+    expect(job?.id).toBe("job-2026-05-19");
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS atlas_publish_jobs"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS atlas_assets"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO atlas_publish_jobs"))).toBe(true);
+  });
+
+  test("records publish stage status and errors as durable job state", async () => {
+    queryMock.mockResolvedValue({ rows: [], rowCount: 1 });
+
+    const { updateAtlasPublishStage } = await import("./atlas-artifact");
+    await updateAtlasPublishStage({
+      jobId: "job-2026-05-19",
+      stage: "write_articles",
+      status: "failed",
+      error: "Unexpected end of JSON input",
+    });
+
+    const updateCall = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("UPDATE atlas_publish_jobs"),
+    );
+    expect(updateCall).toBeTruthy();
+    expect(updateCall?.[1]).toEqual([
+      "job-2026-05-19",
+      JSON.stringify({ write_articles: "failed" }),
+      JSON.stringify({ write_articles: "Unexpected end of JSON input" }),
+      "write_articles",
+      "failed",
+    ]);
+  });
 });

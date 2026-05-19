@@ -1,7 +1,13 @@
 import type { Pool } from "pg";
 
 import { generateAtlasEditorialReport } from "./atlas-report";
-import { writeAtlasArtifact } from "./atlas-artifact";
+import {
+  editionTypeForWindow,
+  startAtlasPublishJob,
+  updateAtlasPublishStage,
+  writeAtlasArtifact,
+  type AtlasPublishJob,
+} from "./atlas-artifact";
 import { getAtlasSnapshot } from "./db";
 import { embedTexts, generateJson } from "./model-router";
 import {
@@ -78,6 +84,7 @@ export interface RailwayEnrichmentResult {
     artifact_path?: string;
     articles?: number;
     sections?: string[];
+    publish_job_id?: string;
     skipped_reason?: string;
   };
 }
@@ -373,20 +380,70 @@ async function embedMissingLinks(pool: Pool, limit: number): Promise<number> {
   return written;
 }
 
-async function rebuildAtlas(hours: number): Promise<RailwayEnrichmentResult["atlas"]> {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || "unknown error");
+}
+
+async function rebuildAtlas(
+  hours: number,
+  publishJob: AtlasPublishJob | null,
+): Promise<RailwayEnrichmentResult["atlas"]> {
   if (process.env.VIBEZ_ATLAS_ARTIFACT_WRITE !== "1") {
     return { rebuilt: false, skipped_reason: "atlas artifact writing is disabled" };
   }
   const atlas = await getAtlasSnapshot({ windowHours: hours });
-  const editorialReport = await generateAtlasEditorialReport(atlas);
-  const artifactPath = await writeAtlasArtifact({
-    windowHours: hours,
-    atlas,
-    editorialReport,
-  });
+  let editorialReport: Awaited<ReturnType<typeof generateAtlasEditorialReport>>;
+  try {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "write_articles",
+      status: "running",
+    });
+    editorialReport = await generateAtlasEditorialReport(atlas);
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "write_articles",
+      status: "succeeded",
+    });
+  } catch (error) {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "write_articles",
+      status: "failed",
+      error: errorMessage(error),
+    });
+    throw error;
+  }
+  let artifactPath = "";
+  try {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "publish",
+      status: "running",
+    });
+    artifactPath = await writeAtlasArtifact({
+      windowHours: hours,
+      atlas,
+      editorialReport,
+    });
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "publish",
+      status: "succeeded",
+    });
+  } catch (error) {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "publish",
+      status: "failed",
+      error: errorMessage(error),
+    });
+    throw error;
+  }
   return {
     rebuilt: true,
     artifact_path: artifactPath,
+    publish_job_id: publishJob?.id,
     articles: editorialReport.articles.length,
     sections: editorialReport.articles.map((article) => article.section),
   };
@@ -400,22 +457,53 @@ export async function refreshRailwayEnrichment(
     throw new Error("Postgres is not configured.");
   }
   await ensurePostgresCoreSchema(pool);
-
-  const classificationsWritten = await classifyMissingMessages(
-    pool,
-    clampInt(options.classifyLimit, 80, 0, 500),
-  );
-  const messageEmbeddingsWritten = await embedMissingMessages(
-    pool,
-    clampInt(options.messageEmbeddingLimit, 300, 0, 1000),
-  );
-  const linkEmbeddingsWritten = await embedMissingLinks(
-    pool,
-    clampInt(options.linkEmbeddingLimit, 300, 0, 1000),
-  );
+  const atlasHours = clampInt(options.atlasHours, 48, 6, 168);
   const shouldRebuildAtlas = options.rebuildAtlas !== false;
+  const publishJob = shouldRebuildAtlas
+    ? await startAtlasPublishJob({
+      editionDate: new Date().toISOString().slice(0, 10),
+      editionType: editionTypeForWindow(atlasHours),
+      windowHours: atlasHours,
+    })
+    : null;
+
+  let classificationsWritten = 0;
+  let messageEmbeddingsWritten = 0;
+  let linkEmbeddingsWritten = 0;
+  try {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "enrich",
+      status: "running",
+    });
+    classificationsWritten = await classifyMissingMessages(
+      pool,
+      clampInt(options.classifyLimit, 80, 0, 500),
+    );
+    messageEmbeddingsWritten = await embedMissingMessages(
+      pool,
+      clampInt(options.messageEmbeddingLimit, 300, 0, 1000),
+    );
+    linkEmbeddingsWritten = await embedMissingLinks(
+      pool,
+      clampInt(options.linkEmbeddingLimit, 300, 0, 1000),
+    );
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "enrich",
+      status: "succeeded",
+    });
+  } catch (error) {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "enrich",
+      status: "failed",
+      error: errorMessage(error),
+    });
+    throw error;
+  }
   const atlas = shouldRebuildAtlas
-    ? await rebuildAtlas(clampInt(options.atlasHours, 48, 6, 168))
+    ? await rebuildAtlas(atlasHours, publishJob)
     : { rebuilt: false, skipped_reason: "not requested" };
 
   return {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 
 import type { AtlasSnapshot } from "./atlas";
@@ -25,6 +26,26 @@ export interface AtlasEditionSummary {
   subtitle: string;
   edition_label: string;
   href: string;
+}
+
+export type AtlasPublishEditionType = "daily" | "sunday_review";
+export type AtlasPublishStage =
+  | "ingest"
+  | "enrich"
+  | "write_articles"
+  | "write_channel_reports"
+  | "generate_images"
+  | "publish"
+  | "verify";
+export type AtlasPublishStageStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
+export type AtlasPublishJobStatus = "running" | "succeeded" | "failed";
+
+export interface AtlasPublishJob {
+  id: string;
+  edition_date: string;
+  edition_type: AtlasPublishEditionType;
+  window_hours: number;
+  status: AtlasPublishJobStatus;
 }
 
 let atlasPool: Pool | null = null;
@@ -65,7 +86,57 @@ async function ensureAtlasEditionSchema(pool: Pool): Promise<void> {
   );
 }
 
-function editionTypeForWindow(windowHours: number): "daily" | "sunday_review" {
+async function ensureAtlasPublishSchema(pool: Pool): Promise<void> {
+  await ensureAtlasEditionSchema(pool);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atlas_publish_jobs (
+      id TEXT PRIMARY KEY,
+      edition_date TEXT NOT NULL,
+      edition_type TEXT NOT NULL,
+      window_hours INTEGER NOT NULL,
+      source_window_start TEXT,
+      source_window_end TEXT,
+      status TEXT NOT NULL,
+      stage_status JSONB NOT NULL DEFAULT '{}'::jsonb,
+      stage_errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_atlas_publish_jobs_edition ON atlas_publish_jobs (edition_date DESC, edition_type, window_hours)",
+  );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atlas_assets (
+      asset_key TEXT PRIMARY KEY,
+      edition_date TEXT NOT NULL,
+      edition_type TEXT NOT NULL,
+      window_hours INTEGER NOT NULL,
+      article_slug TEXT,
+      asset_kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      prompt TEXT,
+      content_type TEXT,
+      asset_bytes BYTEA,
+      storage_url TEXT,
+      public_path TEXT,
+      provider TEXT,
+      model TEXT,
+      error TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_atlas_assets_edition ON atlas_assets (edition_date DESC, edition_type, window_hours)",
+  );
+}
+
+export function editionTypeForWindow(windowHours: number): AtlasPublishEditionType {
   return windowHours >= 120 ? "sunday_review" : "daily";
 }
 
@@ -185,6 +256,91 @@ export async function readAtlasArtifact(
     }
   }
   return readAtlasArtifactFromFile(windowHours);
+}
+
+export async function startAtlasPublishJob({
+  jobId,
+  editionDate,
+  editionType,
+  windowHours,
+  sourceWindowStart = null,
+  sourceWindowEnd = null,
+}: {
+  jobId?: string;
+  editionDate: string;
+  editionType: AtlasPublishEditionType;
+  windowHours: number;
+  sourceWindowStart?: string | null;
+  sourceWindowEnd?: string | null;
+}): Promise<AtlasPublishJob | null> {
+  const pool = getAtlasPool();
+  if (!pool) return null;
+  await ensureAtlasPublishSchema(pool);
+  const id = jobId || `atlas-${editionType}-${editionDate}-${windowHours}-${randomUUID()}`;
+  await pool.query(
+    `INSERT INTO atlas_publish_jobs
+       (id, edition_date, edition_type, window_hours, source_window_start, source_window_end,
+        status, stage_status, stage_errors, retry_count, started_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'running', '{}'::jsonb, '{}'::jsonb, 0, now(), now())
+     ON CONFLICT (id) DO UPDATE SET
+       edition_date = EXCLUDED.edition_date,
+       edition_type = EXCLUDED.edition_type,
+       window_hours = EXCLUDED.window_hours,
+       source_window_start = EXCLUDED.source_window_start,
+       source_window_end = EXCLUDED.source_window_end,
+       status = 'running',
+       retry_count = atlas_publish_jobs.retry_count + 1,
+       updated_at = now()`,
+    [id, editionDate, editionType, windowHours, sourceWindowStart, sourceWindowEnd],
+  );
+  return {
+    id,
+    edition_date: editionDate,
+    edition_type: editionType,
+    window_hours: windowHours,
+    status: "running",
+  };
+}
+
+export async function updateAtlasPublishStage({
+  jobId,
+  stage,
+  status,
+  error,
+}: {
+  jobId: string | null | undefined;
+  stage: AtlasPublishStage;
+  status: AtlasPublishStageStatus;
+  error?: string | null;
+}): Promise<void> {
+  if (!jobId) return;
+  const pool = getAtlasPool();
+  if (!pool) return;
+  await ensureAtlasPublishSchema(pool);
+  const overallStatus: AtlasPublishJobStatus = status === "failed"
+    ? "failed"
+    : status === "succeeded" && stage === "publish"
+      ? "succeeded"
+      : "running";
+  await pool.query(
+    `UPDATE atlas_publish_jobs
+     SET stage_status = stage_status || $2::jsonb,
+         stage_errors = CASE
+           WHEN $3::jsonb = '{}'::jsonb THEN stage_errors - $4
+           ELSE stage_errors || $3::jsonb
+         END,
+         status = $5,
+         completed_at = CASE WHEN $5 IN ('succeeded', 'failed') THEN now() ELSE completed_at END,
+         updated_at = now()
+     WHERE id = $1`,
+    [
+      jobId,
+      JSON.stringify({ [stage]: status }),
+      error ? JSON.stringify({ [stage]: error }) : JSON.stringify({}),
+      stage,
+      overallStatus,
+    ],
+  );
 }
 
 export async function listAtlasEditions({
