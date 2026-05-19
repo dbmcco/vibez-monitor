@@ -2,30 +2,17 @@
   "version": 1,
   "routes": {
     "embedding.semantic": {
-      "provider": "ollama",
-      "model": "mxbai-embed-large:latest",
-      "mode": "embedding",
-      "max_tokens": 0,
-      "temperature": 0,
-      "timeout_ms": 60000,
+      "registry_route": "vibez.embedding_fast",
       "dimensions": 256
     },
     "classification.inline": {
-      "provider": "ollama",
-      "model": "qwen2.5:3b",
-      "mode": "json",
-      "max_tokens": 256,
-      "temperature": 0.1,
-      "timeout_ms": 120000,
-      "context_window": 8192
+      "registry_route": "vibez.classification_fast"
     },
     "classification.backfill": {
-      "provider": "ollama",
-      "model": "qwen2.5:3b",
-      "mode": "json",
-      "max_tokens": 256,
-      "temperature": 0.1,
-      "timeout_ms": 120000
+      "registry_route": "vibez.classification_fast"
+    },
+    "classification.quality": {
+      "registry_route": "vibez.classification_quality"
     },
     "synthesis.daily": {
       "provider": "openrouter",

@@ -12,9 +12,15 @@ export interface ModelRoute {
   temperature: number;
   timeout_ms: number;
   base_url?: string;
+  api_key_env?: string;
   dimensions?: number;
   context_window?: number;
 }
+
+type ModelRouteManifestEntry =
+  Partial<ModelRoute> & {
+    registry_route?: string;
+  };
 
 interface ModelMessage {
   role: "system" | "user" | "assistant";
@@ -38,6 +44,7 @@ export interface ModelEmbeddingResult {
 }
 
 const ROUTE_CACHE = new Map<string, Record<string, ModelRoute>>();
+const REGISTRY_CACHE = new Map<string, Record<string, Record<string, string | number | boolean>>>();
 const DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS = 1600;
 const PROVIDER_CREDENTIAL_ENVS = {
   openai: ["VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"],
@@ -50,6 +57,12 @@ export function defaultManifestPath(): string {
     path.join(/* turbopackIgnore: true */ process.cwd(), "..", "config", "model-routing.json");
 }
 
+function defaultCognitionRegistryPath(): string {
+  return process.env.VIBEZ_COGNITION_PRESETS_PATH ||
+    process.env.PAIA_COGNITION_PRESETS_PATH ||
+    "/Users/braydon/projects/experiments/paia-agent-runtime/config/cognition-presets.toml";
+}
+
 function resolveManifestPath(manifestPath = defaultManifestPath()): string {
   if (path.isAbsolute(manifestPath)) return manifestPath;
   const cwdCandidate = path.join(/* turbopackIgnore: true */ process.cwd(), manifestPath);
@@ -57,19 +70,153 @@ function resolveManifestPath(manifestPath = defaultManifestPath()): string {
   return path.join(/* turbopackIgnore: true */ process.cwd(), "..", manifestPath);
 }
 
+function normalizeTomlTableName(rawName: string): string {
+  return rawName.replace(/"([^"]+)"/g, "$1");
+}
+
+function parseTomlValue(rawValue: string): string | number | boolean {
+  const withoutComment = rawValue.replace(/\s+#.*$/, "").trim();
+  if (withoutComment.startsWith('"') && withoutComment.endsWith('"')) {
+    return withoutComment.slice(1, -1);
+  }
+  if (withoutComment === "true") return true;
+  if (withoutComment === "false") return false;
+  const numeric = Number(withoutComment);
+  if (Number.isFinite(numeric)) return numeric;
+  return withoutComment;
+}
+
+function loadCognitionRegistry(
+  registryPath = defaultCognitionRegistryPath(),
+): Record<string, Record<string, string | number | boolean>> {
+  const cached = REGISTRY_CACHE.get(registryPath);
+  if (cached) return cached;
+  if (!fs.existsSync(/* turbopackIgnore: true */ registryPath)) {
+    throw new Error(`cognition registry not found: ${registryPath}`);
+  }
+  const tables: Record<string, Record<string, string | number | boolean>> = {};
+  let currentTable = "";
+  for (const line of fs.readFileSync(/* turbopackIgnore: true */ registryPath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const tableMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (tableMatch) {
+      currentTable = normalizeTomlTableName(tableMatch[1]);
+      tables[currentTable] = tables[currentTable] || {};
+      continue;
+    }
+    if (!currentTable) continue;
+    const assignment = trimmed.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!assignment) continue;
+    tables[currentTable][assignment[1]] = parseTomlValue(assignment[2]);
+  }
+  REGISTRY_CACHE.set(registryPath, tables);
+  return tables;
+}
+
+function numberFromRegistry(value: string | number | boolean | undefined): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function stringFromRegistry(value: string | number | boolean | undefined): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function routeModeFromRegistry(
+  value: string | number | boolean | undefined,
+): ModelRoute["mode"] | undefined {
+  return value === "text" || value === "json" || value === "embedding" ? value : undefined;
+}
+
+function resolveRegistryCredentialEnv({
+  provider,
+  surface,
+  registry,
+}: {
+  provider: ModelRoute["provider"];
+  surface?: Record<string, string | number | boolean>;
+  registry: Record<string, Record<string, string | number | boolean>>;
+}): string | undefined {
+  const assignment = registry['service_credential_assignments.vibez-monitor']?.[provider];
+  const credentialAlias = stringFromRegistry(assignment);
+  const credentialEnv = credentialAlias
+    ? stringFromRegistry(registry[`credentials.${credentialAlias}`]?.env_var)
+    : undefined;
+  return credentialEnv || stringFromRegistry(surface?.api_key_env);
+}
+
+function resolveRegistryRoute(registryRouteId: string): Partial<ModelRoute> {
+  const registry = loadCognitionRegistry();
+  const route = registry[`model_routes.${registryRouteId}`];
+  if (!route) {
+    throw new Error(`unknown cognition registry route: ${registryRouteId}`);
+  }
+  const provider = stringFromRegistry(route.provider) as ModelRoute["provider"] | undefined;
+  const surfaceName = stringFromRegistry(route.surface);
+  const surface = surfaceName ? registry[`provider_surfaces.${surfaceName}`] : undefined;
+  const timeoutSeconds =
+    numberFromRegistry(route.request_timeout_seconds) ??
+    numberFromRegistry(surface?.complete_timeout_seconds) ??
+    numberFromRegistry(surface?.continue_timeout_seconds);
+
+  return {
+    provider,
+    model: stringFromRegistry(route.model),
+    mode: routeModeFromRegistry(route.mode),
+    max_tokens: numberFromRegistry(route.max_tokens_default),
+    temperature: numberFromRegistry(route.temperature_default),
+    timeout_ms: timeoutSeconds ? timeoutSeconds * 1000 : undefined,
+    base_url: stringFromRegistry(surface?.base_url),
+    api_key_env: provider ? resolveRegistryCredentialEnv({ provider, surface, registry }) : undefined,
+    context_window: numberFromRegistry(route.context_window),
+  };
+}
+
+function finalizeRoute(routeId: string, entry: ModelRouteManifestEntry): ModelRoute {
+  const registryRoute = entry.registry_route ? resolveRegistryRoute(entry.registry_route) : {};
+  const merged = {
+    ...registryRoute,
+    ...entry,
+  };
+  delete merged.registry_route;
+  if (!merged.provider || !merged.model || !merged.mode) {
+    throw new Error(`incomplete model route: ${routeId}`);
+  }
+  return {
+    provider: merged.provider,
+    model: merged.model,
+    mode: merged.mode,
+    max_tokens: merged.max_tokens ?? 0,
+    temperature: merged.temperature ?? 0,
+    timeout_ms: merged.timeout_ms ?? 60_000,
+    base_url: merged.base_url,
+    api_key_env: merged.api_key_env,
+    dimensions: merged.dimensions,
+    context_window: merged.context_window,
+  };
+}
+
 export function loadRoutes(manifestPath = defaultManifestPath()): Record<string, ModelRoute> {
   const resolvedPath = resolveManifestPath(manifestPath);
   const cached = ROUTE_CACHE.get(resolvedPath);
   if (cached) return cached;
-  const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf8")) as {
+  const payload = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ resolvedPath, "utf8")) as {
     version: number;
-    routes: Record<string, ModelRoute>;
+    routes: Record<string, ModelRouteManifestEntry>;
   };
   if (payload.version !== 1 || !payload.routes || typeof payload.routes !== "object") {
     throw new Error("invalid model routing manifest");
   }
-  ROUTE_CACHE.set(resolvedPath, payload.routes);
-  return payload.routes;
+  const routes = Object.fromEntries(
+    Object.entries(payload.routes).map(([routeId, entry]) => [routeId, finalizeRoute(routeId, entry)]),
+  );
+  ROUTE_CACHE.set(resolvedPath, routes);
+  return routes;
 }
 
 export function getRoute(
@@ -93,11 +240,21 @@ export function resolveProviderApiKey(
   return "";
 }
 
+function resolveRouteApiKey(route: ModelRoute): string {
+  if (route.api_key_env) {
+    return process.env[route.api_key_env] || "";
+  }
+  if (route.provider in PROVIDER_CREDENTIAL_ENVS) {
+    return resolveProviderApiKey(route.provider as keyof typeof PROVIDER_CREDENTIAL_ENVS);
+  }
+  return "";
+}
+
 function validateRouteRequirements(route: ModelRoute): void {
   if (route.provider in PROVIDER_CREDENTIAL_ENVS) {
     const provider = route.provider as keyof typeof PROVIDER_CREDENTIAL_ENVS;
-    if (!resolveProviderApiKey(provider)) {
-      throw new Error(`${PROVIDER_CREDENTIAL_ENVS[provider][0]} not configured`);
+    if (!resolveRouteApiKey(route)) {
+      throw new Error(`${route.api_key_env || PROVIDER_CREDENTIAL_ENVS[provider][0]} not configured`);
     }
   }
   if (route.provider === "ollama") {
@@ -205,7 +362,7 @@ async function runAnthropicRoute(
       role: message.role === "assistant" ? "assistant" : "user",
       content: message.content,
     }));
-  const client = new Anthropic({ apiKey: resolveProviderApiKey("anthropic") });
+  const client = new Anthropic({ apiKey: resolveRouteApiKey(route) });
   const response = await client.messages.create({
     model: route.model,
     max_tokens: route.max_tokens,
@@ -228,7 +385,7 @@ async function runOpenAIRoute(
   payload: ModelMessage[],
 ): Promise<ModelTextResult> {
   const client = new OpenAI({
-    apiKey: resolveProviderApiKey("openai"),
+    apiKey: resolveRouteApiKey(route),
     timeout: route.timeout_ms,
   });
   const response = await client.responses.create({
@@ -253,7 +410,7 @@ async function runOpenRouterRoute(
     throw new Error("openrouter base_url not configured");
   }
   const client = new OpenAI({
-    apiKey: resolveProviderApiKey("openrouter"),
+    apiKey: resolveRouteApiKey(route),
     baseURL: route.base_url,
     timeout: route.timeout_ms,
   });
@@ -278,7 +435,7 @@ async function runOpenAIEmbeddingRoute(
   dimensions?: number,
 ): Promise<ModelEmbeddingResult> {
   const client = new OpenAI({
-    apiKey: resolveProviderApiKey("openai"),
+    apiKey: resolveRouteApiKey(route),
     timeout: route.timeout_ms,
   });
   const response = await client.embeddings.create({
@@ -288,7 +445,36 @@ async function runOpenAIEmbeddingRoute(
     dimensions: dimensions ?? route.dimensions,
   });
   return {
-    vectors: response.data.map((item) => item.embedding as number[]),
+    vectors: response.data.map((item) =>
+      normalizeEmbeddingDimensions(item.embedding as number[], dimensions ?? route.dimensions),
+    ),
+    model: route.model,
+    provider: route.provider,
+  };
+}
+
+async function runOpenRouterEmbeddingRoute(
+  route: ModelRoute,
+  inputs: string[],
+  dimensions?: number,
+): Promise<ModelEmbeddingResult> {
+  if (!route.base_url) {
+    throw new Error("openrouter base_url not configured");
+  }
+  const client = new OpenAI({
+    apiKey: resolveRouteApiKey(route),
+    baseURL: route.base_url,
+    timeout: route.timeout_ms,
+  });
+  const response = await client.embeddings.create({
+    model: route.model,
+    input: inputs,
+    encoding_format: "float",
+  });
+  return {
+    vectors: response.data.map((item) =>
+      normalizeEmbeddingDimensions(item.embedding as number[], dimensions ?? route.dimensions),
+    ),
     model: route.model,
     provider: route.provider,
   };
@@ -457,6 +643,9 @@ export async function embedTexts({
   }
   if (route.provider === "openai") {
     return runOpenAIEmbeddingRoute(route, inputs, dimensions);
+  }
+  if (route.provider === "openrouter") {
+    return runOpenRouterEmbeddingRoute(route, inputs, dimensions);
   }
   if (route.provider === "ollama") {
     return runOllamaEmbeddingRoute(route, inputs, dimensions);

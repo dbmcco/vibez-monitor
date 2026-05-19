@@ -84,6 +84,128 @@ describe("model-router", () => {
     expect(resolveProviderApiKey("openrouter")).toBe("legacy-openrouter-test-key");
   });
 
+  test("resolves a Vibez model route from the central cognition registry", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    const registryPath = path.join(dir, "cognition-presets.toml");
+    fs.writeFileSync(
+      registryPath,
+      [
+        "[credentials.vibez_openrouter]",
+        'provider = "openrouter"',
+        'source = "env"',
+        'env_var = "VIBEZ_OPENROUTER_API_KEY"',
+        "",
+        "[provider_surfaces.openrouter_embedding]",
+        'provider = "openrouter"',
+        'base_url = "https://openrouter.ai/api/v1"',
+        'api_key_env = "OPENROUTER_API_KEY"',
+        "complete_timeout_seconds = 60",
+        "",
+        '[service_credential_assignments."vibez-monitor"]',
+        'openrouter = "vibez_openrouter"',
+        "",
+        '[model_routes."vibez.embedding_fast"]',
+        'surface = "openrouter_embedding"',
+        'provider = "openrouter"',
+        'model = "perplexity/pplx-embed-v1-0.6b"',
+        'mode = "embedding"',
+        'quality_tier = "embedding_fast"',
+        "request_timeout_seconds = 45",
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "embedding.semantic": {
+            registry_route: "vibez.embedding_fast",
+            dimensions: 256,
+          },
+        },
+      }),
+    );
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_COGNITION_PRESETS_PATH: registryPath,
+    };
+
+    const routes = loadRoutes(manifestPath);
+
+    expect(routes["embedding.semantic"]).toMatchObject({
+      provider: "openrouter",
+      model: "perplexity/pplx-embed-v1-0.6b",
+      mode: "embedding",
+      base_url: "https://openrouter.ai/api/v1",
+      api_key_env: "VIBEZ_OPENROUTER_API_KEY",
+      timeout_ms: 45000,
+      dimensions: 256,
+    });
+  });
+
+  test("embeds with OpenRouter and validates dimensions locally", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "embedding.semantic": {
+            provider: "openrouter",
+            model: "perplexity/pplx-embed-v1-0.6b",
+            mode: "embedding",
+            base_url: "https://openrouter.ai/api/v1",
+            api_key_env: "VIBEZ_OPENROUTER_API_KEY",
+            max_tokens: 0,
+            temperature: 0,
+            timeout_ms: 30000,
+            dimensions: 2,
+          },
+        },
+      }),
+    );
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_OPENROUTER_API_KEY: "test-openrouter-key",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [{ embedding: [3, 4, 12], index: 0, object: "embedding" }],
+          model: "perplexity/pplx-embed-v1-0.6b",
+          object: "list",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await embedTexts({
+      taskId: "embedding.semantic",
+      inputs: ["Channel: intros\nMessage: hello"],
+      manifestPath,
+    });
+
+    expect(result).toMatchObject({
+      provider: "openrouter",
+      model: "perplexity/pplx-embed-v1-0.6b",
+    });
+    expect(result.vectors).toEqual([[0.6, 0.8]]);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://openrouter.ai/api/v1/embeddings");
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toMatchObject({
+      model: "perplexity/pplx-embed-v1-0.6b",
+      input: ["Channel: intros\nMessage: hello"],
+      encoding_format: "float",
+    });
+    expect(body).not.toHaveProperty("dimensions");
+  });
+
   test("asks Ollama to truncate oversized embedding inputs at the model boundary", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
     const manifestPath = path.join(dir, "model-routing.json");
