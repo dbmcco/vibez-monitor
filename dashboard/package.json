@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start --port 3100 --hostname 0.0.0.0",
     "lint": "eslint",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run",
+    "check:atlas-ux": "node scripts/check-atlas-ux.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -29,6 +30,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "playwright": "^1.58.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.4"

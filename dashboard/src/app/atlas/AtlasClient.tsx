@@ -455,8 +455,8 @@ function NarrativeReport({
   onOpenCitation: (ref: string) => void;
 }) {
   const report = editorialReport;
-  const frontPage = report ? splitFrontPageArticles(report.articles) : null;
-  const leadArticle = frontPage?.lead || null;
+  const frontPage = splitFrontPageArticles(report?.articles || []);
+  const leadArticle = frontPage.lead;
   const editionLabel = windowHours >= 120
     ? "Sunday Edition"
     : report?.issue.edition_label || atlas.narrative.title;
@@ -1281,7 +1281,7 @@ function BelowFoldValueDesk({
 
 function BelowFoldPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4">
+    <section className="min-w-0 rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4">
       <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
       <div className="mt-3">{children}</div>
     </section>
@@ -1585,10 +1585,10 @@ function CitationButton({ citation, onOpen }: { citation?: AtlasCitation; onOpen
   return (
     <button
       onClick={onOpen}
-      className="block w-full rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-3 py-2 text-left text-xs text-[#5e5238] hover:border-[#1f1a12]"
+      className="block w-full min-w-0 rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-3 py-2 text-left text-xs text-[#5e5238] hover:border-[#1f1a12]"
     >
-      <span className="block font-medium text-[#1f1a12]">{citation.label}</span>
-      <span className="mt-0.5 block text-[#786846]">{citation.ref}</span>
+      <span className="block break-words font-medium text-[#1f1a12]">{citation.label}</span>
+      <span className="mt-0.5 block break-all text-[#786846]">{citation.ref}</span>
     </button>
   );
 }
