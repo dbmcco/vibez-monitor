@@ -87,4 +87,24 @@ if (result.status !== 200 || !result.json?.ok) {
   process.exit(1);
 }
 
-console.log(JSON.stringify(result.json, null, 2));
+const atlas = result.json.atlas || {};
+const summary = {
+  ok: true,
+  classifications_written: result.json.classifications_written,
+  message_embeddings_written: result.json.message_embeddings_written,
+  link_embeddings_written: result.json.link_embeddings_written,
+  atlas: {
+    rebuilt: Boolean(atlas.rebuilt),
+    publish_job_id: atlas.publish_job_id || null,
+    edition_date: atlas.edition_date || null,
+    edition_type: atlas.edition_type || null,
+    window_hours: atlas.window_hours || hours,
+    published_at: atlas.published_at || null,
+    artifact_path: atlas.artifact_path || null,
+    articles: atlas.articles || 0,
+    stage_summary: atlas.stage_summary || {},
+    skipped_reason: atlas.skipped_reason || null,
+  },
+};
+
+console.log(JSON.stringify(summary, null, 2));

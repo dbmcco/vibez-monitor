@@ -237,6 +237,16 @@ describe("Railway admin enrichment", () => {
     expect(result.atlas).toMatchObject({
       rebuilt: true,
       publish_job_id: "atlas-job-1",
+      edition_date: "2026-05-19",
+      edition_type: "daily",
+      window_hours: 48,
+      stage_summary: {
+        enrich: "succeeded",
+        write_articles: "succeeded",
+        write_channel_reports: "succeeded",
+        generate_images: "skipped",
+        publish: "succeeded",
+      },
       articles: 2,
     });
   });

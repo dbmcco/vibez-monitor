@@ -42,7 +42,8 @@ The `com.vibez-monitor.daily-update.plist` template is the canonical daily publi
 - It runs every day at 4:30 AM in `America/New_York`
 - It calls `./scripts/daily_update_to_railway.sh`
 - The script uses a lock directory so overlapping runs do not duplicate ingest/push work
-- It runs one local sync pass, pushes the configured lookback window to Railway, then refreshes the Atlas artifact when `VIBEZ_DAILY_REFRESH_ATLAS` is not `0`
+- It runs one local sync pass, pushes the configured lookback window to Railway, then asks Railway to run enrichment, embeddings, Atlas article generation, channel reports, article image jobs, and publish when `VIBEZ_DAILY_REFRESH_ATLAS` is not `0`
+- The Railway enrichment command prints the publish job id, edition date/window, publication timestamp, and per-stage summary; treat that as the nightly health record, not Railway crash-notification email volume
 - Set `VIBEZ_ENV_FILE` in the LaunchAgent environment when credentials live outside the checkout being scheduled
 
 The `com.vibez-monitor.push-railway.plist` template is intended for lightweight cloud freshness:

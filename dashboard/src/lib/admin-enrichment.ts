@@ -86,6 +86,11 @@ export interface RailwayEnrichmentResult {
     articles?: number;
     sections?: string[];
     publish_job_id?: string;
+    edition_date?: string;
+    edition_type?: string;
+    window_hours?: number;
+    published_at?: string;
+    stage_summary?: Record<string, string>;
     skipped_reason?: string;
   };
 }
@@ -421,6 +426,12 @@ async function rebuildAtlas(
     throw error;
   }
   let artifactPath = "";
+  const stageSummary: Record<string, string> = {
+    enrich: "succeeded",
+    write_articles: "succeeded",
+  };
+  const channelReportStage = editorialReport.channel_reports?.length ? "succeeded" : "skipped";
+  stageSummary.write_channel_reports = channelReportStage;
   try {
     await updateAtlasPublishStage({
       jobId: publishJob?.id,
@@ -433,10 +444,12 @@ async function rebuildAtlas(
       publishJobId: publishJob?.id,
     });
     const imageSummary = summarizeAtlasImageGeneration(editorialReport);
+    const imageStage = imageSummary.ready > 0 ? "succeeded" : "skipped";
+    stageSummary.generate_images = imageStage;
     await updateAtlasPublishStage({
       jobId: publishJob?.id,
       stage: "generate_images",
-      status: imageSummary.ready > 0 ? "succeeded" : "skipped",
+      status: imageStage,
     });
   } catch (error) {
     await updateAtlasPublishStage({
@@ -458,6 +471,7 @@ async function rebuildAtlas(
       atlas,
       editorialReport,
     });
+    stageSummary.publish = "succeeded";
     await updateAtlasPublishStage({
       jobId: publishJob?.id,
       stage: "publish",
@@ -476,6 +490,11 @@ async function rebuildAtlas(
     rebuilt: true,
     artifact_path: artifactPath,
     publish_job_id: publishJob?.id,
+    edition_date: editorialReport.issue.date,
+    edition_type: editionTypeForWindow(hours),
+    window_hours: hours,
+    published_at: new Date().toISOString(),
+    stage_summary: stageSummary,
     articles: editorialReport.articles.length,
     sections: editorialReport.articles.map((article) => article.section),
   };
