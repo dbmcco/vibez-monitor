@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { atlasArticleHref, isRenderableArticleImageUrl } from "@/lib/atlas-ui";
+import { splitFrontPageArticles } from "@/lib/atlas-layout";
 
 interface AtlasCitation {
   ref: string;
@@ -186,6 +187,9 @@ interface AtlasEditorialArticle {
     prompt?: string;
     url?: string;
     alt?: string;
+    status?: "pending" | "ready" | "failed" | "skipped";
+    error?: string;
+    asset_key?: string;
   };
   related_article_slugs: string[];
 }
@@ -439,11 +443,8 @@ function NarrativeReport({
   onOpenCitation: (ref: string) => void;
 }) {
   const report = editorialReport;
-  const leadArticle = report?.articles.find((article) => article.role === "lead") || report?.articles[0] || null;
-  const sideArticles = report?.articles.filter((article) => article.slug !== leadArticle?.slug).slice(0, 4) || [];
-  const leftArticle = sideArticles[0] || null;
-  const rightArticle = sideArticles[1] || null;
-  const belowArticles = sideArticles.slice(2);
+  const frontPage = report ? splitFrontPageArticles(report.articles) : null;
+  const leadArticle = frontPage?.lead || null;
   const editionLabel = windowHours >= 120
     ? "Sunday Edition"
     : report?.issue.edition_label || atlas.narrative.title;
@@ -473,33 +474,37 @@ function NarrativeReport({
 
       {report && leadArticle ? (
         <>
-          <div className="mt-6 grid gap-5 min-[1500px]:grid-cols-[0.9fr_1.35fr_0.9fr]">
-            <div className="space-y-5 min-[1500px]:border-r min-[1500px]:border-[#cbbf9d] min-[1500px]:pr-5">
-              {leftArticle && (
+          <div className="mt-6 grid gap-5 xl:grid-cols-[0.92fr_1.35fr_0.92fr]">
+            <div className="order-2 space-y-5 xl:order-none xl:col-start-1 xl:row-start-1 xl:border-r xl:border-[#cbbf9d] xl:pr-5">
+              {frontPage.left.map((article) => (
                 <NewspaperArticleCard
-                  article={leftArticle}
+                  key={article.slug}
+                  article={article}
                   issueDate={report.issue.date}
                   windowHours={windowHours}
                   compact
                 />
-              )}
+              ))}
             </div>
-            <NewspaperArticleCard
-              article={leadArticle}
-              issueDate={report.issue.date}
-              windowHours={windowHours}
-              lead
-            />
-            <div className="space-y-5 min-[1500px]:border-l min-[1500px]:border-[#cbbf9d] min-[1500px]:pl-5">
-              {rightArticle && (
+            <div className="order-1 border-y-2 border-[#1f1a12] py-4 xl:order-none xl:col-start-2 xl:row-start-1 xl:border-y-0 xl:py-0">
+              <NewspaperArticleCard
+                article={leadArticle}
+                issueDate={report.issue.date}
+                windowHours={windowHours}
+                lead
+              />
+            </div>
+            <div className="order-3 space-y-5 xl:order-none xl:col-start-3 xl:row-start-1 xl:border-l xl:border-[#cbbf9d] xl:pl-5">
+              {frontPage.right.map((article) => (
                 <NewspaperArticleCard
-                  article={rightArticle}
+                  key={article.slug}
+                  article={article}
                   issueDate={report.issue.date}
                   windowHours={windowHours}
                   compact
                 />
-              )}
-              {!rightArticle && (
+              ))}
+              {frontPage.right.length === 0 && (
                 <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
                   <h3 className="font-serif text-xl font-bold text-[#1f1a12]">
                     Evidence Desk
@@ -512,9 +517,9 @@ function NarrativeReport({
             </div>
           </div>
 
-          {belowArticles.length > 0 && (
+          {frontPage.overflow.length > 0 && (
             <div className="mt-6 grid gap-4 border-t border-[#cbbf9d] pt-4 min-[1500px]:grid-cols-2">
-              {belowArticles.map((article) => (
+              {frontPage.overflow.map((article) => (
                 <NewspaperArticleCard
                   key={article.slug}
                   article={article}
@@ -571,8 +576,8 @@ function WireDeskFrontPage({
 
   return (
     <div className="mt-6 space-y-5">
-      <div className="grid gap-5 min-[1500px]:grid-cols-[0.9fr_1.35fr_0.9fr]">
-        <div className="space-y-4 min-[1500px]:border-r min-[1500px]:border-[#cbbf9d] min-[1500px]:pr-5">
+      <div className="grid gap-5 xl:grid-cols-[0.92fr_1.35fr_0.92fr]">
+        <div className="order-2 space-y-4 xl:order-none xl:col-start-1 xl:row-start-1 xl:border-r xl:border-[#cbbf9d] xl:pr-5">
           {leftStory ? (
             <WireStoryCard story={leftStory} atlas={atlas} onOpenCitation={onOpenCitation} compact />
           ) : (
@@ -585,7 +590,7 @@ function WireDeskFrontPage({
           )}
         </div>
 
-        <article className="border-y-2 border-[#1f1a12] py-4 min-[1500px]:border-y-0 min-[1500px]:py-0">
+        <article className="order-1 border-y-2 border-[#1f1a12] py-4 xl:order-none xl:col-start-2 xl:row-start-1 xl:border-y-0 xl:py-0">
           <WireStoryCard story={stories.lead} atlas={atlas} onOpenCitation={onOpenCitation} lead />
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <Metric label="Themes" value={atlas.overview.topics} />
@@ -609,7 +614,7 @@ function WireDeskFrontPage({
           </div>
         </article>
 
-        <div className="space-y-4 min-[1500px]:border-l min-[1500px]:border-[#cbbf9d] min-[1500px]:pl-5">
+        <div className="order-3 space-y-4 xl:order-none xl:col-start-3 xl:row-start-1 xl:border-l xl:border-[#cbbf9d] xl:pl-5">
           {rightStory ? (
             <WireStoryCard story={rightStory} atlas={atlas} onOpenCitation={onOpenCitation} compact />
           ) : (
@@ -828,21 +833,35 @@ function NewspaperArticleCard({
 }
 
 function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: boolean }) {
-  if (isRenderableArticleImageUrl(article.image.url)) {
+  if (isRenderableArticleImageUrl(article.image?.url)) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={article.image.url}
-        alt={article.image.alt || article.title}
+        alt={article.image?.alt || article.title}
         className={`w-full border border-[#cbbf9d] object-cover ${lead ? "h-64" : "h-32"}`}
       />
+    );
+  }
+  if (article.image?.status === "pending" || article.image?.status === "failed") {
+    return (
+      <div className={`flex w-full flex-col justify-end border border-[#cbbf9d] bg-[#e8dcc4] p-4 ${
+        lead ? "h-64" : "h-32"
+      }`}>
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
+          {article.image.status === "failed" ? "Image failed" : "Image pending"}
+        </p>
+        <p className="mt-2 line-clamp-3 text-sm leading-5 text-[#342a1b]">
+          {article.image.prompt || article.dek}
+        </p>
+      </div>
     );
   }
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={editorialImageDataUri(article, lead)}
-      alt={article.image.alt || `Editorial image for ${article.title}`}
+      alt={article.image?.alt || `Editorial image for ${article.title}`}
       className={`w-full border border-[#cbbf9d] object-fill ${lead ? "h-64" : "h-32"}`}
     />
   );
@@ -863,7 +882,7 @@ function editorialImageDataUri(article: AtlasEditorialArticle, lead: boolean): s
       <line x1="44" y1="${height - 44}" x2="${width - 44}" y2="${height - 44}" stroke="#1f1a12" stroke-width="2"/>
       <text x="54" y="92" font-family="Georgia, serif" font-size="${lead ? 26 : 18}" font-weight="700" fill="${accent}" letter-spacing="3">${section}</text>
       <text x="54" y="${lead ? 154 : 128}" font-family="Georgia, serif" font-size="${lead ? 34 : 24}" font-weight="900" fill="#1f1a12">Editorial image brief</text>
-      <text x="54" y="${lead ? 202 : 166}" font-family="Arial, sans-serif" font-size="${lead ? 16 : 12}" fill="#786846">${escapeSvgText((article.image.prompt || article.dek).slice(0, lead ? 92 : 58))}</text>
+      <text x="54" y="${lead ? 202 : 166}" font-family="Arial, sans-serif" font-size="${lead ? 16 : 12}" fill="#786846">${escapeSvgText((article.image?.prompt || article.dek).slice(0, lead ? 92 : 58))}</text>
     </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
