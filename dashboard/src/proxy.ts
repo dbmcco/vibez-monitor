@@ -9,6 +9,7 @@ function isPublicPath(pathname: string): boolean {
   if (pathname === "/access") return true;
   if (pathname === "/api/access") return true;
   if (pathname === "/api/health") return true;
+  if (pathname === "/api/ingest/beeper/batch") return true;
   if (pathname.startsWith("/_next/")) return true;
   if (pathname.startsWith("/icons/")) return true;
   if (pathname === "/favicon.ico" || pathname === "/favicon.png") return true;
