@@ -29,11 +29,13 @@ async function pageMetrics(page) {
     const articleLinks = Array.from(document.querySelectorAll("a"))
       .filter((link) => link.textContent?.toLowerCase().includes("read full article"))
       .length;
+    const usefulLinkCount = Array.from(document.querySelectorAll("a"))
+      .filter((link) => link.textContent?.toLowerCase().includes("open link"))
+      .length;
     const hasImageState = /Image (pending|failed)/.test(bodyText) || document.querySelectorAll("img").length > 0;
     const requiredSections = [
       "Signals Worth Acting On",
       "Unresolved Questions",
-      "Evidence Desk",
       "Useful Links",
     ];
     const missingSections = requiredSections.filter((section) => !bodyText.includes(section));
@@ -68,8 +70,13 @@ async function pageMetrics(page) {
       viewportWidth: window.innerWidth,
       bodyText,
       articleLinks,
+      usefulLinkCount,
       hasImageState,
       missingSections,
+      hasTopFoldEvidenceFallback: bodyText.includes("The matrix, citations, stats, and links sit below the fold."),
+      hasEvidenceDesk: bodyText.includes("Evidence Desk"),
+      hasEditionNotes: bodyText.includes("Edition notes"),
+      hasRawMarkup: /<br|<pre|<code|&quot;|<\/?[a-z][\s>]/i.test(bodyText),
       overflowingElements,
       bleedingText,
     };
@@ -99,8 +106,23 @@ try {
     if (metrics.missingSections.length > 0) {
       fail(`${viewport.name} is missing below-fold sections: ${metrics.missingSections.join(", ")}`);
     }
-    if (metrics.articleLinks > 0 && metrics.articleLinks < 3) {
+    if (metrics.articleLinks < 5) {
       fail(`${viewport.name} renders only ${metrics.articleLinks} story links`);
+    }
+    if (metrics.hasTopFoldEvidenceFallback) {
+      fail(`${viewport.name} still renders the obsolete top-fold Evidence Desk fallback`);
+    }
+    if (metrics.hasEvidenceDesk) {
+      fail(`${viewport.name} still renders the obsolete Evidence Desk section`);
+    }
+    if (metrics.hasEditionNotes) {
+      fail(`${viewport.name} still renders the obsolete Edition notes rail`);
+    }
+    if (metrics.hasRawMarkup) {
+      fail(`${viewport.name} renders raw HTML or markdown-like markup in reader text`);
+    }
+    if (metrics.usefulLinkCount < 1) {
+      fail(`${viewport.name} renders no contextual useful-link actions`);
     }
     if (!metrics.hasImageState) {
       fail(`${viewport.name} has no article image or explicit image status`);

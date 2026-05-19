@@ -212,7 +212,7 @@ export function buildAtlasReportMessages(atlas: AtlasSnapshot): AtlasReportMessa
         "Write the latest Atlas report from this evidence pack as a daily newspaper issue.",
         `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         "Do not reduce the day to one theme unless the evidence truly supports that. Prefer one lead story plus several first-class side stories.",
-        "You MUST include 3 to 6 articles: exactly one lead article plus at least two secondary articles.",
+        "You MUST include exactly 5 articles: exactly one lead article plus four secondary articles, so the front page has two left-lane stories, one center lead, and two right-lane stories.",
         "Each article MUST include a short plain-text section label that names its theme, like Personal Workflows, Agent Harnesses, Evidence Systems, or Durable Records.",
         "Section labels MUST NOT contain emoji, decorative symbols, punctuation runs, or jokes.",
         "Each article body is the full read-more page and MUST contain at least five paragraphs, kept compact.",
@@ -518,9 +518,10 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
         `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         "Do not write full article bodies in this pass.",
         "You own story selection. Do not simply choose the busiest channels or force one grand theme across unrelated evidence.",
-        "Name the themes that deserve separate articles because they help a reader understand what happened, what changed, what matters, and what needs action.",
+        "Name exactly five themes that deserve separate articles because they help a reader understand what happened, what changed, what matters, and what needs action.",
         "Prefer useful, surprising, human, decision-relevant story angles over generic channel summaries.",
         "Keep article seeds grounded in citations across different active channels where the evidence supports it.",
+        "You MUST include exactly 5 article_seeds: one lead and four secondary stories.",
         "Do not merge unrelated citations into one story just to make the page look tidy.",
         "Also write channel_reports for the rooms where the evidence supports a useful room-level read.",
         "Each channel report must be model-written from channel evidence and answer what happened there, why it matters, what to watch or action, and which citation refs support it.",
@@ -577,6 +578,24 @@ export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportM
                 role: "secondary",
                 section: "Plain Theme Label",
                 title: "sober article title",
+                dek: "article angle",
+                why_this_story: "why this deserves a separate article",
+                evidence_refs: ["vibez:message:..."],
+                channels: ["channel name"],
+              },
+              {
+                role: "secondary",
+                section: "Plain Theme Label",
+                title: "third side article title",
+                dek: "article angle",
+                why_this_story: "why this deserves a separate article",
+                evidence_refs: ["vibez:message:..."],
+                channels: ["channel name"],
+              },
+              {
+                role: "secondary",
+                section: "Plain Theme Label",
+                title: "fourth side article title",
                 dek: "article angle",
                 why_this_story: "why this deserves a separate article",
                 evidence_refs: ["vibez:message:..."],
@@ -658,7 +677,7 @@ function buildAtlasIssueShellRepairMessages({
         "Repair this issue shell so the required fields are present.",
         `Validation error: ${validationError}`,
         "main_topic must have a title, exactly five paragraphs, and valid evidence_refs.",
-        "article_seeds must contain exactly one lead and at least two secondary article angles.",
+        "article_seeds must contain exactly one lead and four secondary article angles.",
         "Each article_seed must be an editorial choice, not a mechanical channel summary.",
         "Each article_seed must include role, section, title, dek, why_this_story, evidence_refs, and channels.",
         "Do not choose story angles by busiest channel alone. Choose what best explains what happened, why it matters, and what needs action.",
@@ -722,7 +741,7 @@ export function buildAtlasArticleRepairMessages({
         `This issue covers ${atlas.window.hours} hours. For this issue, do not write "this week", "weekly", or "week in review"; write "in this ${atlas.window.hours}-hour window", "over the latest window", or another accurate phrase.`,
         `Validation error: ${validationError}`,
         "Keep the existing issue/headline/dek/main_topic implied by the invalid report.",
-        "Return exactly one lead article plus at least two secondary articles.",
+        "Return exactly one lead article plus four secondary articles.",
         "Each article must have role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
         "Each article body must contain at least five compact natural paragraph objects with text and citation_refs.",
         "At least the first four paragraphs should include citation_refs from that article's evidence pack.",
@@ -789,8 +808,8 @@ async function repairArticlesIndividually({
   generator: AtlasReportGenerator;
 }): Promise<unknown[]> {
   const articleSeeds = buildArticleRepairSeeds(invalidReport, atlas);
-  if (articleSeeds.length < 3) {
-    throw new Error("atlas editorial shell must provide one lead and at least two cited article seeds");
+  if (articleSeeds.length !== 5) {
+    throw new Error("atlas editorial shell must provide exactly one lead and four cited secondary article seeds");
   }
   const articles: unknown[] = [];
   for (let index = 0; index < articleSeeds.length; index += 1) {
@@ -1018,7 +1037,7 @@ export function buildAtlasReportRepairMessages({
         "- main_topic.paragraphs must contain exactly five short strings.",
         "- If main_topic.paragraphs has fewer than five strings, write the missing strings from the evidence pack.",
         "- The five main_topic paragraphs must be, in order: setup, what happened, what it means, why it matters, next move.",
-        "- articles must contain 3 to 6 items, exactly one lead and at least two secondary items.",
+        "- articles must contain exactly five items: one lead and four secondary items.",
         "- every article needs role, section, title, dek, summary, body, actions, evidence_refs, link_refs, channels, image, and related_article_slugs.",
         "- article sections must be plain text labels with no emoji or decorative symbols.",
         "- each article body must be an array with at least five compact paragraph objects; each object needs text and citation_refs.",
@@ -1026,7 +1045,7 @@ export function buildAtlasReportRepairMessages({
         "- every article must include at least one valid evidence_refs citation from the evidence pack.",
         "- every article image must include kind, prompt, and alt; kind should be generated unless a real source image URL exists.",
         "- image prompts must describe a NYTimes-style documentary editorial photograph grounded in the article context, with dry clever nerd humor or nerd-meme references only when they serve the story. Avoid visible text, logos, cartoons, and glossy AI aesthetics.",
-        "- If the invalid JSON has fewer than three valid articles, write enough complete secondary articles from the evidence pack to reach three.",
+        "- If the invalid JSON has fewer than five valid articles, write enough complete secondary articles from the evidence pack to reach five.",
         "- use only refs present in the evidence pack.",
         "",
         "Required main_topic shape:",
@@ -1192,11 +1211,11 @@ function normalizeAtlasEditorialShell(
   const allowedRefs = new Set(Object.keys(atlas.citations));
   const articleSeeds = readArticleSeeds(payload.article_seeds, allowedRefs);
   if (
-    articleSeeds.length < 3 ||
+    articleSeeds.length !== 5 ||
     articleSeeds.filter((seed) => readText((seed as Record<string, unknown>).role) === "lead").length !== 1 ||
-    articleSeeds.filter((seed) => readText((seed as Record<string, unknown>).role) === "secondary").length < 2
+    articleSeeds.filter((seed) => readText((seed as Record<string, unknown>).role) === "secondary").length !== 4
   ) {
-    throw new Error("atlas editorial shell must provide one lead and at least two cited article seeds");
+    throw new Error("atlas editorial shell must provide exactly one lead and four cited secondary article seeds");
   }
   const shell: AtlasEditorialShell = {
     issue: readIssue(payload.issue, atlas),
@@ -1337,8 +1356,8 @@ function readArticles(
     .filter((item): item is AtlasEditorialArticle => Boolean(item))
     .slice(0, 6);
 
-  if (rawItems.length > 0 && articles.length < 3) {
-    throw new Error("atlas editorial report requires at least three newspaper articles with five cited paragraphs");
+  if (rawItems.length > 0 && articles.length < 5) {
+    throw new Error("atlas editorial report requires five newspaper articles with five cited paragraphs");
   }
 
   if (articles.length === 0) {

@@ -387,7 +387,7 @@ export default function AtlasPage({
         </div>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1.4fr_0.8fr]">
+      <section className={lens === "diagnostics" ? "grid gap-4 xl:grid-cols-[1.4fr_0.8fr]" : "space-y-4"}>
         <div className="space-y-4">
           {lens === "value" && (
             <BelowFoldValueDesk
@@ -409,14 +409,12 @@ export default function AtlasPage({
           )}
         </div>
 
-        {lens === "diagnostics" ? (
+        {lens === "diagnostics" && (
           <DetailRail
             atlas={atlas}
             cell={selectedCell}
             onOpenCitation={setSelectedCitationRef}
           />
-        ) : (
-          <EditionNotes atlas={atlas} />
         )}
       </section>
 
@@ -516,16 +514,6 @@ function NarrativeReport({
                   compact
                 />
               ))}
-              {frontPage.right.length === 0 && (
-                <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
-                  <h3 className="font-serif text-xl font-bold text-[#1f1a12]">
-                    Evidence Desk
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-[#5e5238]">
-                    The matrix, citations, stats, and links sit below the fold.
-                  </p>
-                </div>
-              )}
             </div>
           </div>
 
@@ -1186,7 +1174,6 @@ function BelowFoldValueDesk({
   const unresolved = atlas.concerns
     .filter((concern) => concern.kind === "unresolved_question" || concern.kind === "hot_alert")
     .slice(0, 4);
-  const evidence = report?.evidence?.slice(0, 5) || [];
   const usefulLinks = atlas.links.slice(0, 6);
 
   return (
@@ -1208,19 +1195,30 @@ function BelowFoldValueDesk({
 
       <BelowFoldPanel title="Unresolved Questions">
         <div className="space-y-3">
-          {unresolved.map((concern) => (
-            <article key={concern.title} className="border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
+          {unresolved.map((concern, index) => {
+            const primaryRef = concern.citation_refs[0];
+            const citation = primaryRef ? atlas.citations[primaryRef] : null;
+            return (
+            <article key={`${concern.kind}-${concern.title}-${primaryRef || index}`} className="border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
               <h3 className="break-words font-serif text-lg font-bold leading-6 text-[#1f1a12]">
-                {concern.title}
+                {cleanReaderText(concern.title)}
               </h3>
-              <p className="mt-1 text-sm leading-6 text-[#5e5238]">{concern.detail}</p>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">{cleanReaderText(concern.detail)}</p>
+              {citation && (
+                <p className="mt-2 text-xs leading-5 text-[#786846]">
+                  Source context: {citation.channel || "unknown channel"}
+                  {citation.sender ? `, ${citation.sender}` : ""}
+                  {citation.timestamp ? `, ${formatTimestamp(citation.timestamp)}` : ""}.
+                </p>
+              )}
               <CitationList
                 atlas={atlas}
                 refs={concern.citation_refs.slice(0, 2)}
                 onOpenCitation={onOpenCitation}
               />
             </article>
-          ))}
+            );
+          })}
           {unresolved.length === 0 && (
             <p className="text-sm leading-6 text-[#786846]">
               No unresolved-question signal stood out in this edition.
@@ -1229,44 +1227,45 @@ function BelowFoldValueDesk({
         </div>
       </BelowFoldPanel>
 
-      <BelowFoldPanel title="Evidence Desk">
-        <div className="space-y-3">
-          {evidence.map((item) => (
-            <article key={item.ref} className="border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
-              <button
-                type="button"
-                onClick={() => onOpenCitation(item.ref)}
-                className="text-left font-serif text-lg font-bold leading-6 text-[#1f1a12] underline decoration-[#cbbf9d] underline-offset-4 hover:text-[#8b5f21]"
-              >
-                {item.label}
-              </button>
-              <p className="mt-1 text-sm leading-6 text-[#5e5238]">{item.why_it_matters}</p>
-            </article>
-          ))}
-          {evidence.length === 0 && (
-            <p className="text-sm leading-6 text-[#786846]">
-              The edition did not publish a curated evidence desk.
-            </p>
-          )}
-        </div>
-      </BelowFoldPanel>
-
-      <BelowFoldPanel title="Useful Links">
+      <BelowFoldPanel title="Useful Links" className="lg:col-span-2">
         <div className="space-y-3">
           {usefulLinks.map((link) => (
-            <a
-              key={link.ref}
-              href={link.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block min-w-0 border-t border-[#d8cba9] pt-3 text-sm leading-6 text-[#342a1b] first:border-t-0 first:pt-0 hover:text-[#8b5f21]"
-            >
-              <span className="block break-words font-semibold">{link.title}</span>
-              <span className="block text-xs text-[#786846]">
-                {link.source_group || "source unavailable"}
-                {link.shared_by ? ` · shared by ${link.shared_by}` : ""}
-              </span>
-            </a>
+            <article key={link.ref} className="min-w-0 border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex break-words text-sm font-semibold leading-6 text-[#1f1a12] underline decoration-[#cbbf9d] underline-offset-4 hover:text-[#8b5f21]"
+              >
+                {cleanReaderText(link.title)}
+              </a>
+              <p className="mt-1 text-xs leading-5 text-[#786846]">
+                Recent link from {link.source_group || "an unknown channel"}
+                {link.shared_by ? `, shared by ${link.shared_by}` : ""}
+                {link.last_seen ? `, last seen ${formatDateTime(link.last_seen)}` : ""}.
+              </p>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">
+                Useful because it was part of the current reporting window and gives the cited
+                conversation a durable source to inspect.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="border border-[#1f1a12] px-2 py-1 text-xs font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+                >
+                  Open link
+                </a>
+                <button
+                  type="button"
+                  onClick={() => onOpenCitation(link.ref)}
+                  className="border border-[#cbbf9d] px-2 py-1 text-xs font-semibold text-[#5e5238] hover:border-[#1f1a12]"
+                >
+                  Open citation
+                </button>
+              </div>
+            </article>
           ))}
           {usefulLinks.length === 0 && (
             <p className="text-sm leading-6 text-[#786846]">
@@ -1279,9 +1278,17 @@ function BelowFoldValueDesk({
   );
 }
 
-function BelowFoldPanel({ title, children }: { title: string; children: ReactNode }) {
+function BelowFoldPanel({
+  title,
+  children,
+  className = "",
+}: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <section className="min-w-0 rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4">
+    <section className={`min-w-0 rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4 ${className}`}>
       <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
       <div className="mt-3">{children}</div>
     </section>
@@ -1301,46 +1308,6 @@ function personReasonLabel(reason: AtlasPeopleInsights["new_faces"][number]["det
     default:
       return reason;
   }
-}
-
-function EditionNotes({ atlas }: { atlas: AtlasSnapshot }) {
-  const activeRooms = atlas.channels.filter((room) => room.message_count > 0).length;
-  const citedStories = Object.keys(atlas.citations).length;
-  return (
-    <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5">
-      <p className="text-xs font-semibold uppercase tracking-wide text-[#8b5f21]">
-        Edition notes
-      </p>
-      <div className="mt-3 space-y-3 text-sm leading-6 text-[#5e5238]">
-        <p>
-          This edition draws from {activeRooms.toLocaleString()} active room
-          {activeRooms === 1 ? "" : "s"} and carries {citedStories.toLocaleString()} validated
-          citation{citedStories === 1 ? "" : "s"}.
-        </p>
-        <p>
-          Counts describe the reporting window, not total community membership. For the full
-          directory, open Stats.
-        </p>
-      </div>
-      <div className="mt-4 space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-[#786846]">Useful links</p>
-        {atlas.links.slice(0, 4).map((link) => (
-          <a
-            key={link.ref}
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block rounded border border-[#cbbf9d] bg-[#fffaf0]/45 p-2 text-xs text-[#342a1b] hover:border-[#1f1a12]"
-          >
-            {link.title}
-          </a>
-        ))}
-        {atlas.links.length === 0 && (
-          <p className="text-sm text-[#786846]">No links in this report.</p>
-        )}
-      </div>
-    </aside>
-  );
 }
 
 function Matrix({
@@ -1654,7 +1621,36 @@ function cellKey(cell: AtlasMatrixCell): string {
   return `${cell.channel}||${cell.topic}`;
 }
 
-function formatTimestamp(timestamp: number): string {
+function cleanReaderText(value: string | null | undefined): string {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|div|pre|code|li|ul|ol)>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/[`*_#>]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatTimestamp(timestamp: number | string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return String(timestamp);
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     month: "short",
@@ -1663,5 +1659,5 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",
-  }).format(new Date(timestamp));
+  }).format(date);
 }

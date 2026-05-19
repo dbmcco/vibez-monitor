@@ -78,6 +78,10 @@ function completeArticle(title: string, role = "secondary", ref = "vibez:message
   };
 }
 
+function completeArticleObject(title: string, role = "secondary", ref = "vibez:message:m1") {
+  return completeArticle(title, role, ref).article;
+}
+
 function completeArticleSeeds() {
   return [
     {
@@ -106,6 +110,24 @@ function completeArticleSeeds() {
       why_this_story: "It explains the value of preserving the source trail.",
       evidence_refs: ["vibez:message:m1"],
       channels: ["Agents"],
+    },
+    {
+      role: "secondary",
+      section: "Evidence Systems",
+      title: "Evidence systems move from afterthought to method",
+      dek: "The cited record becomes part of how the group works.",
+      why_this_story: "It explains why citations now shape the work.",
+      evidence_refs: ["vibez:message:m1"],
+      channels: ["Agents"],
+    },
+    {
+      role: "secondary",
+      section: "Community Practice",
+      title: "Community practice turns questions into operating rhythm",
+      dek: "The rooms are converging on repeatable habits.",
+      why_this_story: "It gives the right rail a separate reader-value story.",
+      evidence_refs: ["vibez:message:m2"],
+      channels: ["Tools"],
     },
   ];
 }
@@ -150,7 +172,7 @@ describe("atlas editorial report", () => {
     expect(promptText).not.toMatch(/\busers\b/i);
     expect(promptText).toContain("daily newspaper issue");
     expect(promptText).toContain("Do not reduce the day to one theme");
-    expect(promptText).toContain("MUST include 3 to 6 articles");
+    expect(promptText).toContain("MUST include exactly 5 articles");
     expect(promptText).toContain("section");
     expect(promptText).toContain("at least five paragraphs");
     expect(promptText).toContain("paragraph objects");
@@ -250,6 +272,8 @@ describe("atlas editorial report", () => {
             link_refs: ["vibez:link:11"],
             channels: ["Agents", "Tools"],
           },
+          completeArticleObject("Evidence systems move from afterthought to method"),
+          completeArticleObject("Community practice turns questions into operating rhythm", "secondary", "vibez:message:m2"),
         ],
         briefs: [
           {
@@ -277,7 +301,7 @@ describe("atlas editorial report", () => {
       title: "The Vibez Atlas",
       edition_label: "Daily Edition",
     });
-    expect(report.articles).toHaveLength(3);
+    expect(report.articles).toHaveLength(5);
     expect(report.articles[0]).toMatchObject({
       role: "lead",
       section: "Agent Harnesses",
@@ -365,6 +389,8 @@ describe("atlas editorial report", () => {
             actions: ["Save the source trail."],
             evidence_refs: ["vibez:message:m1"],
           },
+          completeArticleObject("Evidence systems move from afterthought to method"),
+          completeArticleObject("Community practice turns questions into operating rhythm", "secondary", "vibez:message:m2"),
         ],
       },
       sampleAtlas(),
@@ -464,7 +490,9 @@ describe("atlas editorial report", () => {
       .mockResolvedValueOnce({ parsed: shell })
       .mockResolvedValueOnce({ parsed: completeArticle("Evaluation becomes the work", "lead") })
       .mockResolvedValueOnce({ parsed: completeArticle("Tooling gaps are product gaps", "secondary", "vibez:message:m2") })
-      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") });
+      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Evidence systems move from afterthought to method") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Community practice turns questions into operating rhythm", "secondary", "vibez:message:m2") });
 
     const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
 
@@ -507,12 +535,14 @@ describe("atlas editorial report", () => {
       .mockResolvedValueOnce({ parsed: shell })
       .mockResolvedValueOnce({ parsed: completeArticle("Evaluation becomes the work", "lead") })
       .mockResolvedValueOnce({ parsed: completeArticle("Tooling gaps are product gaps", "secondary", "vibez:message:m2") })
-      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") });
+      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Evidence systems move from afterthought to method") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Community practice turns questions into operating rhythm", "secondary", "vibez:message:m2") });
 
     const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
 
-    expect(generator).toHaveBeenCalledTimes(5);
-    expect(report.articles).toHaveLength(3);
+    expect(generator).toHaveBeenCalledTimes(7);
+    expect(report.articles).toHaveLength(5);
   });
 
   test("asks the model to repair schema-invalid report JSON", async () => {
@@ -556,7 +586,7 @@ describe("atlas editorial report", () => {
 
     const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
 
-    expect(generator).toHaveBeenCalledTimes(5);
+    expect(generator).toHaveBeenCalledTimes(7);
     expect(generator.mock.calls[1][0].messages.map((message) => message.content).join("\n")).toContain(
       "Repair this issue shell",
     );
@@ -594,15 +624,17 @@ describe("atlas editorial report", () => {
       .mockResolvedValueOnce({ parsed: baseReport })
       .mockResolvedValueOnce({ parsed: completeArticle("Evaluation becomes the work", "lead") })
       .mockResolvedValueOnce({ parsed: completeArticle("Tooling gaps are product gaps", "secondary", "vibez:message:m2") })
-      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") });
+      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Evidence systems move from afterthought to method") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Community practice turns questions into operating rhythm", "secondary", "vibez:message:m2") });
 
     const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
 
-    expect(generator).toHaveBeenCalledTimes(4);
+    expect(generator).toHaveBeenCalledTimes(6);
     expect(generator.mock.calls[1][0].messages.map((message) => message.content).join("\n")).toContain(
       "Write one complete article",
     );
-    expect(report.articles).toHaveLength(3);
+    expect(report.articles).toHaveLength(5);
     expect(report.articles[0].body).toHaveLength(5);
   });
 
