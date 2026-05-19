@@ -440,6 +440,10 @@ function bodyHash(body: string): string {
   return createHash("sha256").update(body).digest("hex");
 }
 
+function linkHash(url: string): string {
+  return createHash("sha256").update(url).digest("hex");
+}
+
 function normalizeSourceTimestamp(value: string | number): string {
   const date = typeof value === "number" ? new Date(value) : new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -600,6 +604,30 @@ export async function applyBeeperBatchPayload(
               ON CONFLICT (raw_event_id, normalized_url, position) DO NOTHING
             `,
             [rawEventId, link.url, link.normalized_url, link.host, link.position],
+          );
+          await pool.query(
+            `
+              INSERT INTO links
+                (url, url_hash, title, category, relevance, shared_by, source_group,
+                 first_seen, last_seen, mention_count, value_score, report_date,
+                 authored_by, pinned)
+              VALUES ($1, $2, NULL, NULL, NULL, $3, $4, $5, $5, 1, 0, $6, NULL, 0)
+              ON CONFLICT (url_hash) DO UPDATE SET
+                url = EXCLUDED.url,
+                shared_by = COALESCE(links.shared_by, EXCLUDED.shared_by),
+                source_group = COALESCE(links.source_group, EXCLUDED.source_group),
+                first_seen = COALESCE(links.first_seen, EXCLUDED.first_seen),
+                last_seen = GREATEST(COALESCE(links.last_seen, ''), EXCLUDED.last_seen),
+                mention_count = links.mention_count + 1
+            `,
+            [
+              link.normalized_url,
+              linkHash(link.normalized_url),
+              event.sender_display_name.trim(),
+              event.room_name.trim(),
+              timestamp,
+              timestamp.slice(0, 10),
+            ],
           );
         }
       }
