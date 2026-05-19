@@ -448,6 +448,14 @@ function normalizeSourceTimestamp(value: string | number): string {
   return date.toISOString();
 }
 
+function sourceTimestampMs(value: string | number): number {
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Invalid source_timestamp in Beeper batch.");
+  }
+  return date.getTime();
+}
+
 function isValidRawBeeperEvent(event: RawBeeperEventPayload): boolean {
   return Boolean(
     event?.source_event_key &&
@@ -504,6 +512,7 @@ export async function applyBeeperBatchPayload(
   }
 
   await ensureCanonicalIngestSchema(pool);
+  await ensurePostgresCoreSchema(pool);
   await pool.query("BEGIN");
   let batchId: number | string | null = null;
   let insertedCount = 0;
@@ -555,6 +564,31 @@ export async function applyBeeperBatchPayload(
         ],
       );
       const rawEventId = insertResult.rows?.[0]?.id;
+      await pool.query(
+        `
+          INSERT INTO messages
+            (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (id) DO UPDATE SET
+            room_id = EXCLUDED.room_id,
+            room_name = EXCLUDED.room_name,
+            sender_id = EXCLUDED.sender_id,
+            sender_name = EXCLUDED.sender_name,
+            body = EXCLUDED.body,
+            timestamp = EXCLUDED.timestamp,
+            raw_event = EXCLUDED.raw_event
+        `,
+        [
+          event.source_event_key.trim(),
+          event.source_room_id.trim(),
+          event.room_name.trim(),
+          event.sender_key.trim(),
+          event.sender_display_name.trim(),
+          event.body,
+          sourceTimestampMs(event.source_timestamp),
+          stableJson(event.raw_payload_json, {}),
+        ],
+      );
       if (insertResult.rowCount && rawEventId) {
         insertedCount += 1;
         for (const link of extractLinks(event.body)) {

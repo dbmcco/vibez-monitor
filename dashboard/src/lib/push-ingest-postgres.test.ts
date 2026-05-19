@@ -192,6 +192,7 @@ describe("Postgres push ingestion", () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS source_watermarks"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS raw_events"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS raw_event_links"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO messages"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO raw_event_links"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO source_watermarks"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("UPDATE ingest_batches"))).toBe(true);
