@@ -36,6 +36,9 @@ export interface AtlasEditorialImage {
   prompt?: string;
   url?: string;
   alt?: string;
+  status?: "pending" | "ready" | "failed" | "skipped";
+  error?: string;
+  asset_key?: string;
 }
 
 export interface AtlasEditorialArticle {
@@ -1423,7 +1426,18 @@ function readImage(value: unknown, title: string): AtlasEditorialImage {
     prompt: readText(payload.prompt) || undefined,
     url: readText(payload.url) || undefined,
     alt: readText(payload.alt) || undefined,
+    status: readImageStatus(payload.status),
+    error: readText(payload.error) || undefined,
+    asset_key: readText(payload.asset_key) || undefined,
   };
+}
+
+function readImageStatus(value: unknown): AtlasEditorialImage["status"] | undefined {
+  const status = readText(value);
+  if (status === "pending" || status === "ready" || status === "failed" || status === "skipped") {
+    return status;
+  }
+  return undefined;
 }
 
 function shellFallbackParagraphs(payload: Record<string, unknown>): string[] {

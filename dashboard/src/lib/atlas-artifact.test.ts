@@ -145,4 +145,50 @@ describe("listAtlasEditions", () => {
       "failed",
     ]);
   });
+
+  test("stores and reads durable Atlas image assets by key", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{
+        asset_key: "2026-05-19/daily/skill-bloat.png",
+        status: "ready",
+        public_path: "/api/atlas/image/2026-05-19/daily/skill-bloat.png",
+        content_type: "image/png",
+      }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          asset_bytes: Buffer.from("fake-png"),
+          content_type: "image/png",
+        }],
+      });
+
+    const { readAtlasStoredAsset, upsertAtlasAsset } = await import("./atlas-artifact");
+    await upsertAtlasAsset({
+      assetKey: "2026-05-19/daily/skill-bloat.png",
+      editionDate: "2026-05-19",
+      editionType: "daily",
+      windowHours: 48,
+      articleSlug: "skill-bloat",
+      assetKind: "article_image",
+      status: "ready",
+      prompt: "NYTimes-style documentary photo",
+      contentType: "image/png",
+      assetBytes: Buffer.from("fake-png"),
+      publicPath: "/api/atlas/image/2026-05-19/daily/skill-bloat.png",
+      provider: "test",
+      model: "test-model",
+    });
+    const asset = await readAtlasStoredAsset("2026-05-19/daily/skill-bloat.png");
+
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO atlas_assets"))).toBe(true);
+    expect(asset).toEqual({
+      data: Buffer.from("fake-png"),
+      contentType: "image/png",
+    });
+  });
 });

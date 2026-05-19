@@ -39,6 +39,8 @@ export type AtlasPublishStage =
   | "verify";
 export type AtlasPublishStageStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
 export type AtlasPublishJobStatus = "running" | "succeeded" | "failed";
+export type AtlasAssetStatus = "pending" | "ready" | "failed" | "skipped";
+export type AtlasAssetKind = "article_image";
 
 export interface AtlasPublishJob {
   id: string;
@@ -48,7 +50,15 @@ export interface AtlasPublishJob {
   status: AtlasPublishJobStatus;
 }
 
+export interface AtlasAssetRecord {
+  asset_key: string;
+  status: AtlasAssetStatus;
+  public_path?: string | null;
+  content_type?: string | null;
+}
+
 let atlasPool: Pool | null = null;
+let atlasPublishSchemaReady = false;
 
 function atlasPostgresUrl(): string {
   return (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "").trim();
@@ -87,6 +97,7 @@ async function ensureAtlasEditionSchema(pool: Pool): Promise<void> {
 }
 
 async function ensureAtlasPublishSchema(pool: Pool): Promise<void> {
+  if (atlasPublishSchemaReady) return;
   await ensureAtlasEditionSchema(pool);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atlas_publish_jobs (
@@ -134,6 +145,7 @@ async function ensureAtlasPublishSchema(pool: Pool): Promise<void> {
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_atlas_assets_edition ON atlas_assets (edition_date DESC, edition_type, window_hours)",
   );
+  atlasPublishSchemaReady = true;
 }
 
 export function editionTypeForWindow(windowHours: number): AtlasPublishEditionType {
@@ -210,6 +222,131 @@ export function readAtlasGeneratedAsset(relativePath: string): { data: Buffer; c
   return {
     data: fs.readFileSync(assetPath),
     contentType,
+  };
+}
+
+function cleanAtlasAssetKey(relativePath: string): string {
+  return relativePath
+    .split(/[\\/]+/)
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+}
+
+export async function upsertAtlasAsset({
+  assetKey,
+  editionDate,
+  editionType,
+  windowHours,
+  articleSlug = null,
+  assetKind,
+  status,
+  prompt = null,
+  contentType = null,
+  assetBytes = null,
+  storageUrl = null,
+  publicPath = null,
+  provider = null,
+  model = null,
+  error = null,
+  metadata = {},
+}: {
+  assetKey: string;
+  editionDate: string;
+  editionType: AtlasPublishEditionType;
+  windowHours: number;
+  articleSlug?: string | null;
+  assetKind: AtlasAssetKind;
+  status: AtlasAssetStatus;
+  prompt?: string | null;
+  contentType?: string | null;
+  assetBytes?: Buffer | null;
+  storageUrl?: string | null;
+  publicPath?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  error?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<AtlasAssetRecord | null> {
+  const pool = getAtlasPool();
+  if (!pool) return null;
+  await ensureAtlasPublishSchema(pool);
+  const safeAssetKey = cleanAtlasAssetKey(assetKey);
+  if (!safeAssetKey) {
+    throw new Error("Atlas asset key is required.");
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO atlas_assets
+       (asset_key, edition_date, edition_type, window_hours, article_slug, asset_kind,
+        status, prompt, content_type, asset_bytes, storage_url, public_path, provider,
+        model, error, metadata, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, now())
+     ON CONFLICT (asset_key) DO UPDATE SET
+       edition_date = EXCLUDED.edition_date,
+       edition_type = EXCLUDED.edition_type,
+       window_hours = EXCLUDED.window_hours,
+       article_slug = EXCLUDED.article_slug,
+       asset_kind = EXCLUDED.asset_kind,
+       status = EXCLUDED.status,
+       prompt = EXCLUDED.prompt,
+       content_type = EXCLUDED.content_type,
+       asset_bytes = EXCLUDED.asset_bytes,
+       storage_url = EXCLUDED.storage_url,
+       public_path = EXCLUDED.public_path,
+       provider = EXCLUDED.provider,
+       model = EXCLUDED.model,
+       error = EXCLUDED.error,
+       metadata = EXCLUDED.metadata,
+       updated_at = now()
+     RETURNING asset_key, status, public_path, content_type`,
+    [
+      safeAssetKey,
+      editionDate,
+      editionType,
+      windowHours,
+      articleSlug,
+      assetKind,
+      status,
+      prompt,
+      contentType,
+      assetBytes,
+      storageUrl,
+      publicPath,
+      provider,
+      model,
+      error,
+      JSON.stringify(metadata),
+    ],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    asset_key: String(row.asset_key),
+    status: row.status === "ready" || row.status === "failed" || row.status === "skipped" ? row.status : "pending",
+    public_path: row.public_path ? String(row.public_path) : null,
+    content_type: row.content_type ? String(row.content_type) : null,
+  };
+}
+
+export async function readAtlasStoredAsset(relativePath: string): Promise<{ data: Buffer; contentType: string } | null> {
+  const pool = getAtlasPool();
+  if (!pool) return null;
+  await ensureAtlasPublishSchema(pool);
+  const assetKey = cleanAtlasAssetKey(relativePath);
+  if (!assetKey) return null;
+  const { rows } = await pool.query(
+    `SELECT asset_bytes, content_type
+     FROM atlas_assets
+     WHERE asset_key = $1
+       AND status = 'ready'
+       AND asset_bytes IS NOT NULL
+     LIMIT 1`,
+    [assetKey],
+  );
+  const row = rows[0];
+  if (!row?.asset_bytes) return null;
+  return {
+    data: Buffer.isBuffer(row.asset_bytes) ? row.asset_bytes : Buffer.from(row.asset_bytes),
+    contentType: String(row.content_type || "image/png"),
   };
 }
 

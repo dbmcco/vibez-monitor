@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAtlasGeneratedAsset } from "@/lib/atlas-artifact";
+import { readAtlasGeneratedAsset, readAtlasStoredAsset } from "@/lib/atlas-artifact";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,7 @@ async function resolveMaybe<T>(value: Promise<T> | T): Promise<T> {
 export async function GET(_request: Request, context: RouteContext) {
   const params = await resolveMaybe(context.params);
   const relativePath = params.path.join("/");
-  const asset = readAtlasGeneratedAsset(relativePath);
+  const asset = await readAtlasStoredAsset(relativePath) || readAtlasGeneratedAsset(relativePath);
   if (!asset) {
     return NextResponse.json({ error: "atlas image unavailable" }, { status: 404 });
   }

@@ -8,6 +8,7 @@ const generateAtlasEditorialReportMock = vi.fn();
 const writeAtlasArtifactMock = vi.fn();
 const startAtlasPublishJobMock = vi.fn();
 const updateAtlasPublishStageMock = vi.fn();
+const upsertAtlasAssetMock = vi.fn();
 
 vi.mock("pg", () => ({
   Pool: vi.fn(() => ({
@@ -32,6 +33,7 @@ vi.mock("./atlas-artifact", () => ({
   writeAtlasArtifact: writeAtlasArtifactMock,
   startAtlasPublishJob: startAtlasPublishJobMock,
   updateAtlasPublishStage: updateAtlasPublishStageMock,
+  upsertAtlasAsset: upsertAtlasAssetMock,
   editionTypeForWindow: (windowHours: number) => windowHours >= 120 ? "sunday_review" : "daily",
 }));
 
@@ -48,6 +50,7 @@ describe("Railway admin enrichment", () => {
     writeAtlasArtifactMock.mockReset();
     startAtlasPublishJobMock.mockReset();
     updateAtlasPublishStageMock.mockReset();
+    upsertAtlasAssetMock.mockReset();
     process.env = {
       ...ORIGINAL_ENV,
       VIBEZ_DATABASE_URL: "postgres://railway-db",
@@ -163,6 +166,7 @@ describe("Railway admin enrichment", () => {
     });
     embedTextsMock.mockResolvedValue({ vectors: [] });
     startAtlasPublishJobMock.mockResolvedValue({ id: "atlas-job-1" });
+    upsertAtlasAssetMock.mockResolvedValue({ asset_key: "unused" });
     getAtlasSnapshotMock.mockResolvedValue({
       generated_at: "2026-05-19T10:00:00Z",
       window: {
@@ -207,6 +211,11 @@ describe("Railway admin enrichment", () => {
     expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
       jobId: "atlas-job-1",
       stage: "write_articles",
+      status: "running",
+    });
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: "atlas-job-1",
+      stage: "generate_images",
       status: "running",
     });
     expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({

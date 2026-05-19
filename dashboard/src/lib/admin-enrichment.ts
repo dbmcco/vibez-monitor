@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 
+import { attachGeneratedArticleImages, summarizeAtlasImageGeneration } from "./atlas-image-generation";
 import { generateAtlasEditorialReport } from "./atlas-report";
 import {
   editionTypeForWindow,
@@ -415,6 +416,32 @@ async function rebuildAtlas(
     throw error;
   }
   let artifactPath = "";
+  try {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "generate_images",
+      status: "running",
+    });
+    editorialReport = await attachGeneratedArticleImages({
+      report: editorialReport,
+      windowHours: hours,
+      publishJobId: publishJob?.id,
+    });
+    const imageSummary = summarizeAtlasImageGeneration(editorialReport);
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "generate_images",
+      status: imageSummary.ready > 0 ? "succeeded" : "skipped",
+    });
+  } catch (error) {
+    await updateAtlasPublishStage({
+      jobId: publishJob?.id,
+      stage: "generate_images",
+      status: "failed",
+      error: errorMessage(error),
+    });
+    throw error;
+  }
   try {
     await updateAtlasPublishStage({
       jobId: publishJob?.id,
