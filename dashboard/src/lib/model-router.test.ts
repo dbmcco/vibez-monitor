@@ -311,4 +311,72 @@ describe("model-router", () => {
       moderation: "low",
     });
   });
+
+  test("generates article images through AtlasCloud prediction polling", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "image.article": {
+            provider: "atlascloud",
+            model: "qwen/qwen-image-2.0-pro/text-to-image",
+            mode: "image",
+            base_url: "https://api.atlascloud.ai/api/v1",
+            api_key_env: "VIBEZ_ATLASCLOUD_API_KEY",
+            max_tokens: 0,
+            temperature: 0,
+            timeout_ms: 30000,
+          },
+        },
+      }),
+    );
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_ATLASCLOUD_API_KEY: "test-atlas-key",
+      VIBEZ_ATLASCLOUD_POLL_INTERVAL_MS: "0",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ data: { id: "prediction-1" } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ data: { status: "processing" } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ data: { status: "completed", outputs: ["https://cdn.example.com/atlas.png"] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        Buffer.from("atlas-png"),
+        { status: 200, headers: { "content-type": "image/png" } },
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateImage({
+      taskId: "image.article",
+      prompt: "x".repeat(900),
+      manifestPath,
+    });
+
+    expect(result).toMatchObject({
+      provider: "atlascloud",
+      model: "qwen/qwen-image-2.0-pro/text-to-image",
+      contentType: "image/png",
+    });
+    expect(result.data.toString("utf8")).toBe("atlas-png");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.atlascloud.ai/api/v1/model/generateImage");
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toMatchObject({
+      model: "qwen/qwen-image-2.0-pro/text-to-image",
+      seed: -1,
+    });
+    expect(body.prompt.length).toBe(800);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.atlascloud.ai/api/v1/model/prediction/prediction-1");
+    expect(String(fetchMock.mock.calls[3][0])).toBe("https://cdn.example.com/atlas.png");
+  });
 });

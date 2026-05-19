@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 export interface ModelRoute {
-  provider: "openai" | "anthropic" | "openrouter" | "ollama" | "xai";
+  provider: "openai" | "anthropic" | "openrouter" | "ollama" | "xai" | "atlascloud";
   model: string;
   mode: "text" | "json" | "embedding" | "image";
   max_tokens: number;
@@ -58,7 +58,10 @@ const PROVIDER_CREDENTIAL_ENVS = {
   anthropic: ["VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
   openrouter: ["VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
   xai: ["VIBEZ_XAI_API_KEY", "XAI_API_KEY"],
+  atlascloud: ["VIBEZ_ATLASCLOUD_API_KEY", "ATLASCLOUD_API_KEY"],
 } as const;
+const ATLASCLOUD_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export function defaultManifestPath(): string {
   return process.env.VIBEZ_MODEL_ROUTING_PATH ||
@@ -549,6 +552,115 @@ async function runOpenAIImageRoute(
   throw new Error("image route returned no image data");
 }
 
+function atlasCloudBaseUrl(route: ModelRoute): string {
+  return (route.base_url || "https://api.atlascloud.ai/api/v1").replace(/\/$/, "");
+}
+
+function atlasCloudImagePrompt(prompt: string): string {
+  return prompt.slice(0, 800);
+}
+
+function atlasCloudPollIntervalMs(): number {
+  const parsed = Number.parseInt(process.env.VIBEZ_ATLASCLOUD_POLL_INTERVAL_MS || "", 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 3000;
+  return Math.min(parsed, 30_000);
+}
+
+async function readAtlasCloudJson(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) as Record<string, unknown> : {};
+  } catch {
+    throw new Error(`atlascloud returned non-json response: ${text.slice(0, 300)}`);
+  }
+}
+
+function atlasCloudPredictionId(payload: Record<string, unknown>): string {
+  const data = payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+  const id = data.id || payload.id;
+  if (typeof id !== "string" || !id) {
+    throw new Error(`atlascloud submit returned no prediction id: ${JSON.stringify(payload).slice(0, 300)}`);
+  }
+  return id;
+}
+
+function atlasCloudPredictionData(payload: Record<string, unknown>): Record<string, unknown> {
+  return payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : payload;
+}
+
+async function runAtlasCloudImageRoute(
+  route: ModelRoute,
+  prompt: string,
+): Promise<ModelImageResult> {
+  const apiKey = resolveRouteApiKey(route);
+  const baseUrl = atlasCloudBaseUrl(route);
+  const submit = await fetch(`${baseUrl}/model/generateImage`, {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${apiKey}`,
+      "content-type": "application/json",
+      "user-agent": ATLASCLOUD_USER_AGENT,
+    },
+    signal: AbortSignal.timeout(route.timeout_ms),
+    body: JSON.stringify({
+      model: route.model,
+      prompt: atlasCloudImagePrompt(prompt),
+      seed: -1,
+    }),
+  });
+  const submitPayload = await readAtlasCloudJson(submit);
+  if (!submit.ok) {
+    throw new Error(`atlascloud submit failed ${submit.status}: ${JSON.stringify(submitPayload).slice(0, 300)}`);
+  }
+  const predictionId = atlasCloudPredictionId(submitPayload);
+  const deadline = Date.now() + Math.max(route.timeout_ms, 60_000);
+  let outputUrl = "";
+  let lastPayload: Record<string, unknown> = {};
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, atlasCloudPollIntervalMs()));
+    const poll = await fetch(`${baseUrl}/model/prediction/${encodeURIComponent(predictionId)}`, {
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "user-agent": ATLASCLOUD_USER_AGENT,
+      },
+      signal: AbortSignal.timeout(Math.min(route.timeout_ms, 60_000)),
+    });
+    const pollPayload = await readAtlasCloudJson(poll);
+    lastPayload = pollPayload;
+    if (!poll.ok && poll.status !== 400) {
+      throw new Error(`atlascloud poll failed ${poll.status}: ${JSON.stringify(pollPayload).slice(0, 300)}`);
+    }
+    const data = atlasCloudPredictionData(pollPayload);
+    const status = String(data.status || "").toLowerCase();
+    if (status === "failed" || status === "error") {
+      throw new Error(`atlascloud prediction failed: ${String(data.error || "unknown error")}`);
+    }
+    if (status === "completed" || status === "succeeded") {
+      const outputs = Array.isArray(data.outputs) ? data.outputs : [];
+      if (typeof outputs[0] !== "string" || !outputs[0]) {
+        throw new Error(`atlascloud prediction returned no output URL: ${JSON.stringify(data).slice(0, 300)}`);
+      }
+      outputUrl = outputs[0];
+      break;
+    }
+  }
+  if (!outputUrl) {
+    throw new Error(`atlascloud prediction timed out: ${JSON.stringify(lastPayload).slice(0, 300)}`);
+  }
+  const image = await fetch(outputUrl, {
+    signal: AbortSignal.timeout(route.timeout_ms),
+  });
+  if (!image.ok) {
+    throw new Error(`atlascloud image download failed: ${image.status}`);
+  }
+  return {
+    data: Buffer.from(await image.arrayBuffer()),
+    contentType: image.headers.get("content-type") || "image/png",
+    model: route.model,
+    provider: route.provider,
+  };
+}
+
 async function runOllamaRoute(
   route: ModelRoute,
   payload: ModelMessage[],
@@ -759,6 +871,9 @@ export async function generateImage({
   }
   if (route.provider === "openai" || route.provider === "xai") {
     return runOpenAIImageRoute(route, prompt);
+  }
+  if (route.provider === "atlascloud") {
+    return runAtlasCloudImageRoute(route, prompt);
   }
   throw new Error(`unsupported image provider: ${route.provider}`);
 }
