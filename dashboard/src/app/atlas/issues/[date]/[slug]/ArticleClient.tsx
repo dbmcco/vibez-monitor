@@ -38,6 +38,7 @@ interface AtlasEditorialArticle {
     prompt?: string;
     url?: string;
     alt?: string;
+    status?: "pending" | "ready" | "failed" | "skipped";
   };
   related_article_slugs: string[];
 }
@@ -239,41 +240,22 @@ function ArticleImage({ article }: { article: AtlasEditorialArticle }) {
     );
   }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={editorialImageDataUri(article)}
-      alt={article.image.alt || `Editorial image for ${article.title}`}
-      className="h-72 w-full border border-slate-300 object-fill"
-    />
+    <div
+      data-atlas-photo-status={article.image.status || "pending"}
+      className="flex h-72 w-full flex-col justify-between border border-slate-300 bg-[#e8dcc4] p-5"
+      aria-label="Photo desk pending"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-[#cbbf9d] pb-3">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
+          Photo desk pending
+        </p>
+        <span className="h-2.5 w-2.5 rounded-full bg-[#8b5f21]" aria-hidden="true" />
+      </div>
+      <p className="max-w-3xl text-sm leading-6 text-[#342a1b]">
+        {article.image.prompt || article.dek}
+      </p>
+    </div>
   );
-}
-
-function editorialImageDataUri(article: AtlasEditorialArticle): string {
-  const width = 960;
-  const height = 420;
-  const section = escapeSvgText(article.section.toUpperCase());
-  const prompt = escapeSvgText((article.image.prompt || article.dek).slice(0, 92));
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <rect width="${width}" height="${height}" fill="#e8dcc4"/>
-      <rect x="18" y="18" width="${width - 36}" height="${height - 36}" fill="#f7edd9" stroke="#111827" stroke-width="3"/>
-      <path d="M44 ${height - 82} C 240 ${height - 180}, 420 ${height - 18}, 590 ${height - 118} S 858 ${height - 72}, 922 ${height - 160}" fill="none" stroke="#8b5f21" stroke-width="18" opacity="0.38"/>
-      <circle cx="822" cy="92" r="52" fill="#8b5f21" opacity="0.2"/>
-      <line x1="44" y1="52" x2="916" y2="52" stroke="#111827" stroke-width="2"/>
-      <line x1="44" y1="376" x2="916" y2="376" stroke="#111827" stroke-width="2"/>
-      <text x="54" y="92" font-family="Georgia, serif" font-size="26" font-weight="700" fill="#8b5f21" letter-spacing="3">${section}</text>
-      <text x="54" y="154" font-family="Georgia, serif" font-size="34" font-weight="900" fill="#111827">Editorial image brief</text>
-      <text x="54" y="202" font-family="Arial, sans-serif" font-size="16" fill="#6b7280">${prompt}</text>
-    </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-
-function escapeSvgText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 function ArticleRail({

@@ -843,56 +843,43 @@ function ImageBlock({ article, lead }: { article: AtlasEditorialArticle; lead: b
       />
     );
   }
-  if (article.image?.status === "pending" || article.image?.status === "failed") {
-    return (
-      <div className={`flex w-full flex-col justify-end border border-[#cbbf9d] bg-[#e8dcc4] p-4 ${
-        lead ? "h-64" : "h-32"
-      }`}>
-        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
-          {article.image.status === "failed" ? "Image failed" : "Image pending"}
-        </p>
-        <p className="mt-2 line-clamp-3 text-sm leading-5 text-[#342a1b]">
-          {article.image.prompt || article.dek}
-        </p>
-      </div>
-    );
-  }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={editorialImageDataUri(article, lead)}
-      alt={article.image?.alt || `Editorial image for ${article.title}`}
-      className={`w-full border border-[#cbbf9d] object-fill ${lead ? "h-64" : "h-32"}`}
+    <PhotoPendingBlock
+      prompt={article.image?.prompt || article.dek}
+      status={article.image?.status || "pending"}
+      lead={lead}
     />
   );
 }
 
-function editorialImageDataUri(article: AtlasEditorialArticle, lead: boolean): string {
-  const width = lead ? 960 : 640;
-  const height = lead ? 420 : 260;
-  const section = escapeSvgText(article.section.toUpperCase());
-  const accent = lead ? "#8b5f21" : "#5e5238";
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <rect width="${width}" height="${height}" fill="#e8dcc4"/>
-      <rect x="18" y="18" width="${width - 36}" height="${height - 36}" fill="#f7edd9" stroke="#1f1a12" stroke-width="3"/>
-      <path d="M44 ${height - 82} C ${width * 0.24} ${height - 180}, ${width * 0.44} ${height - 20}, ${width * 0.62} ${height - 116} S ${width - 90} ${height - 72}, ${width - 38} ${height - 160}" fill="none" stroke="${accent}" stroke-width="18" opacity="0.38"/>
-      <circle cx="${width - 118}" cy="92" r="${lead ? 52 : 34}" fill="${accent}" opacity="0.2"/>
-      <line x1="44" y1="52" x2="${width - 44}" y2="52" stroke="#1f1a12" stroke-width="2"/>
-      <line x1="44" y1="${height - 44}" x2="${width - 44}" y2="${height - 44}" stroke="#1f1a12" stroke-width="2"/>
-      <text x="54" y="92" font-family="Georgia, serif" font-size="${lead ? 26 : 18}" font-weight="700" fill="${accent}" letter-spacing="3">${section}</text>
-      <text x="54" y="${lead ? 154 : 128}" font-family="Georgia, serif" font-size="${lead ? 34 : 24}" font-weight="900" fill="#1f1a12">Editorial image brief</text>
-      <text x="54" y="${lead ? 202 : 166}" font-family="Arial, sans-serif" font-size="${lead ? 16 : 12}" fill="#786846">${escapeSvgText((article.image?.prompt || article.dek).slice(0, lead ? 92 : 58))}</text>
-    </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-
-function escapeSvgText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function PhotoPendingBlock({
+  prompt,
+  status,
+  lead,
+}: {
+  prompt: string;
+  status: "pending" | "ready" | "failed" | "skipped";
+  lead: boolean;
+}) {
+  return (
+    <div
+      data-atlas-photo-status={status === "ready" ? "pending" : status}
+      className={`flex w-full flex-col justify-between border border-[#cbbf9d] bg-[#e8dcc4] p-4 ${
+        lead ? "h-64" : "h-32"
+      }`}
+      aria-label="Photo desk pending"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-[#cbbf9d] pb-2">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
+          Photo desk pending
+        </p>
+        <span className="h-2 w-2 rounded-full bg-[#8b5f21]" aria-hidden="true" />
+      </div>
+      <p className={`line-clamp-3 text-[#342a1b] ${lead ? "text-sm leading-6" : "text-xs leading-5"}`}>
+        {prompt}
+      </p>
+    </div>
+  );
 }
 
 function NewspaperList({ title, items }: { title: string; items: string[] }) {
