@@ -774,9 +774,9 @@ async function upsertLinkEmbeddingBatch(
         first_seen, last_seen, mention_count, value_score, report_date, authored_by,
         pinned, embedding, updated_at
       ) VALUES ${values.join(", ")}
-      ON CONFLICT (link_id) DO UPDATE SET
+      ON CONFLICT (url_hash) DO UPDATE SET
+        link_id = EXCLUDED.link_id,
         url = EXCLUDED.url,
-        url_hash = EXCLUDED.url_hash,
         title = EXCLUDED.title,
         category = EXCLUDED.category,
         relevance = EXCLUDED.relevance,

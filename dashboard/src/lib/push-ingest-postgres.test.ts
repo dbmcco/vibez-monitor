@@ -117,4 +117,24 @@ describe("Postgres push ingestion", () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("FROM vibez_message_embeddings"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("FROM vibez_link_embeddings"))).toBe(true);
   });
+
+  test("upserts link embeddings by url hash so rebuilt link ids do not fail", async () => {
+    const { applyPgvectorPayload } = await import("./push-ingest");
+
+    await applyPgvectorPayload({
+      link_embeddings: [
+        {
+          link_id: 42,
+          url: "https://example.com/vector",
+          url_hash: "same-url-hash",
+          title: "Vector",
+          embedding: `[${new Array(256).fill(0.1).join(",")}]`,
+        },
+      ],
+    });
+
+    expect(queryMock.mock.calls.some(([sql]) =>
+      String(sql).includes("ON CONFLICT (url_hash) DO UPDATE SET"),
+    )).toBe(true);
+  });
 });
