@@ -436,7 +436,7 @@ def request_json(
     headers: dict[str, str],
     timeout: int = 120,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    data = json.dumps(payload).encode("utf-8")
+    data = json.dumps(to_jsonable(payload)).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Content-Type", "application/json")
     for key, value in headers.items():

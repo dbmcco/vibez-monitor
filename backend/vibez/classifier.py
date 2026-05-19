@@ -159,7 +159,7 @@ def save_classification(db_path: Path, message_id: str, classification: dict[str
             classification["relevance_score"],
             json.dumps(classification["topics"]),
             json.dumps(classification["entities"]),
-            classification["contribution_flag"],
+            int(bool(classification["contribution_flag"])),
             json.dumps(classification.get("contribution_themes", [])),
             classification["contribution_hint"],
             classification["alert_level"],

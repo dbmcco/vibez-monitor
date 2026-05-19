@@ -220,6 +220,58 @@ def test_parse_cleans_matrix_sender_name():
     assert result["sender_name"] == "dbmcco"
 
 
+def test_poll_once_returns_only_inserted_messages_for_classification(monkeypatch):
+    raw_duplicate = {
+        "id": "old",
+        "chatID": "chat-1",
+        "senderID": "@u:b",
+        "senderName": "Dana",
+        "timestamp": "2026-05-18T10:00:00.000Z",
+        "sortKey": "old-sk",
+        "type": "TEXT",
+        "text": "already seen",
+    }
+    raw_new = {
+        "id": "new",
+        "chatID": "chat-1",
+        "senderID": "@u:b",
+        "senderName": "Lee",
+        "timestamp": "2026-05-18T10:05:00.000Z",
+        "sortKey": "new-sk",
+        "type": "TEXT",
+        "text": "fresh message",
+    }
+    saved_cursors: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(beeper_sync, "load_cursor", lambda *_args: "old-sk")
+    monkeypatch.setattr(
+        beeper_sync,
+        "fetch_new_messages",
+        lambda *_args: ([raw_duplicate, raw_new], "new-sk"),
+    )
+
+    def fake_save_messages(_db_path, messages):
+        return [message for message in messages if message["id"].endswith("-new")]
+
+    monkeypatch.setattr(beeper_sync, "save_messages", fake_save_messages)
+    monkeypatch.setattr(
+        beeper_sync,
+        "save_cursor",
+        lambda _db_path, chat_id, cursor: saved_cursors.append((chat_id, cursor)),
+    )
+    monkeypatch.setattr(beeper_sync, "publish_event", lambda *_args, **_kwargs: None)
+
+    messages = beeper_sync.poll_once(
+        None,
+        "http://localhost:23373",
+        "token",
+        [{"id": "chat-1", "title": "Agents"}],
+    )
+
+    assert [message["body"] for message in messages] == ["fresh message"]
+    assert saved_cursors == [("chat-1", "new-sk")]
+
+
 def test_save_active_groups_persists_ids_and_names(tmp_path):
     db_path = tmp_path / "vibez.db"
     init_db(db_path)

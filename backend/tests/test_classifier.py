@@ -8,6 +8,7 @@ from vibez.classifier import (
     parse_classification,
     strip_contribution_intel,
 )
+from vibez import classifier
 from vibez.config import Config
 from vibez.db import get_connection, init_db
 
@@ -109,6 +110,42 @@ def test_strip_contribution_intel_zeros_personalized_fields():
     assert sanitized["contribution_themes"] == []
     assert sanitized["contribution_hint"] == ""
     assert sanitized["relevance_score"] == 8
+
+
+def test_save_classification_writes_integer_contribution_flag(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeConnection:
+        def execute(self, _sql, params):
+            captured["params"] = params
+
+        def commit(self):
+            captured["committed"] = True
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(classifier, "get_connection", lambda _db_path: FakeConnection())
+
+    classifier.save_classification(
+        None,
+        "m1",
+        {
+            "relevance_score": 8,
+            "topics": ["agents"],
+            "entities": [],
+            "contribution_flag": True,
+            "contribution_themes": ["follow-up"],
+            "contribution_hint": "Worth reviewing",
+            "alert_level": "digest",
+        },
+    )
+
+    params = captured["params"]
+    assert isinstance(params, tuple)
+    assert params[4] == 1
+    assert type(params[4]) is int
+    assert captured["committed"] is True
 
 
 def test_classify_messages_uses_named_route(tmp_db, monkeypatch):

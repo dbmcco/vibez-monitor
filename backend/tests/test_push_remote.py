@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from datetime import datetime, timezone
 
 from vibez.db import init_db
 from backend.scripts import push_remote
@@ -170,6 +171,53 @@ def test_analysis_sync_state_key_set_stays_transport_safe():
         "wisdom_last_run",
         "links_last_refresh_ts",
     )
+
+
+def test_request_json_serializes_nested_datetimes(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = request.data.decode("utf-8")
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(push_remote.urllib.request, "urlopen", fake_urlopen)
+
+    result, _headers = push_remote.request_json(
+        "POST",
+        "https://example.com/api/admin/push",
+        {
+            "links": [
+                {
+                    "url": "https://example.com",
+                    "first_seen": datetime(2026, 5, 18, 12, 30, tzinfo=timezone.utc),
+                }
+            ]
+        },
+        headers={},
+    )
+
+    assert result == {"ok": True}
+    assert json.loads(captured["body"]) == {
+        "links": [
+            {
+                "url": "https://example.com",
+                "first_seen": "2026-05-18T12:30:00+00:00",
+            }
+        ]
+    }
 
 
 def test_push_analysis_tables_sends_each_table_in_its_own_section(

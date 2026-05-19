@@ -41,6 +41,10 @@ def env_enabled(name: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def resolve_pgvector_index_url(config: Config) -> str:
+    return config.pgvector_url or config.database_url
+
+
 def initialize_beeper_cursors(config: Config, groups: list[dict]) -> None:
     """Initialize cursors for new groups to avoid backfilling old history."""
     for group in groups:
@@ -85,6 +89,7 @@ async def classify_and_index(config: Config, messages: list[dict]) -> None:
         return
 
     indexed = index_messages(
+        resolve_pgvector_index_url(config),
         table=config.pgvector_table,
         dimensions=config.pgvector_dimensions,
         message_ids=message_ids,
@@ -95,6 +100,7 @@ async def classify_and_index(config: Config, messages: list[dict]) -> None:
             indexed,
         )
     indexed_links = index_links(
+        resolve_pgvector_index_url(config),
         table=config.pgvector_link_table,
         dimensions=config.pgvector_dimensions,
         source_messages=messages,
