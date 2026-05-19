@@ -1,0 +1,128 @@
+# Deployment projection of the central cognition registry for Vibez Monitor.
+# Keep source-of-truth route changes in paia-agent-runtime/config/cognition-presets.toml,
+# then mirror the Vibez routes here for Railway's Docker build context.
+
+[credentials.vibez_openrouter]
+provider = "openrouter"
+source = "env"
+env_var = "VIBEZ_OPENROUTER_API_KEY"
+
+[credentials.vibez_openai]
+provider = "openai"
+source = "env"
+env_var = "VIBEZ_OPENAI_API_KEY"
+
+[provider_surfaces.openrouter]
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+start_timeout_seconds = 180
+tool_start_timeout_seconds = 180
+continue_timeout_seconds = 300
+complete_timeout_seconds = 300
+
+[provider_surfaces.openrouter_embedding]
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+start_timeout_seconds = 60
+tool_start_timeout_seconds = 60
+continue_timeout_seconds = 60
+complete_timeout_seconds = 60
+
+[provider_surfaces.openai_embedding_small]
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+start_timeout_seconds = 60
+tool_start_timeout_seconds = 60
+continue_timeout_seconds = 60
+complete_timeout_seconds = 60
+
+[service_credential_assignments."vibez-monitor"]
+openrouter = "vibez_openrouter"
+openai = "vibez_openai"
+
+[model_routes."vibez.embedding_fast"]
+owner = "vibez-monitor"
+surface = "openrouter_embedding"
+provider = "openrouter"
+model = "perplexity/pplx-embed-v1-0.6b"
+mode = "embedding"
+quality_tier = "embedding_fast"
+cost_tier = "low"
+request_timeout_seconds = 60
+supports_streaming = false
+supports_tools = false
+supports_json_schema = false
+last_reviewed = "2026-05-19"
+source = "central-registry-projection"
+owner_next_step = "Default Railway pgvector embedding route; compare against vibez.embedding_quality and vibez.embedding_fallback in retrieval evals."
+
+[model_routes."vibez.embedding_quality"]
+owner = "vibez-monitor"
+surface = "openrouter_embedding"
+provider = "openrouter"
+model = "qwen/qwen3-embedding-8b"
+mode = "embedding"
+quality_tier = "embedding_quality"
+cost_tier = "medium"
+request_timeout_seconds = 90
+supports_streaming = false
+supports_tools = false
+supports_json_schema = false
+last_reviewed = "2026-05-19"
+source = "central-registry-projection"
+owner_next_step = "Quality challenger for Vibez retrieval evals before making it the default."
+
+[model_routes."vibez.embedding_fallback"]
+owner = "vibez-monitor"
+surface = "openai_embedding_small"
+provider = "openai"
+model = "text-embedding-3-small"
+mode = "embedding"
+quality_tier = "embedding_fallback"
+cost_tier = "low"
+request_timeout_seconds = 60
+supports_streaming = false
+supports_tools = false
+supports_json_schema = false
+last_reviewed = "2026-05-19"
+source = "central-registry-projection"
+owner_next_step = "Hosted fallback route for embedding evals or explicit failover decisions."
+
+[model_routes."vibez.classification_fast"]
+owner = "vibez-monitor"
+surface = "openrouter"
+provider = "openrouter"
+model = "mistralai/mistral-nemo"
+mode = "json"
+quality_tier = "classification_fast"
+cost_tier = "low"
+max_tokens_default = 512
+temperature_default = 0.1
+request_timeout_seconds = 90
+supports_streaming = false
+supports_tools = false
+supports_json_schema = true
+last_reviewed = "2026-05-19"
+source = "central-registry-projection"
+owner_next_step = "Default Railway classifier for message and link enrichment."
+
+[model_routes."vibez.classification_quality"]
+owner = "vibez-monitor"
+surface = "openrouter"
+provider = "openrouter"
+model = "qwen/qwen3-235b-a22b-2507"
+mode = "json"
+quality_tier = "classification_quality"
+cost_tier = "medium"
+max_tokens_default = 1024
+temperature_default = 0.1
+request_timeout_seconds = 180
+supports_streaming = false
+supports_tools = false
+supports_json_schema = true
+last_reviewed = "2026-05-19"
+source = "central-registry-projection"
+owner_next_step = "Use only for schema repair, eval samples, or high-value nightly synthesis inputs."

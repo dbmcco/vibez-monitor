@@ -58,9 +58,18 @@ export function defaultManifestPath(): string {
 }
 
 function defaultCognitionRegistryPath(): string {
-  return process.env.VIBEZ_COGNITION_PRESETS_PATH ||
-    process.env.PAIA_COGNITION_PRESETS_PATH ||
-    "/Users/braydon/projects/experiments/paia-agent-runtime/config/cognition-presets.toml";
+  if (process.env.VIBEZ_COGNITION_PRESETS_PATH) return process.env.VIBEZ_COGNITION_PRESETS_PATH;
+  if (process.env.PAIA_COGNITION_PRESETS_PATH) return process.env.PAIA_COGNITION_PRESETS_PATH;
+  const appConfigCandidate = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    "..",
+    "config",
+    "cognition-presets.toml",
+  );
+  if (fs.existsSync(/* turbopackIgnore: true */ appConfigCandidate)) {
+    return appConfigCandidate;
+  }
+  return "/Users/braydon/projects/experiments/paia-agent-runtime/config/cognition-presets.toml";
 }
 
 function resolveManifestPath(manifestPath = defaultManifestPath()): string {
