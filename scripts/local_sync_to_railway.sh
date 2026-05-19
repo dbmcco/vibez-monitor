@@ -43,6 +43,7 @@ fi
 
 export VIBEZ_DB_PATH="${VIBEZ_DB_PATH:-$ROOT_DIR/vibez.db}"
 export VIBEZ_PGVECTOR_INDEX_ON_SYNC=false
+export VIBEZ_SYNC_ONCE_CLASSIFY=false
 export VIBEZ_SYNC_ONCE_RUN_SYNTHESIS=false
 LOOKBACK_DAYS="${VIBEZ_PUSH_LOOKBACK_DAYS:-2}"
 BACKFILL_YEAR=0
@@ -121,6 +122,7 @@ fi
 
 echo "Pushing local data to Railway (lookback=${LOOKBACK_DAYS}d)..."
 "$PYTHON_BIN" backend/scripts/push_remote.py \
+  --capture-only \
   --lookback-days "$LOOKBACK_DAYS" \
   --batch-size "${VIBEZ_PUSH_BATCH_SIZE:-400}"
 

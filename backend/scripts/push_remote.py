@@ -55,6 +55,21 @@ def parse_args() -> argparse.Namespace:
         help="Push key for /api/admin/push (defaults to VIBEZ_PUSH_API_KEY)",
     )
     parser.add_argument(
+        "--capture-key",
+        default="",
+        help="Capture key for /api/ingest/beeper/batch (defaults to VIBEZ_CAPTURE_API_KEY)",
+    )
+    parser.add_argument(
+        "--capture-only",
+        action="store_true",
+        help="Push only raw Beeper capture batches to Railway ingest.",
+    )
+    parser.add_argument(
+        "--spool-dir",
+        default="",
+        help="Local capture spool directory (defaults to VIBEZ_CAPTURE_SPOOL_DIR).",
+    )
+    parser.add_argument(
         "--lookback-days",
         type=int,
         default=2,
@@ -267,6 +282,73 @@ def dict_from_row(columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
         key: to_jsonable(value)
         for key, value in zip(columns, row, strict=True)
     }
+
+
+def raw_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return {"raw": str(raw)}
+    return parsed if isinstance(parsed, dict) else {"raw": parsed}
+
+
+def message_row_to_capture_event(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_event_key": str(row["id"]),
+        "source_room_id": str(row["room_id"]),
+        "room_name": str(row["room_name"] or ""),
+        "sender_key": str(row["sender_id"]),
+        "sender_display_name": str(row["sender_name"]),
+        "source_timestamp": datetime.fromtimestamp(
+            int(row["timestamp"] or 0) / 1000,
+            tz=timezone.utc,
+        ).isoformat(),
+        "body": str(row["body"] or ""),
+        "attachments_json": [],
+        "raw_payload_json": raw_json_object(row.get("raw_event")),
+    }
+
+
+def fetch_raw_beeper_events(
+    cutoff_ts: int | None,
+    allowed_groups: set[str],
+    excluded_groups: set[str],
+) -> list[dict[str, Any]]:
+    allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    where_parts = ["m.id LIKE %s"]
+    params: list[Any] = ["beeper-%"]
+    if cutoff_ts is not None:
+        where_parts.append("m.timestamp >= %s")
+        params.append(cutoff_ts)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name,
+               m.body, m.timestamp, m.raw_event
+        FROM messages m
+        WHERE {" AND ".join(where_parts)}
+        ORDER BY m.timestamp ASC, m.id ASC
+        """,
+        tuple(params),
+    )
+    columns = [desc.name for desc in cur.description]
+    rows = [dict_from_row(columns, row) for row in cur.fetchall()]
+    conn.close()
+
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        room_name = str(row["room_name"] or "")
+        if allowed_groups_normalized and room_name.strip().casefold() not in allowed_groups_normalized:
+            continue
+        if room_name.strip().lower() in excluded_groups:
+            continue
+        events.append(message_row_to_capture_event(row))
+    return events
 
 
 def _validate_ident(raw: str, label: str) -> str:
@@ -493,6 +575,122 @@ def push_section(
     return result
 
 
+def capture_spool_dir(raw: str = "") -> Path:
+    configured = raw or os.environ.get("VIBEZ_CAPTURE_SPOOL_DIR", "")
+    return Path(configured or ".vibez-spool/beeper").expanduser()
+
+
+def sanitize_batch_key(batch_key: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "-", batch_key.strip())
+    return value.strip("-")[:180] or "batch"
+
+
+def capture_batch_key(events: list[dict[str, Any]]) -> str:
+    first = str(events[0]["source_event_key"])
+    last = str(events[-1]["source_event_key"])
+    return sanitize_batch_key(f"beeper-{len(events)}-{first}-{last}")
+
+
+def write_capture_spool_batch(
+    spool_dir: Path,
+    batch_key: str,
+    events: list[dict[str, Any]],
+) -> Path:
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    path = spool_dir / f"{sanitize_batch_key(batch_key)}.json"
+    if path.exists():
+        return path
+    payload = {
+        "source": "beeper",
+        "batch_key": batch_key,
+        "events": events,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "delivered_at": None,
+        "delivery_result": None,
+    }
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True))
+    tmp_path.replace(path)
+    return path
+
+
+def load_capture_spool_batch(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text())
+
+
+def mark_capture_spool_delivered(path: Path, result: dict[str, Any]) -> None:
+    payload = load_capture_spool_batch(path)
+    payload["delivered_at"] = datetime.now(timezone.utc).isoformat()
+    payload["delivery_result"] = result
+    path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True))
+
+
+def iter_undelivered_capture_batches(spool_dir: Path) -> list[Path]:
+    if not spool_dir.exists():
+        return []
+    paths = sorted(spool_dir.glob("*.json"))
+    undelivered: list[Path] = []
+    for path in paths:
+        payload = load_capture_spool_batch(path)
+        if not payload.get("delivered_at"):
+            undelivered.append(path)
+    return undelivered
+
+
+def push_capture_section(
+    remote_url: str,
+    capture_key: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = urllib.parse.urljoin(
+        remote_url.rstrip("/") + "/",
+        "api/ingest/beeper/batch",
+    )
+    result, _ = request_json(
+        "POST",
+        endpoint,
+        payload,
+        headers={"x-vibez-capture-key": capture_key},
+    )
+    if not result.get("ok"):
+        raise RuntimeError(f"Remote capture ingest rejected payload: {result}")
+    return result
+
+
+def push_capture_batches(
+    remote_url: str,
+    capture_key: str,
+    events: list[dict[str, Any]],
+    spool_dir: Path,
+    batch_size: int,
+) -> dict[str, int]:
+    for i in range(0, len(events), batch_size):
+        batch = events[i : i + batch_size]
+        if not batch:
+            continue
+        write_capture_spool_batch(spool_dir, capture_batch_key(batch), batch)
+
+    result = {"batches": 0, "events": 0, "inserted": 0, "deduped": 0}
+    for path in iter_undelivered_capture_batches(spool_dir):
+        payload = load_capture_spool_batch(path)
+        remote_result = push_capture_section(remote_url, capture_key, {
+            "source": "beeper",
+            "batch_key": payload["batch_key"],
+            "events": payload["events"],
+        })
+        mark_capture_spool_delivered(path, remote_result)
+        result["batches"] += 1
+        result["events"] += len(payload.get("events", []))
+        result["inserted"] += int(remote_result.get("inserted_count", 0))
+        result["deduped"] += int(remote_result.get("deduped_count", 0))
+        print(
+            f"  capture batch {result['batches']}: pushed {len(payload.get('events', []))} events "
+            f"(inserted={remote_result.get('inserted_count', 0)}, deduped={remote_result.get('deduped_count', 0)})",
+            flush=True,
+        )
+    return result
+
+
 def push_batches(
     remote_url: str,
     push_key: str,
@@ -595,16 +793,23 @@ def main() -> int:
     remote_url = (args.remote_url or os.environ.get("VIBEZ_REMOTE_URL", "")).strip()
     access_code = (args.access_code or os.environ.get("VIBEZ_ACCESS_CODE", "")).strip()
     push_key = (args.push_key or os.environ.get("VIBEZ_PUSH_API_KEY", "")).strip()
+    capture_key = (args.capture_key or os.environ.get("VIBEZ_CAPTURE_API_KEY", "")).strip()
     if not remote_url:
         print("Missing remote URL. Set VIBEZ_REMOTE_URL or pass --remote-url.", file=sys.stderr)
         return 2
-    if not access_code:
+    if args.capture_only and not capture_key:
+        print(
+            "Missing capture key. Set VIBEZ_CAPTURE_API_KEY or pass --capture-key.",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.capture_only and not access_code:
         print(
             "Missing access code. Set VIBEZ_ACCESS_CODE or pass --access-code.",
             file=sys.stderr,
         )
         return 2
-    if not push_key:
+    if not args.capture_only and not push_key:
         print(
             "Missing push key. Set VIBEZ_PUSH_API_KEY or pass --push-key.",
             file=sys.stderr,
@@ -615,6 +820,30 @@ def main() -> int:
     cutoff_ts = resolve_cutoff_ts(args.lookback_days)
     allowed_groups = load_allowed_groups()
     excluded_groups = load_excluded_groups()
+    if args.capture_only:
+        events = fetch_raw_beeper_events(cutoff_ts, allowed_groups, excluded_groups)
+        window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"
+        print(f"Window: {window_label}")
+        print(f"Raw Beeper events to capture: {len(events)}")
+        if args.dry_run:
+            print("Dry run only; no spool or remote writes.")
+            close_db_connection()
+            return 0
+        capture_result = push_capture_batches(
+            remote_url=remote_url,
+            capture_key=capture_key,
+            events=events,
+            spool_dir=capture_spool_dir(args.spool_dir),
+            batch_size=batch_size,
+        )
+        print(
+            f"Capture push complete: {capture_result['events']} events over "
+            f"{capture_result['batches']} batches "
+            f"(inserted={capture_result['inserted']}, deduped={capture_result['deduped']})."
+        )
+        close_db_connection()
+        return 0
+
     records = fetch_records(cutoff_ts, allowed_groups, excluded_groups)
     sync_state = fetch_sync_state(allowed_groups, excluded_groups)
 

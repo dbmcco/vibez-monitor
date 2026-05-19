@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -451,3 +452,95 @@ def test_fetch_link_embeddings_coerces_report_date_to_text(monkeypatch):
             "embedding": "[0.1,0.2]",
         }
     ]
+
+
+def test_capture_batches_are_spooled_before_network_push(tmp_path: Path, monkeypatch):
+    spool_dir = tmp_path / "spool"
+    seen_payloads: list[dict[str, object]] = []
+
+    def fake_request_json(method, endpoint, payload, headers):
+        spool_files = list(spool_dir.glob("*.json"))
+        assert len(spool_files) == 1
+        spooled = json.loads(spool_files[0].read_text())
+        assert spooled["delivered_at"] is None
+        assert endpoint == "https://railway.example/api/ingest/beeper/batch"
+        assert headers["x-vibez-capture-key"] == "capture-key"
+        assert "records" not in payload
+        assert "classification" not in json.dumps(payload)
+        seen_payloads.append(payload)
+        return {"ok": True, "inserted_count": 1, "deduped_count": 0}, {}
+
+    monkeypatch.setattr(push_remote, "request_json", fake_request_json)
+
+    result = push_remote.push_capture_batches(
+        remote_url="https://railway.example",
+        capture_key="capture-key",
+        events=[
+            {
+                "source_event_key": "beeper-room-1-event-1",
+                "source_room_id": "room-1",
+                "room_name": "Agent Harnesses",
+                "sender_key": "member-1",
+                "sender_display_name": "Dana",
+                "source_timestamp": "2026-05-19T08:30:00+00:00",
+                "body": "Worth saving.",
+                "raw_payload_json": {"id": "event-1"},
+            }
+        ],
+        spool_dir=spool_dir,
+        batch_size=10,
+    )
+
+    spool_files = list(spool_dir.glob("*.json"))
+    assert result == {"batches": 1, "events": 1, "inserted": 1, "deduped": 0}
+    assert len(seen_payloads) == 1
+    assert seen_payloads[0]["events"][0] == {
+        "source_event_key": "beeper-room-1-event-1",
+        "source_room_id": "room-1",
+        "room_name": "Agent Harnesses",
+        "sender_key": "member-1",
+        "sender_display_name": "Dana",
+        "source_timestamp": "2026-05-19T08:30:00+00:00",
+        "body": "Worth saving.",
+        "raw_payload_json": {"id": "event-1"},
+    }
+    assert json.loads(spool_files[0].read_text())["delivered_at"] is not None
+
+
+def test_capture_spool_survives_remote_failure(tmp_path: Path, monkeypatch):
+    spool_dir = tmp_path / "spool"
+
+    def fake_request_json(*_args, **_kwargs):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(push_remote, "request_json", fake_request_json)
+
+    try:
+        push_remote.push_capture_batches(
+            remote_url="https://railway.example",
+            capture_key="capture-key",
+            events=[
+                {
+                    "source_event_key": "beeper-room-1-event-1",
+                    "source_room_id": "room-1",
+                    "room_name": "Agent Harnesses",
+                    "sender_key": "member-1",
+                    "sender_display_name": "Dana",
+                    "source_timestamp": "2026-05-19T08:30:00+00:00",
+                    "body": "Worth saving.",
+                    "raw_payload_json": {"id": "event-1"},
+                }
+            ],
+            spool_dir=spool_dir,
+            batch_size=10,
+        )
+    except urllib.error.URLError:
+        pass
+    else:
+        raise AssertionError("expected remote failure")
+
+    spool_files = list(spool_dir.glob("*.json"))
+    assert len(spool_files) == 1
+    spooled = json.loads(spool_files[0].read_text())
+    assert spooled["delivered_at"] is None
+    assert spooled["events"][0]["source_event_key"] == "beeper-room-1-event-1"

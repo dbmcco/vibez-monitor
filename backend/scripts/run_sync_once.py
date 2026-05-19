@@ -205,9 +205,14 @@ async def main() -> None:
             "Google Groups list ids set but IMAP credentials missing; source skipped."
         )
 
-    if all_new_messages:
+    if all_new_messages and env_enabled("VIBEZ_SYNC_ONCE_CLASSIFY"):
         await classify_and_index(config, all_new_messages)
         logger.info("Classified/indexed messages: %d", len(all_new_messages))
+    elif all_new_messages:
+        logger.info(
+            "Local classification/indexing skipped for %d messages; Railway owns enrichment.",
+            len(all_new_messages),
+        )
     else:
         logger.info("No new messages discovered in this run.")
 

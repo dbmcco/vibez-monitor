@@ -293,13 +293,16 @@ Required local `.env`:
 ```bash
 VIBEZ_REMOTE_URL=https://dashboard-production-8686.up.railway.app
 VIBEZ_ACCESS_CODE=your-access-code
+VIBEZ_CAPTURE_API_KEY=your-capture-key
 VIBEZ_PUSH_API_KEY=your-ingest-key
+VIBEZ_CAPTURE_SPOOL_DIR=.vibez-spool/beeper
 VIBEZ_ALLOWED_GROUPS=Show and Tell,The vibez (code code code),Off-topic,Agentic Weather Report,Intros <—- start here,Personal Agents 🦞🦀🛫😱,futures and scenarios AGI,Security,#ai-oss,Marketing and Content AGI,Personal workflows,Applied Business AGI,Presentation AGI,decentralized agi,audio intelligence,made-of-meat
 ```
 
 Required Railway env (dashboard service):
 
 ```bash
+VIBEZ_CAPTURE_API_KEY=your-capture-key
 VIBEZ_PUSH_API_KEY=your-ingest-key
 VIBEZ_ALLOWED_GROUPS=Show and Tell,The vibez (code code code),Off-topic,Agentic Weather Report,Intros <—- start here,Personal Agents 🦞🦀🛫😱,futures and scenarios AGI,Security,#ai-oss,Marketing and Content AGI,Personal workflows,Applied Business AGI,Presentation AGI,decentralized agi,audio intelligence,made-of-meat
 VIBEZ_PGVECTOR_URL=$DATABASE_URL
@@ -336,16 +339,17 @@ Run a lightweight push-only sync when your local daemon is already ingesting:
 What this does:
 
 - Runs local one-shot sync (Beeper + Google Groups).
-- Pushes local messages/classifications into Railway in batches.
-- Pushes locally computed links, daily reports, wisdom tables, and sync-state watermarks into Railway.
-- Mirrors message and link embeddings into Railway Postgres when `VIBEZ_REMOTE_PGVECTOR_URL` is set.
-- Does not ask Railway to run sync, links, wisdom, synthesis, or any other background analysis.
-- Keeps local Beeper ingestion as source of truth while sharing a cloud dashboard.
+- Writes raw Beeper events to an append-only local spool before any network push.
+- Pushes only raw/mechanical Beeper capture batches to Railway `/api/ingest/beeper/batch`.
+- Marks a spool batch delivered only after Railway acknowledges persistence.
+- Leaves undelivered spool files in place when Railway is offline.
+- Disables local classification, local Atlas generation, and local pgvector indexing for this path.
+- Leaves Railway responsible for links, stats, embeddings, classification, Atlas editions, and other enrichment.
 - Applies `VIBEZ_ALLOWED_GROUPS` to both Beeper room titles and Google Group keys, so you can publish only the approved AGI rooms plus `made-of-meat`.
 
-`--push-only` skips the local ingest step and only uploads the existing local SQLite rows to Railway.
+`--push-only` skips the local ingest step and only drains the existing local Beeper capture rows through the spool.
 Use that mode for frequent background freshness when `run_sync.py` is already running continuously.
-Keep links, wisdom, synthesis, and any backlog repair jobs on the local machine so Railway remains a pure serving target.
+Keep links, wisdom, synthesis, embeddings, classification, and backlog repair jobs on Railway so the Mac remains a capture adapter.
 
 ## Profile Personalization
 
