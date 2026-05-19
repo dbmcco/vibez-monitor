@@ -302,9 +302,7 @@ def _run_ollama(
     messages: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
     payload = _build_messages(prompt=prompt, system=system, messages=messages)
-    base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL")
-    if not base_url:
-        raise RuntimeError("OLLAMA_BASE_URL is required by model routing")
+    base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434"
     endpoint = f"{base_url.rstrip('/')}/api/chat"
     response = httpx.post(
         endpoint,

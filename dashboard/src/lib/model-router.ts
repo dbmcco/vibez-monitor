@@ -347,6 +347,7 @@ async function runOllamaEmbeddingRoute(
       body: JSON.stringify({
         model: route.model,
         input: inputs,
+        truncate: true,
       }),
     });
   } catch (error) {

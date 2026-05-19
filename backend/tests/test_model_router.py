@@ -5,6 +5,7 @@ import pytest
 
 from vibez.model_router import (
     ModelRoute,
+    generate_text,
     get_route,
     load_routes,
     resolve_provider_api_key,
@@ -147,3 +148,48 @@ def test_shared_manifest_contains_required_task_routes():
     assert REQUIRED_TASK_IDS.issubset(routes)
     assert routes["classification.backfill"].provider == "ollama"
     assert routes["classification.backfill"].model == "qwen2.5:3b"
+
+
+def test_ollama_text_route_defaults_to_localhost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = tmp_path / "model-routing.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "routes": {
+                    "classification.inline": {
+                        "provider": "ollama",
+                        "model": "qwen2.5:3b",
+                        "mode": "json",
+                        "max_tokens": 256,
+                        "temperature": 0.1,
+                        "timeout_ms": 30000,
+                    },
+                },
+            }
+        )
+    )
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "message": {"content": "{}"},
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            }
+
+    def fake_post(url: str, **kwargs: object) -> Response:
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return Response()
+
+    monkeypatch.setattr("vibez.model_router.httpx.post", fake_post)
+
+    generate_text("classification.inline", prompt="classify", manifest_path=manifest)
+
+    assert captured["url"] == "http://localhost:11434/api/chat"
