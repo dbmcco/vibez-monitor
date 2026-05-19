@@ -146,4 +146,4 @@ def test_shared_manifest_contains_required_task_routes():
 
     assert REQUIRED_TASK_IDS.issubset(routes)
     assert routes["classification.backfill"].provider == "ollama"
-    assert routes["classification.backfill"].model == "hermes3:8b"
+    assert routes["classification.backfill"].model == "qwen2.5:3b"

@@ -12,7 +12,7 @@
     },
     "classification.inline": {
       "provider": "ollama",
-      "model": "hermes3:8b",
+      "model": "qwen2.5:3b",
       "mode": "json",
       "max_tokens": 256,
       "temperature": 0.1,
@@ -21,7 +21,7 @@
     },
     "classification.backfill": {
       "provider": "ollama",
-      "model": "hermes3:8b",
+      "model": "qwen2.5:3b",
       "mode": "json",
       "max_tokens": 256,
       "temperature": 0.1,
