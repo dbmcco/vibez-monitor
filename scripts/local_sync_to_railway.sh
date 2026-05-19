@@ -125,7 +125,7 @@ echo "Pushing local data to Railway (lookback=${LOOKBACK_DAYS}d)..."
   --batch-size "${VIBEZ_PUSH_BATCH_SIZE:-400}"
 
 REMOTE_PGVECTOR_URL="${VIBEZ_REMOTE_PGVECTOR_URL:-}"
-if [[ -n "$REMOTE_PGVECTOR_URL" ]]; then
+if [[ "${VIBEZ_REMOTE_PGVECTOR_MIRROR:-0}" == "1" && -n "$REMOTE_PGVECTOR_URL" ]]; then
   echo "Mirroring local pgvector embeddings to Railway Postgres (lookback=${LOOKBACK_DAYS}d)..."
   "$PYTHON_BIN" backend/scripts/pgvector_index.py \
     --pg-url "$REMOTE_PGVECTOR_URL" \
@@ -135,7 +135,7 @@ if [[ -n "$REMOTE_PGVECTOR_URL" ]]; then
     --lookback-days "$LOOKBACK_DAYS" \
     --kind both
 else
-  echo "Skipping Railway pgvector mirror (VIBEZ_REMOTE_PGVECTOR_URL not set)."
+  echo "Skipping local pgvector mirror; Railway enrichment owns remote embeddings."
 fi
 
 echo "Local -> Railway sync complete."

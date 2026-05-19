@@ -51,7 +51,26 @@ echo "Lookback days: $VIBEZ_PUSH_LOOKBACK_DAYS"
 
 "$ROOT_DIR/scripts/local_sync_to_railway.sh" --lookback-days "$VIBEZ_PUSH_LOOKBACK_DAYS"
 
-if [[ "${VIBEZ_DAILY_REFRESH_ATLAS:-1}" != "0" ]]; then
+if [[ "${VIBEZ_DAILY_RAILWAY_ENRICH:-1}" != "0" ]]; then
+  remote_url="${VIBEZ_REMOTE_URL:-}"
+  if [[ -z "$remote_url" && -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]]; then
+    remote_url="https://${RAILWAY_PUBLIC_DOMAIN}"
+  fi
+
+  if [[ -z "$remote_url" ]]; then
+    echo "Skipping Railway enrichment: VIBEZ_REMOTE_URL is not set." >&2
+  elif [[ -z "${VIBEZ_PUSH_API_KEY:-}" ]]; then
+    echo "Skipping Railway enrichment: VIBEZ_PUSH_API_KEY is not set." >&2
+  else
+    echo "Running Railway enrichment at ${remote_url}"
+    (
+      cd "$ROOT_DIR/dashboard"
+      VIBEZ_LOCAL_APP_URL="$remote_url" \
+      VIBEZ_ATLAS_HOURS="${VIBEZ_DAILY_ATLAS_HOURS:-48}" \
+        node scripts/run-railway-enrichment.mjs
+    )
+  fi
+elif [[ "${VIBEZ_DAILY_REFRESH_ATLAS:-1}" != "0" ]]; then
   remote_url="${VIBEZ_REMOTE_URL:-}"
   if [[ -z "$remote_url" && -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]]; then
     remote_url="https://${RAILWAY_PUBLIC_DOMAIN}"

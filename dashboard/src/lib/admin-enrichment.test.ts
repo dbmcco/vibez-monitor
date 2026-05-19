@@ -1,0 +1,142 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+const queryMock = vi.fn();
+const generateJsonMock = vi.fn();
+const embedTextsMock = vi.fn();
+
+vi.mock("pg", () => ({
+  Pool: vi.fn(() => ({
+    query: queryMock,
+  })),
+}));
+
+vi.mock("./model-router", () => ({
+  generateJson: generateJsonMock,
+  embedTexts: embedTextsMock,
+}));
+
+vi.mock("./db", () => ({
+  getAtlasSnapshot: vi.fn(),
+}));
+
+vi.mock("./atlas-report", () => ({
+  generateAtlasEditorialReport: vi.fn(),
+}));
+
+vi.mock("./atlas-artifact", () => ({
+  writeAtlasArtifact: vi.fn(),
+}));
+
+const ORIGINAL_ENV = process.env;
+
+describe("Railway admin enrichment", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    queryMock.mockReset();
+    generateJsonMock.mockReset();
+    embedTextsMock.mockReset();
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_DATABASE_URL: "postgres://railway-db",
+      VIBEZ_PGVECTOR_DIM: "64",
+      VIBEZ_PGVECTOR_TABLE: "vibez_message_embeddings",
+      VIBEZ_PGVECTOR_LINK_TABLE: "vibez_link_embeddings",
+    };
+  });
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  test("classifies and embeds only rows missing Railway enrichment", async () => {
+    const message = {
+      id: "m1",
+      room_id: "room-1",
+      room_name: "Agent Harnesses",
+      sender_id: "member-1",
+      sender_name: "Dana",
+      body: "We should use pgvector for adversarial deep dives.",
+      timestamp: 1776120000000,
+      relevance_score: 9,
+      topics: '["retrieval"]',
+      entities: '["pgvector"]',
+      contribution_flag: true,
+      contribution_themes: '["architecture"]',
+      contribution_hint: "Useful direction for deep dives.",
+      alert_level: "digest",
+    };
+    const link = {
+      id: 11,
+      url: "https://example.com/vector",
+      url_hash: "hash-vector",
+      title: "Vector notes",
+      category: "article",
+      relevance: "Deep dive retrieval background",
+      shared_by: "Dana",
+      source_group: "Agent Harnesses",
+      first_seen: "2026-05-18T10:00:00.000Z",
+      last_seen: "2026-05-18T11:00:00.000Z",
+      mention_count: 2,
+      value_score: 7,
+      report_date: "2026-05-18",
+      authored_by: "Dana",
+      pinned: 0,
+    };
+
+    queryMock.mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("SELECT to_regclass")) {
+        return { rows: [{ table_name: null }], rowCount: 1 };
+      }
+      if (text.includes("FROM messages m") && text.includes("c.message_id IS NULL")) {
+        return { rows: [message], rowCount: 1 };
+      }
+      if (text.includes("FROM messages m") && text.includes("c.relevance_score")) {
+        return { rows: [message], rowCount: 1 };
+      }
+      if (text.includes("FROM links l")) {
+        return { rows: [link], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    generateJsonMock.mockResolvedValue({
+      parsed: {
+        relevance_score: 9,
+        topics: ["retrieval"],
+        entities: ["pgvector"],
+        contribution_flag: true,
+        contribution_themes: ["architecture"],
+        contribution_hint: "Useful direction for deep dives.",
+        alert_level: "digest",
+      },
+    });
+    embedTextsMock.mockResolvedValue({ vectors: [new Array<number>(64).fill(0.2)] });
+
+    const { refreshRailwayEnrichment } = await import("./admin-enrichment");
+    const result = await refreshRailwayEnrichment({
+      classifyLimit: 1,
+      messageEmbeddingLimit: 1,
+      linkEmbeddingLimit: 1,
+      rebuildAtlas: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      classifications_written: 1,
+      message_embeddings_written: 1,
+      link_embeddings_written: 1,
+      atlas: { rebuilt: false },
+    });
+    expect(generateJsonMock).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "classification.inline",
+    }));
+    expect(embedTextsMock).toHaveBeenCalledTimes(2);
+    expect(embedTextsMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      taskId: "embedding.semantic",
+      dimensions: 64,
+    }));
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO classifications"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_message_embeddings"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_link_embeddings"))).toBe(true);
+  });
+});

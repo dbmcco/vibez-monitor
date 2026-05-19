@@ -251,7 +251,7 @@ function pgvectorDimensions(): number {
   return Math.max(64, Math.min(value, 3072));
 }
 
-function getPgPool(): Pool | null {
+export function getPgPool(): Pool | null {
   const url = (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "").trim();
   if (!url) return null;
   if (!pgPool) {
@@ -265,7 +265,7 @@ function getPgPool(): Pool | null {
   return pgPool;
 }
 
-async function ensurePostgresCoreSchema(pool: Pool): Promise<void> {
+export async function ensurePostgresCoreSchema(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
