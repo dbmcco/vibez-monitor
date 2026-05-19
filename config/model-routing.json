@@ -14,7 +14,6 @@
       "provider": "ollama",
       "model": "hermes3:8b",
       "mode": "json",
-      "base_url": "http://localhost:11434",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 120000,
@@ -24,7 +23,6 @@
       "provider": "ollama",
       "model": "hermes3:8b",
       "mode": "json",
-      "base_url": "http://localhost:11434",
       "max_tokens": 256,
       "temperature": 0.1,
       "timeout_ms": 120000
