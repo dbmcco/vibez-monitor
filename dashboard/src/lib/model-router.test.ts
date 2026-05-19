@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { embedTexts, getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
+import { embedTexts, generateImage, getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
 
 const ORIGINAL_ENV = process.env;
 
@@ -247,5 +247,68 @@ describe("model-router", () => {
       truncate: true,
     });
     expect(body.input[0].length).toBeLessThanOrEqual(1600);
+  });
+
+  test("generates article images through the routed OpenAI image model", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "image.article": {
+            provider: "openai",
+            model: "gpt-image-1",
+            mode: "image",
+            api_key_env: "VIBEZ_OPENAI_API_KEY",
+            max_tokens: 0,
+            temperature: 0,
+            timeout_ms: 30000,
+          },
+        },
+      }),
+    );
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_OPENAI_API_KEY: "test-openai-key",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          created: 1,
+          data: [{ b64_json: Buffer.from("fake-png").toString("base64") }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateImage({
+      taskId: "image.article",
+      prompt: "NYTimes-style article photo",
+      manifestPath,
+    });
+
+    expect(result).toMatchObject({
+      provider: "openai",
+      model: "gpt-image-1",
+      contentType: "image/png",
+    });
+    expect(result.data.toString("utf8")).toBe("fake-png");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.openai.com/v1/images/generations");
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toMatchObject({
+      model: "gpt-image-1",
+      prompt: "NYTimes-style article photo",
+      n: 1,
+      size: "1536x1024",
+      quality: "medium",
+      output_format: "png",
+      moderation: "low",
+    });
   });
 });

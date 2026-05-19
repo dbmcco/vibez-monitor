@@ -4,11 +4,16 @@ import type { AtlasEditorialReport } from "./atlas-report";
 
 const upsertAtlasAssetMock = vi.fn();
 const writeAtlasGeneratedAssetMock = vi.fn();
+const generateImageMock = vi.fn();
 
 vi.mock("./atlas-artifact", () => ({
   editionTypeForWindow: (windowHours: number) => windowHours >= 120 ? "sunday_review" : "daily",
   upsertAtlasAsset: upsertAtlasAssetMock,
   writeAtlasGeneratedAsset: writeAtlasGeneratedAssetMock,
+}));
+
+vi.mock("./model-router", () => ({
+  generateImage: generateImageMock,
 }));
 
 function sampleReport(): AtlasEditorialReport {
@@ -68,6 +73,7 @@ describe("Atlas article image generation", () => {
   beforeEach(() => {
     upsertAtlasAssetMock.mockReset();
     writeAtlasGeneratedAssetMock.mockReset();
+    generateImageMock.mockReset();
   });
 
   test("stores generated article image bytes and attaches a durable URL", async () => {
@@ -107,8 +113,15 @@ describe("Atlas article image generation", () => {
     });
   });
 
-  test("records pending image state when no generator command is configured", async () => {
+  test("uses the routed model image generator when no command is configured", async () => {
     upsertAtlasAssetMock.mockResolvedValue({ asset_key: "unused" });
+    writeAtlasGeneratedAssetMock.mockReturnValue("/tmp/skill-bloat.png");
+    generateImageMock.mockResolvedValue({
+      data: Buffer.from("model-png"),
+      contentType: "image/png",
+      provider: "openai",
+      model: "gpt-image-1",
+    });
 
     const { attachGeneratedArticleImages } = await import("./atlas-image-generation");
     const report = await attachGeneratedArticleImages({
@@ -117,15 +130,21 @@ describe("Atlas article image generation", () => {
       publishJobId: "job-1",
     });
 
+    expect(generateImageMock).toHaveBeenCalledWith({
+      taskId: "image.article",
+      prompt: expect.stringContaining("crowded toolbench"),
+    });
     expect(upsertAtlasAssetMock).toHaveBeenCalledWith(expect.objectContaining({
       assetKey: "2026-05-19/daily/skill-bloat.png",
-      status: "pending",
-      assetBytes: null,
+      status: "ready",
+      assetBytes: Buffer.from("model-png"),
+      provider: "openai",
+      model: "gpt-image-1",
     }));
     expect(report.articles[0].image).toMatchObject({
-      status: "pending",
+      status: "ready",
+      url: "/api/atlas/image/2026-05-19/daily/skill-bloat.png",
     });
-    expect(report.articles[0].image.url).toBeUndefined();
   });
 
   test("records failed image state without throwing when generation fails", async () => {

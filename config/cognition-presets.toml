@@ -39,6 +39,15 @@ tool_start_timeout_seconds = 60
 continue_timeout_seconds = 60
 complete_timeout_seconds = 60
 
+[provider_surfaces.openai_image]
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+start_timeout_seconds = 120
+tool_start_timeout_seconds = 120
+continue_timeout_seconds = 180
+complete_timeout_seconds = 180
+
 [service_credential_assignments."vibez-monitor"]
 openrouter = "vibez_openrouter"
 openai = "vibez_openai"
@@ -126,3 +135,19 @@ supports_json_schema = true
 last_reviewed = "2026-05-19"
 source = "central-registry-projection"
 owner_next_step = "Use only for schema repair, eval samples, or high-value nightly synthesis inputs."
+
+[model_routes."vibez.article_image"]
+owner = "vibez-monitor"
+surface = "openai_image"
+provider = "openai"
+model = "gpt-image-1"
+mode = "image"
+quality_tier = "image"
+cost_tier = "medium"
+request_timeout_seconds = 180
+supports_streaming = false
+supports_tools = false
+supports_json_schema = false
+last_reviewed = "2026-05-19"
+source = "central-registry-projection"
+owner_next_step = "Default Atlas article image route for nightly newspaper illustrations."

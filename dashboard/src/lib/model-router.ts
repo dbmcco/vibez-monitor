@@ -7,7 +7,7 @@ import OpenAI from "openai";
 export interface ModelRoute {
   provider: "openai" | "anthropic" | "openrouter" | "ollama";
   model: string;
-  mode: "text" | "json" | "embedding";
+  mode: "text" | "json" | "embedding" | "image";
   max_tokens: number;
   temperature: number;
   timeout_ms: number;
@@ -39,6 +39,13 @@ export interface ModelTextResult {
 
 export interface ModelEmbeddingResult {
   vectors: number[][];
+  model: string;
+  provider: string;
+}
+
+export interface ModelImageResult {
+  data: Buffer;
+  contentType: string;
   model: string;
   provider: string;
 }
@@ -139,7 +146,7 @@ function stringFromRegistry(value: string | number | boolean | undefined): strin
 function routeModeFromRegistry(
   value: string | number | boolean | undefined,
 ): ModelRoute["mode"] | undefined {
-  return value === "text" || value === "json" || value === "embedding" ? value : undefined;
+  return value === "text" || value === "json" || value === "embedding" || value === "image" ? value : undefined;
 }
 
 function resolveRegistryCredentialEnv({
@@ -489,6 +496,49 @@ async function runOpenRouterEmbeddingRoute(
   };
 }
 
+async function runOpenAIImageRoute(
+  route: ModelRoute,
+  prompt: string,
+): Promise<ModelImageResult> {
+  const client = new OpenAI({
+    apiKey: resolveRouteApiKey(route),
+    timeout: route.timeout_ms,
+  });
+  const response = await client.images.generate({
+    model: route.model,
+    prompt,
+    n: 1,
+    size: "1536x1024",
+    quality: "medium",
+    output_format: "png",
+    moderation: "low",
+  });
+  const image = response.data?.[0];
+  if (image?.b64_json) {
+    return {
+      data: Buffer.from(image.b64_json, "base64"),
+      contentType: "image/png",
+      model: route.model,
+      provider: route.provider,
+    };
+  }
+  if (image?.url) {
+    const fetched = await fetch(image.url, {
+      signal: AbortSignal.timeout(route.timeout_ms),
+    });
+    if (!fetched.ok) {
+      throw new Error(`image download failed: ${fetched.status}`);
+    }
+    return {
+      data: Buffer.from(await fetched.arrayBuffer()),
+      contentType: fetched.headers.get("content-type") || "image/png",
+      model: route.model,
+      provider: route.provider,
+    };
+  }
+  throw new Error("image route returned no image data");
+}
+
 async function runOllamaRoute(
   route: ModelRoute,
   payload: ModelMessage[],
@@ -680,4 +730,25 @@ export async function embedText({
     manifestPath,
   });
   return result.vectors[0] || [];
+}
+
+export async function generateImage({
+  taskId,
+  prompt,
+  manifestPath,
+}: {
+  taskId: string;
+  prompt: string;
+  manifestPath?: string;
+}): Promise<ModelImageResult> {
+  const routes = loadRoutes(manifestPath);
+  const route = getRoute(taskId, routes);
+  validateRouteRequirements(route);
+  if (route.mode !== "image") {
+    throw new Error(`task ${taskId} is not an image route`);
+  }
+  if (route.provider === "openai") {
+    return runOpenAIImageRoute(route, prompt);
+  }
+  throw new Error(`unsupported image provider: ${route.provider}`);
 }

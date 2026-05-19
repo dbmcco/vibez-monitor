@@ -10,6 +10,7 @@ import {
   writeAtlasGeneratedAsset,
   type AtlasAssetStatus,
 } from "./atlas-artifact";
+import { generateImage } from "./model-router";
 import type {
   AtlasEditorialArticle,
   AtlasEditorialReport,
@@ -69,6 +70,9 @@ function imagePromptFor(article: AtlasEditorialArticle, imagePrompt?: string): s
   const body = textList(article.body);
   return [
     imagePrompt || `NYTimes-style documentary editorial photograph for ${article.title}`,
+    "Make it look like a real newspaper photo: restrained, specific, observational, and human.",
+    "Use dry, clever, nerdy humor only as a subtle visual twist, never as cartoon text or a fake UI.",
+    "Avoid screenshots, typography, logos, charts, and obvious AI-gloss. No readable text in the image.",
     "",
     `Article: ${article.title}`,
     `Section: ${article.section}`,
@@ -104,6 +108,27 @@ async function commandImageRunner(input: Parameters<AtlasImageRunner>[0]) {
   };
 }
 
+async function modelImageRunner(input: Parameters<AtlasImageRunner>[0]) {
+  const generated = await generateImage({
+    taskId: "image.article",
+    prompt: input.prompt,
+  });
+  await fs.writeFile(input.outputPath, generated.data);
+  return {
+    data: generated.data,
+    contentType: generated.contentType,
+    provider: generated.provider,
+    model: generated.model,
+  };
+}
+
+async function defaultImageRunner(input: Parameters<AtlasImageRunner>[0]) {
+  if ((process.env.VIBEZ_ATLAS_IMAGE_COMMAND || "").trim()) {
+    return commandImageRunner(input);
+  }
+  return modelImageRunner(input);
+}
+
 function assetStatusMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || "image generation failed");
 }
@@ -118,7 +143,7 @@ export async function attachGeneratedArticleImages(
     windowHours: number;
     publishJobId?: string | null;
   },
-  runner: AtlasImageRunner = commandImageRunner,
+  runner: AtlasImageRunner = defaultImageRunner,
 ): Promise<AtlasEditorialReport> {
   const editionType = editionTypeForWindow(windowHours);
   const editionDate = report.issue.date;

@@ -14,6 +14,9 @@
     "classification.quality": {
       "registry_route": "vibez.classification_quality"
     },
+    "image.article": {
+      "registry_route": "vibez.article_image"
+    },
     "synthesis.daily": {
       "provider": "openrouter",
       "model": "openai/gpt-4.1",
