@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 export interface ModelRoute {
-  provider: "openai" | "anthropic" | "openrouter" | "ollama";
+  provider: "openai" | "anthropic" | "openrouter" | "ollama" | "xai";
   model: string;
   mode: "text" | "json" | "embedding" | "image";
   max_tokens: number;
@@ -57,6 +57,7 @@ const PROVIDER_CREDENTIAL_ENVS = {
   openai: ["VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"],
   anthropic: ["VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
   openrouter: ["VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+  xai: ["VIBEZ_XAI_API_KEY", "XAI_API_KEY"],
 } as const;
 
 export function defaultManifestPath(): string {
@@ -502,17 +503,26 @@ async function runOpenAIImageRoute(
 ): Promise<ModelImageResult> {
   const client = new OpenAI({
     apiKey: resolveRouteApiKey(route),
+    baseURL: route.base_url,
     timeout: route.timeout_ms,
   });
-  const response = await client.images.generate({
-    model: route.model,
-    prompt,
-    n: 1,
-    size: "1536x1024",
-    quality: "medium",
-    output_format: "png",
-    moderation: "low",
-  });
+  const response = await client.images.generate(
+    route.provider === "xai"
+      ? {
+        model: route.model,
+        prompt,
+        n: 1,
+      }
+      : {
+        model: route.model,
+        prompt,
+        n: 1,
+        size: "1536x1024",
+        quality: "medium",
+        output_format: "png",
+        moderation: "low",
+      },
+  );
   const image = response.data?.[0];
   if (image?.b64_json) {
     return {
@@ -747,7 +757,7 @@ export async function generateImage({
   if (route.mode !== "image") {
     throw new Error(`task ${taskId} is not an image route`);
   }
-  if (route.provider === "openai") {
+  if (route.provider === "openai" || route.provider === "xai") {
     return runOpenAIImageRoute(route, prompt);
   }
   throw new Error(`unsupported image provider: ${route.provider}`);

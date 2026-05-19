@@ -43,6 +43,10 @@ function runAsyncEnrichment(options: Parameters<typeof refreshRailwayEnrichment>
   }, 0);
 }
 
+function workerOwnsAsyncJobs(): boolean {
+  return process.env.VIBEZ_ENRICH_WORKER_ENABLED === "1";
+}
+
 export async function GET(request: NextRequest) {
   const expectedPushKey = getExpectedPushKey();
   if (!expectedPushKey) {
@@ -98,6 +102,8 @@ export async function POST(request: NextRequest) {
     linkEmbeddingLimit: readInt(body.linkEmbeddingLimit),
     rebuildAtlas,
     atlasHours,
+    publishJobId: typeof body.publishJobId === "string" ? body.publishJobId : undefined,
+    prestartedPublishJob: body.prestartedPublishJob === true,
   };
 
   try {
@@ -119,11 +125,13 @@ export async function POST(request: NextRequest) {
           { status: 503 },
         );
       }
-      runAsyncEnrichment({
-        ...options,
-        publishJobId: job.id,
-        prestartedPublishJob: true,
-      });
+      if (!workerOwnsAsyncJobs()) {
+        runAsyncEnrichment({
+          ...options,
+          publishJobId: job.id,
+          prestartedPublishJob: true,
+        });
+      }
       return NextResponse.json({ ok: true, mode: "async", job });
     }
 

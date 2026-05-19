@@ -73,6 +73,8 @@ describe("POST /api/admin/enrich", () => {
       linkEmbeddingLimit: 1,
       rebuildAtlas: true,
       atlasHours: 72,
+      publishJobId: undefined,
+      prestartedPublishJob: false,
     });
     expect(body).toEqual({
       ok: true,
@@ -126,6 +128,20 @@ describe("POST /api/admin/enrich", () => {
         prestartedPublishJob: true,
       });
     });
+  });
+
+  test("queues async Atlas enrichment for the Railway worker when enabled", async () => {
+    vi.stubEnv("VIBEZ_ENRICH_WORKER_ENABLED", "1");
+    const { POST } = await import("./route");
+    const response = await POST(new NextRequest("http://test.local/api/admin/enrich", {
+      method: "POST",
+      headers: { "x-vibez-push-key": "push-secret" },
+      body: JSON.stringify({ async: true, atlasHours: 48 }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(startAtlasPublishJobMock).toHaveBeenCalledOnce();
+    expect(refreshRailwayEnrichmentMock).not.toHaveBeenCalled();
   });
 
   test("returns async job status", async () => {

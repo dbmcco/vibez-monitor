@@ -12,6 +12,11 @@ provider = "openai"
 source = "env"
 env_var = "VIBEZ_OPENAI_API_KEY"
 
+[credentials.vibez_xai]
+provider = "xai"
+source = "env"
+env_var = "VIBEZ_XAI_API_KEY"
+
 [provider_surfaces.openrouter]
 provider = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
@@ -48,9 +53,19 @@ tool_start_timeout_seconds = 120
 continue_timeout_seconds = 180
 complete_timeout_seconds = 180
 
+[provider_surfaces.xai_image]
+provider = "xai"
+base_url = "https://api.x.ai/v1"
+api_key_env = "XAI_API_KEY"
+start_timeout_seconds = 120
+tool_start_timeout_seconds = 120
+continue_timeout_seconds = 180
+complete_timeout_seconds = 180
+
 [service_credential_assignments."vibez-monitor"]
 openrouter = "vibez_openrouter"
 openai = "vibez_openai"
+xai = "vibez_xai"
 
 [model_routes."vibez.embedding_fast"]
 owner = "vibez-monitor"
@@ -138,9 +153,9 @@ owner_next_step = "Use only for schema repair, eval samples, or high-value night
 
 [model_routes."vibez.article_image"]
 owner = "vibez-monitor"
-surface = "openai_image"
-provider = "openai"
-model = "gpt-image-1"
+surface = "xai_image"
+provider = "xai"
+model = "grok-2-image-1212"
 mode = "image"
 quality_tier = "image"
 cost_tier = "medium"
@@ -150,4 +165,4 @@ supports_tools = false
 supports_json_schema = false
 last_reviewed = "2026-05-19"
 source = "central-registry-projection"
-owner_next_step = "Default Atlas article image route for nightly newspaper illustrations."
+owner_next_step = "Default Atlas article image route for nightly newspaper illustrations; OpenAI image route is blocked by billing hard limit."
