@@ -225,6 +225,20 @@ export function readAtlasGeneratedAsset(relativePath: string): { data: Buffer; c
   };
 }
 
+export function writeAtlasGeneratedAsset(relativePath: string, data: Buffer): string {
+  const safePath = relativePath
+    .split(/[\\/]+/)
+    .filter((part) => part && part !== "." && part !== "..")
+    .join(path.sep);
+  if (!safePath) {
+    throw new Error("Atlas generated asset path is required.");
+  }
+  const assetPath = path.join(defaultArtifactRoot(), safePath);
+  fs.mkdirSync(path.dirname(assetPath), { recursive: true });
+  fs.writeFileSync(assetPath, data);
+  return assetPath;
+}
+
 function cleanAtlasAssetKey(relativePath: string): string {
   return relativePath
     .split(/[\\/]+/)

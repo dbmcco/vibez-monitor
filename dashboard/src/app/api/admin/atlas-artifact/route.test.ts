@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 
 const getAtlasSnapshotMock = vi.fn();
 const generateAtlasEditorialReportMock = vi.fn();
+const attachGeneratedArticleImagesMock = vi.fn();
 const writeAtlasArtifactMock = vi.fn();
 
 vi.mock("@/lib/db", () => ({
@@ -11,6 +12,10 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/atlas-report", () => ({
   generateAtlasEditorialReport: generateAtlasEditorialReportMock,
+}));
+
+vi.mock("@/lib/atlas-image-generation", () => ({
+  attachGeneratedArticleImages: attachGeneratedArticleImagesMock,
 }));
 
 vi.mock("@/lib/atlas-artifact", () => ({
@@ -23,6 +28,7 @@ describe("POST /api/admin/atlas-artifact", () => {
     vi.stubEnv("VIBEZ_ATLAS_ARTIFACT_WRITE", "1");
     getAtlasSnapshotMock.mockReset();
     generateAtlasEditorialReportMock.mockReset();
+    attachGeneratedArticleImagesMock.mockReset();
     writeAtlasArtifactMock.mockReset();
     generateAtlasEditorialReportMock.mockResolvedValue({
       articles: [
@@ -31,6 +37,13 @@ describe("POST /api/admin/atlas-artifact", () => {
         { section: "Durable Records" },
       ],
     });
+    attachGeneratedArticleImagesMock.mockImplementation(async ({ report }) => ({
+      ...report,
+      articles: report.articles.map((article: { section: string }) => ({
+        ...article,
+        image: { kind: "generated", status: "ready", url: "/api/atlas/image/test.png" },
+      })),
+    }));
     writeAtlasArtifactMock.mockReturnValue("/tmp/atlas-48.json");
   });
 
@@ -71,6 +84,10 @@ describe("POST /api/admin/atlas-artifact", () => {
 
     expect(getAtlasSnapshotMock).not.toHaveBeenCalled();
     expect(generateAtlasEditorialReportMock).toHaveBeenCalledWith(suppliedAtlas);
+    expect(attachGeneratedArticleImagesMock).toHaveBeenCalledWith({
+      report: expect.objectContaining({ articles: expect.any(Array) }),
+      windowHours: 48,
+    });
     expect(writeAtlasArtifactMock).toHaveBeenCalledWith({
       windowHours: 48,
       atlas: suppliedAtlas,

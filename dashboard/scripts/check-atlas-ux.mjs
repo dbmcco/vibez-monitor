@@ -32,7 +32,12 @@ async function pageMetrics(page) {
     const usefulLinkCount = Array.from(document.querySelectorAll("a"))
       .filter((link) => link.textContent?.toLowerCase().includes("open link"))
       .length;
-    const hasImageState = /Image (pending|failed)/.test(bodyText) || document.querySelectorAll("img").length > 0;
+    const imageElements = Array.from(document.querySelectorAll("img"));
+    const articleImageCount = imageElements
+      .filter((image) => image.getAttribute("src")?.includes("/api/atlas/image/"))
+      .length;
+    const hasImagePlaceholder = /Image (pending|failed)|Editorial image brief/.test(bodyText) ||
+      imageElements.some((image) => image.getAttribute("src")?.startsWith("data:image/svg+xml"));
     const requiredSections = [
       "Signals Worth Acting On",
       "Unresolved Questions",
@@ -71,7 +76,8 @@ async function pageMetrics(page) {
       bodyText,
       articleLinks,
       usefulLinkCount,
-      hasImageState,
+      articleImageCount,
+      hasImagePlaceholder,
       missingSections,
       hasTopFoldEvidenceFallback: bodyText.includes("The matrix, citations, stats, and links sit below the fold."),
       hasEvidenceDesk: bodyText.includes("Evidence Desk"),
@@ -124,8 +130,11 @@ try {
     if (metrics.usefulLinkCount < 1) {
       fail(`${viewport.name} renders no contextual useful-link actions`);
     }
-    if (!metrics.hasImageState) {
-      fail(`${viewport.name} has no article image or explicit image status`);
+    if (metrics.articleImageCount < 5) {
+      fail(`${viewport.name} renders only ${metrics.articleImageCount} real article images`);
+    }
+    if (metrics.hasImagePlaceholder) {
+      fail(`${viewport.name} still renders pending, failed, or placeholder article images`);
     }
     if (metrics.overflowingElements.length > 0 || metrics.bleedingText.length > 0) {
       fail(`${viewport.name} has element bleed: ${JSON.stringify({

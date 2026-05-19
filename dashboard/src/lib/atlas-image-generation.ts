@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import {
   editionTypeForWindow,
   upsertAtlasAsset,
+  writeAtlasGeneratedAsset,
   type AtlasAssetStatus,
 } from "./atlas-artifact";
 import type {
@@ -179,6 +180,7 @@ export async function attachGeneratedArticleImages(
       if (generated?.data?.length) {
         status = "ready";
         url = publicPath;
+        writeAtlasGeneratedAsset(assetKey, generated.data);
         await upsertAtlasAsset({
           ...baseAsset,
           status,

@@ -1,12 +1,14 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { AtlasEditorialReport } from "./atlas-report";
 
 const upsertAtlasAssetMock = vi.fn();
+const writeAtlasGeneratedAssetMock = vi.fn();
 
 vi.mock("./atlas-artifact", () => ({
   editionTypeForWindow: (windowHours: number) => windowHours >= 120 ? "sunday_review" : "daily",
   upsertAtlasAsset: upsertAtlasAssetMock,
+  writeAtlasGeneratedAsset: writeAtlasGeneratedAssetMock,
 }));
 
 function sampleReport(): AtlasEditorialReport {
@@ -63,8 +65,14 @@ function sampleReport(): AtlasEditorialReport {
 }
 
 describe("Atlas article image generation", () => {
+  beforeEach(() => {
+    upsertAtlasAssetMock.mockReset();
+    writeAtlasGeneratedAssetMock.mockReset();
+  });
+
   test("stores generated article image bytes and attaches a durable URL", async () => {
     upsertAtlasAssetMock.mockResolvedValue({ asset_key: "unused" });
+    writeAtlasGeneratedAssetMock.mockReturnValue("/tmp/skill-bloat.png");
     const runner = vi.fn().mockResolvedValue({
       data: Buffer.from("fake-png"),
       contentType: "image/png",
@@ -89,6 +97,10 @@ describe("Atlas article image generation", () => {
       assetBytes: Buffer.from("fake-png"),
       contentType: "image/png",
     }));
+    expect(writeAtlasGeneratedAssetMock).toHaveBeenCalledWith(
+      "2026-05-19/daily/skill-bloat.png",
+      Buffer.from("fake-png"),
+    );
     expect(report.articles[0].image).toMatchObject({
       status: "ready",
       url: "/api/atlas/image/2026-05-19/daily/skill-bloat.png",

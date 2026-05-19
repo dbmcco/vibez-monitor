@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { generateAtlasEditorialReport } from "@/lib/atlas-report";
+import { attachGeneratedArticleImages } from "@/lib/atlas-image-generation";
 import { writeAtlasArtifact } from "@/lib/atlas-artifact";
 import type { AtlasSnapshot } from "@/lib/atlas";
 import { getAtlasSnapshot } from "@/lib/db";
@@ -26,7 +27,10 @@ export async function POST(request: NextRequest) {
   }
 
   const atlas = suppliedAtlas || await getAtlasSnapshot({ windowHours: hours });
-  const editorialReport = await generateAtlasEditorialReport(atlas);
+  const editorialReport = await attachGeneratedArticleImages({
+    report: await generateAtlasEditorialReport(atlas),
+    windowHours: hours,
+  });
   const artifactPath = await writeAtlasArtifact({
     windowHours: hours,
     atlas,
