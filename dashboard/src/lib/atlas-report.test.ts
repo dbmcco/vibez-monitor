@@ -463,6 +463,44 @@ describe("atlas editorial report", () => {
     expect(report.headline).toBe("The agent work found its bottleneck");
   });
 
+  test("retries transient empty JSON responses from the report model", async () => {
+    const shell = {
+      headline: "The agent work found its bottleneck",
+      dek: "Evaluation, not enthusiasm, is the limiting reagent.",
+      what_happened: ["People circled the evaluation loop."],
+      what_it_means: ["The project is moving from demo energy to operating discipline."],
+      why_care: ["This is where agent work starts to become repeatable."],
+      valuable: ["The useful artifact is the citation trail."],
+      actions: ["Turn the evaluation question into an owner and a next check."],
+      main_topic: {
+        title: "Evaluation as leverage",
+        paragraphs: [
+          "The first paragraph names the theme.",
+          "The second paragraph explains what happened.",
+          "The third paragraph explains what it means.",
+          "The fourth paragraph explains why it matters.",
+          "The fifth paragraph names the next useful move.",
+        ],
+        evidence_refs: ["vibez:message:m1"],
+      },
+      article_seeds: completeArticleSeeds(),
+      themes: [],
+      evidence: [],
+    };
+    const generator = vi
+      .fn()
+      .mockRejectedValueOnce(new SyntaxError("Unexpected end of JSON input"))
+      .mockResolvedValueOnce({ parsed: shell })
+      .mockResolvedValueOnce({ parsed: completeArticle("Evaluation becomes the work", "lead") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Tooling gaps are product gaps", "secondary", "vibez:message:m2") })
+      .mockResolvedValueOnce({ parsed: completeArticle("Durable records become the archive") });
+
+    const report = await generateAtlasEditorialReport(sampleAtlas(), generator);
+
+    expect(generator).toHaveBeenCalledTimes(5);
+    expect(report.articles).toHaveLength(3);
+  });
+
   test("asks the model to repair schema-invalid report JSON", async () => {
     const baseReport = {
       headline: "",

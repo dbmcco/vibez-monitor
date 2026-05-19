@@ -362,7 +362,7 @@ export async function generateAtlasEditorialReport(
   generator: AtlasReportGenerator = generateJson<unknown>,
 ): Promise<AtlasEditorialReport> {
   const messages = buildAtlasIssueShellMessages(atlas);
-  const result = await generator({
+  const result = await generateAtlasReportJson(generator, {
     taskId: "dashboard.atlas_report",
     messages,
   });
@@ -375,7 +375,7 @@ export async function generateAtlasEditorialReport(
       break;
     } catch (error) {
       validationError = error instanceof Error ? error.message : "schema validation failed";
-      const repaired = await generator({
+      const repaired = await generateAtlasReportJson(generator, {
         taskId: "dashboard.atlas_report",
         messages: buildAtlasIssueShellRepairMessages({
           atlas,
@@ -404,7 +404,7 @@ export async function generateAtlasEditorialReport(
     } catch (error) {
       validationError = error instanceof Error ? error.message : "schema validation failed";
       if (isArticleValidationError(validationError)) {
-        const repaired = await generator({
+        const repaired = await generateAtlasReportJson(generator, {
           taskId: "dashboard.atlas_report",
           messages: buildAtlasArticleRepairMessages({
             atlas,
@@ -428,7 +428,7 @@ export async function generateAtlasEditorialReport(
         }
         continue;
       }
-      const repaired = await generator({
+      const repaired = await generateAtlasReportJson(generator, {
         taskId: "dashboard.atlas_report",
         messages: buildAtlasReportRepairMessages({
           atlas,
@@ -449,6 +449,28 @@ export async function generateAtlasEditorialReport(
       }`,
     );
   }
+}
+
+async function generateAtlasReportJson(
+  generator: AtlasReportGenerator,
+  args: Parameters<AtlasReportGenerator>[0],
+): Promise<{ parsed: unknown }> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await generator(args);
+    } catch (error) {
+      lastError = error;
+      if (!isJsonParseFailure(error)) throw error;
+    }
+  }
+  throw lastError;
+}
+
+function isJsonParseFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error instanceof SyntaxError ||
+    /JSON|Unexpected end/i.test(error.message || "");
 }
 
 export function buildAtlasIssueShellMessages(atlas: AtlasSnapshot): AtlasReportMessage[] {
@@ -735,7 +757,7 @@ async function repairArticlesIndividually({
   }
   const articles: unknown[] = [];
   for (let index = 0; index < articleSeeds.length; index += 1) {
-    const repaired = await generator({
+    const repaired = await generateAtlasReportJson(generator, {
       taskId: "dashboard.atlas_report",
       messages: buildAtlasSingleArticleRepairMessages({
         atlas,
