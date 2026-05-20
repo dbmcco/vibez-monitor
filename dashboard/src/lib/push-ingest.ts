@@ -263,6 +263,12 @@ function parseEmbeddingLiteral(value: unknown): string {
   return trimmed.startsWith("[") ? trimmed : `[${trimmed}]`;
 }
 
+function optionalTrimmedText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+}
+
 function messageTableName(): string {
   const raw = (process.env.VIBEZ_PGVECTOR_TABLE || "vibez_message_embeddings")
     .trim()
@@ -1171,11 +1177,11 @@ async function upsertLinkEmbeddingBatch(
       row.relevance ?? null,
       row.shared_by ?? null,
       row.source_group ?? null,
-      row.first_seen ?? null,
-      row.last_seen ?? null,
+      optionalTrimmedText(row.first_seen),
+      optionalTrimmedText(row.last_seen),
       Number(row.mention_count ?? 0),
       Number(row.value_score ?? 0),
-      row.report_date ? String(row.report_date).trim() || null : null,
+      optionalTrimmedText(row.report_date),
       row.authored_by ?? null,
       Boolean(row.pinned),
       parseEmbeddingLiteral(row.embedding),

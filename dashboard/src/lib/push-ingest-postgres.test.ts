@@ -140,6 +140,31 @@ describe("Postgres push ingestion", () => {
     )).toBe(true);
   });
 
+  test("normalizes blank link embedding dates before writing to pgvector", async () => {
+    const { applyPgvectorPayload } = await import("./push-ingest");
+
+    await applyPgvectorPayload({
+      link_embeddings: [
+        {
+          link_id: 43,
+          url: "https://example.com/blank-dates",
+          url_hash: "blank-date-hash",
+          title: "Blank Dates",
+          first_seen: "",
+          last_seen: "   ",
+          report_date: "",
+          embedding: `[${new Array(256).fill(0.1).join(",")}]`,
+        },
+      ],
+    });
+
+    const linkInsert = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO vibez_link_embeddings"),
+    );
+    expect(linkInsert?.[1]).toEqual(expect.arrayContaining([null]));
+    expect(linkInsert?.[1]).not.toEqual(expect.arrayContaining([""]));
+  });
+
   test("uses the dedicated pgvector URL for embedding writes when core Postgres is separate", async () => {
     process.env.VIBEZ_DATABASE_URL = "postgres://core-host/railway";
     process.env.DATABASE_URL = "";
