@@ -15,6 +15,7 @@ import {
   applyPgvectorPayload,
   ensurePostgresCoreSchema,
   getPgPool,
+  toContributionFlag,
   type LinkEmbeddingPayload,
   type MessageEmbeddingPayload,
 } from "./push-ingest";
@@ -281,7 +282,7 @@ async function classifyMissingMessages(
         classification.relevance_score,
         JSON.stringify(classification.topics),
         JSON.stringify(classification.entities),
-        classification.contribution_flag,
+        toContributionFlag(classification.contribution_flag),
         JSON.stringify(classification.contribution_themes),
         classification.contribution_hint,
         classification.alert_level,

@@ -152,6 +152,8 @@ describe("Railway admin enrichment", () => {
       dimensions: 64,
     }));
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO classifications"))).toBe(true);
+    const classificationInsert = queryMock.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO classifications"));
+    expect(classificationInsert?.[1]).toEqual(expect.arrayContaining([1]));
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_message_embeddings"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_link_embeddings"))).toBe(true);
   });

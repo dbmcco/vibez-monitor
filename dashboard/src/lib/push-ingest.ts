@@ -28,7 +28,7 @@ export interface ClassificationPayload {
   relevance_score?: number;
   topics?: unknown;
   entities?: unknown;
-  contribution_flag?: boolean;
+  contribution_flag?: boolean | number | string | null;
   contribution_themes?: unknown;
   contribution_hint?: string;
   alert_level?: string;
@@ -213,6 +213,15 @@ function normalizeAlertLevel(raw: unknown): string {
   return "none";
 }
 
+export function toContributionFlag(raw: unknown): 0 | 1 {
+  if (typeof raw === "boolean") return raw ? 1 : 0;
+  if (typeof raw === "number") return raw > 0 ? 1 : 0;
+  const value = String(raw ?? "").trim().toLowerCase();
+  return value === "true" || value === "t" || value === "yes" || value === "y" || value === "on" || value === "1"
+    ? 1
+    : 0;
+}
+
 function toIntScore(raw: unknown): number {
   const value = Number.parseInt(String(raw ?? "0"), 10);
   if (!Number.isFinite(value)) return 0;
@@ -312,11 +321,30 @@ export async function ensurePostgresCoreSchema(pool: Pool): Promise<void> {
       relevance_score INTEGER NOT NULL DEFAULT 0,
       topics TEXT NOT NULL DEFAULT '[]',
       entities TEXT NOT NULL DEFAULT '[]',
-      contribution_flag BOOLEAN NOT NULL DEFAULT FALSE,
+      contribution_flag INTEGER NOT NULL DEFAULT 0,
       contribution_themes TEXT NOT NULL DEFAULT '[]',
       contribution_hint TEXT,
       alert_level TEXT NOT NULL DEFAULT 'none'
     )
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'classifications'
+          AND column_name = 'contribution_flag'
+          AND data_type = 'boolean'
+      ) THEN
+        ALTER TABLE classifications
+          ALTER COLUMN contribution_flag DROP DEFAULT,
+          ALTER COLUMN contribution_flag TYPE INTEGER
+            USING CASE WHEN contribution_flag THEN 1 ELSE 0 END,
+          ALTER COLUMN contribution_flag SET DEFAULT 0;
+      END IF;
+    END $$;
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS links (
@@ -1317,7 +1345,7 @@ export async function applyPostgresPayload(
           toIntScore(classification.relevance_score),
           JSON.stringify(parseJsonList(classification.topics)),
           JSON.stringify(parseJsonList(classification.entities)),
-          Boolean(classification.contribution_flag),
+          toContributionFlag(classification.contribution_flag),
           JSON.stringify(parseJsonList(classification.contribution_themes)),
           String(classification.contribution_hint || ""),
           normalizeAlertLevel(classification.alert_level),
@@ -1367,7 +1395,7 @@ export async function applyPostgresPayload(
         toIntScore(row.relevance_score),
         parseJsonText(row.topics),
         parseJsonText(row.entities),
-        Boolean(row.contribution_flag),
+        toContributionFlag(row.contribution_flag),
         parseJsonText(row.contribution_themes),
         row.contribution_hint ?? "",
         normalizeAlertLevel(row.alert_level),
@@ -1526,7 +1554,7 @@ export async function backfillPostgresCoreFromEmbeddings(): Promise<{
       (message_id, relevance_score, topics, entities, contribution_flag,
        contribution_themes, contribution_hint, alert_level)
     SELECT message_id, coalesce(relevance_score, 0)::integer, topics::text, entities::text,
-           contribution_flag, contribution_themes::text, contribution_hint, coalesce(alert_level, 'none')
+           coalesce(contribution_flag::integer, 0), contribution_themes::text, contribution_hint, coalesce(alert_level, 'none')
     FROM ${messageTable}
     ON CONFLICT (message_id) DO UPDATE SET
       relevance_score = EXCLUDED.relevance_score,
