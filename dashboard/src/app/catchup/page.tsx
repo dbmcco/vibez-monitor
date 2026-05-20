@@ -22,6 +22,25 @@ interface CatchupLink {
 
 interface CatchupResult {
   catchup_memo: string;
+  week_in_review?: {
+    title: string;
+    paragraphs: string[];
+    theme_map: {
+      branches: Array<{
+        theme: string;
+        timeline: string;
+        drivers: string[];
+        evidence: string[];
+        people: string[];
+        tension: string;
+        implication: string;
+      }>;
+      convergences: Array<{
+        themes: string[];
+        meaning: string;
+      }>;
+    };
+  };
   conversation_arcs: CatchupArc[];
   themes: string[];
   trends: {
@@ -97,6 +116,7 @@ export default function CatchupPage() {
   const hasRenderableContent = Boolean(
     result &&
       (result.catchup_memo.trim() ||
+        (result.week_in_review?.paragraphs?.length ?? 0) > 0 ||
         result.hot_on_return.length > 0 ||
         result.conversation_arcs.length > 0 ||
         result.unresolved_threads.length > 0 ||
@@ -249,6 +269,60 @@ export default function CatchupPage() {
               <p className="text-sm text-slate-200 leading-relaxed">
                 {result.catchup_memo}
               </p>
+            </div>
+          )}
+
+          {/* Week in review */}
+          {result.week_in_review && result.week_in_review.paragraphs.length > 0 && (
+            <div className="vibe-panel rounded-lg p-4">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-cyan-400">
+                Week in Review
+              </h2>
+              <h3 className="mt-2 text-lg font-semibold text-slate-100">
+                {result.week_in_review.title || "Theme Map"}
+              </h3>
+              <div className="mt-4 space-y-4 text-sm leading-relaxed text-slate-200">
+                {result.week_in_review.paragraphs.slice(0, 5).map((paragraph, i) => (
+                  <p key={i}>{paragraph}</p>
+                ))}
+              </div>
+              {result.week_in_review.theme_map.branches.length > 0 && (
+                <div className="mt-5 space-y-3">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Branching Theme Map
+                  </h4>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {result.week_in_review.theme_map.branches.map((branch, i) => (
+                      <article key={`${branch.theme}-${i}`} className="rounded-lg border border-slate-700/70 bg-slate-900/45 p-3">
+                        <p className="text-sm font-semibold text-slate-100">{branch.theme}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-400">{branch.timeline}</p>
+                        <div className="mt-3 grid gap-2 text-xs text-slate-300">
+                          <p><span className="text-slate-500">Drivers:</span> {branch.drivers.join(", ") || "not specified"}</p>
+                          <p><span className="text-slate-500">Evidence:</span> {branch.evidence.join(", ") || "not specified"}</p>
+                          <p><span className="text-slate-500">People:</span> {branch.people.join(", ") || "not specified"}</p>
+                          <p><span className="text-slate-500">Tension:</span> {branch.tension}</p>
+                          <p><span className="text-slate-500">Implication:</span> {branch.implication}</p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {result.week_in_review.theme_map.convergences.length > 0 && (
+                <div className="mt-4 rounded-lg border border-cyan-400/25 bg-cyan-400/10 p-3">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-cyan-200">
+                    Convergence Points
+                  </h4>
+                  <ul className="mt-2 space-y-2 text-xs text-slate-200">
+                    {result.week_in_review.theme_map.convergences.map((item, i) => (
+                      <li key={`${item.themes.join("-")}-${i}`}>
+                        <span className="text-cyan-200">{item.themes.join(" + ")}:</span>{" "}
+                        {item.meaning}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
 

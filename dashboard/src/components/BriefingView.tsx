@@ -595,7 +595,7 @@ function signalBadge(signal: AtGlanceSignal): { label: string; className: string
   };
 }
 
-function buildAtGlanceItems(
+export function buildAtGlanceItems(
   recentUpdate: RecentUpdateSnapshot | null,
   trendData: TrendData,
   threads: Thread[],
@@ -639,7 +639,7 @@ function buildAtGlanceItems(
       .trim();
     items.push({
       title: "Daily Narrative",
-      detail: excerpt(narrativeText, 210),
+      detail: narrativeText,
       freshness: `24h synthesis (${report_dateLabel(previousReportDate, dailyMemo)})`,
       signal: classifySignalNovelty(narrativeText, previousNarrativeText),
     });
@@ -664,7 +664,7 @@ function buildAtGlanceItems(
       .trim();
     items.push({
       title: "Trend Movement",
-      detail: excerpt(trendText, 210),
+      detail: trendText,
       freshness:
         previousReportDate
           ? `Compared against ${previousReportDate}`
