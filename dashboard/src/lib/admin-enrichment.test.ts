@@ -156,6 +156,9 @@ describe("Railway admin enrichment", () => {
     expect(classificationInsert?.[1]).toEqual(expect.arrayContaining([1]));
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_message_embeddings"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO vibez_link_embeddings"))).toBe(true);
+    const linkSelection = queryMock.mock.calls.find(([sql]) => String(sql).includes("FROM links l"));
+    expect(String(linkSelection?.[0])).toContain("DESC NULLS LAST");
+    expect(String(linkSelection?.[0])).not.toContain("report_date, ''");
   });
 
   test("records publish job stages around an Atlas rebuild", async () => {

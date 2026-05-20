@@ -216,7 +216,7 @@ async function selectMissingLinkEmbeddings(
       WHERE l.url IS NOT NULL
         AND l.url_hash IS NOT NULL
       ${where}
-      ORDER BY coalesce(l.last_seen, l.first_seen, l.report_date, '') DESC, l.id DESC
+      ORDER BY coalesce(l.last_seen, l.first_seen, l.report_date::timestamptz) DESC NULLS LAST, l.id DESC
       LIMIT $1
     `,
     [limit],
