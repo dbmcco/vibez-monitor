@@ -11,6 +11,13 @@ const pollIntervalMs = Number.parseInt(process.env.VIBEZ_ENRICH_WORKER_POLL_INTE
 const startupDelayMs = Number.parseInt(process.env.VIBEZ_ENRICH_WORKER_STARTUP_DELAY_MS || "5000", 10);
 const connectionString = process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "";
 
+function readIntEnv(name) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const parsed = Number.parseInt(String(raw), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -96,18 +103,26 @@ async function nextQueuedJob(pool) {
 }
 
 async function runJob(job) {
+  const body = {
+    rebuildAtlas: true,
+    atlasHours: Number(job.window_hours) || 48,
+    publishJobId: job.id,
+    prestartedPublishJob: true,
+  };
+  const classifyLimit = readIntEnv("VIBEZ_DAILY_CLASSIFY_LIMIT");
+  const messageEmbeddingLimit = readIntEnv("VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT");
+  const linkEmbeddingLimit = readIntEnv("VIBEZ_DAILY_LINK_EMBEDDING_LIMIT");
+  if (classifyLimit !== undefined) body.classifyLimit = classifyLimit;
+  if (messageEmbeddingLimit !== undefined) body.messageEmbeddingLimit = messageEmbeddingLimit;
+  if (linkEmbeddingLimit !== undefined) body.linkEmbeddingLimit = linkEmbeddingLimit;
+
   const response = await fetch(`${baseUrl}/api/admin/enrich`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-vibez-push-key": pushKey,
     },
-    body: JSON.stringify({
-      rebuildAtlas: true,
-      atlasHours: Number(job.window_hours) || 48,
-      publishJobId: job.id,
-      prestartedPublishJob: true,
-    }),
+    body: JSON.stringify(body),
   });
   const text = await response.text();
   if (!response.ok) {
