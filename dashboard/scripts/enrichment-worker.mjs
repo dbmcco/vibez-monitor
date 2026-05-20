@@ -19,6 +19,70 @@ function now() {
   return new Date().toISOString();
 }
 
+async function ensureAtlasPublishSchema(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atlas_editions (
+      edition_date TEXT NOT NULL,
+      edition_type TEXT NOT NULL,
+      window_hours INTEGER NOT NULL,
+      publication_time TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (edition_date, edition_type)
+    )
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_atlas_editions_publication_time ON atlas_editions (publication_time DESC)",
+  );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atlas_publish_jobs (
+      id TEXT PRIMARY KEY,
+      edition_date TEXT NOT NULL,
+      edition_type TEXT NOT NULL,
+      window_hours INTEGER NOT NULL,
+      source_window_start TEXT,
+      source_window_end TEXT,
+      status TEXT NOT NULL,
+      stage_status JSONB NOT NULL DEFAULT '{}'::jsonb,
+      stage_errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_atlas_publish_jobs_edition ON atlas_publish_jobs (edition_date DESC, edition_type, window_hours)",
+  );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atlas_assets (
+      asset_key TEXT PRIMARY KEY,
+      edition_date TEXT NOT NULL,
+      edition_type TEXT NOT NULL,
+      window_hours INTEGER NOT NULL,
+      article_slug TEXT,
+      asset_kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      prompt TEXT,
+      content_type TEXT,
+      asset_bytes BYTEA,
+      storage_url TEXT,
+      public_path TEXT,
+      provider TEXT,
+      model TEXT,
+      error TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    "CREATE INDEX IF NOT EXISTS idx_atlas_assets_edition ON atlas_assets (edition_date DESC, edition_type, window_hours)",
+  );
+}
+
 async function nextQueuedJob(pool) {
   const result = await pool.query(
     `SELECT id, window_hours
@@ -68,6 +132,7 @@ async function main() {
 
   await sleep(Math.max(startupDelayMs, 0));
   const pool = new Pool({ connectionString, max: 2, idleTimeoutMillis: 10_000 });
+  await ensureAtlasPublishSchema(pool);
   console.log(`${now()} enrichment worker started`);
 
   for (;;) {
