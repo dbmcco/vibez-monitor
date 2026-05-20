@@ -161,6 +161,89 @@ describe("Railway admin enrichment", () => {
     expect(String(linkSelection?.[0])).not.toContain("report_date, ''");
   });
 
+  test("filters missing embeddings against the dedicated pgvector database", async () => {
+    const embeddedMessage = {
+      id: "m-embedded",
+      room_id: "room-1",
+      room_name: "Agent Harnesses",
+      sender_id: "member-1",
+      sender_name: "Dana",
+      body: "Already embedded message.",
+      timestamp: 1776120000000,
+    };
+    const missingMessage = {
+      ...embeddedMessage,
+      id: "m-missing",
+      body: "Missing embedding message.",
+    };
+    const embeddedLink = {
+      id: 21,
+      url: "https://example.com/embedded",
+      url_hash: "hash-embedded",
+      title: "Embedded",
+      category: "article",
+      relevance: "",
+      shared_by: "Dana",
+      source_group: "Agent Harnesses",
+      first_seen: "2026-05-18T10:00:00.000Z",
+      last_seen: "2026-05-18T11:00:00.000Z",
+      mention_count: 1,
+      value_score: 1,
+      report_date: "2026-05-18",
+      authored_by: "Dana",
+      pinned: 0,
+    };
+    const missingLink = {
+      ...embeddedLink,
+      id: 22,
+      url: "https://example.com/missing",
+      url_hash: "hash-missing",
+      title: "Missing",
+    };
+
+    queryMock.mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("SELECT to_regclass")) {
+        return { rows: [{ table_name: "present" }], rowCount: 1 };
+      }
+      if (text.includes("SELECT message_id FROM vibez_message_embeddings")) {
+        return { rows: [{ message_id: "m-embedded" }], rowCount: 1 };
+      }
+      if (text.includes("SELECT url_hash FROM vibez_link_embeddings")) {
+        return { rows: [{ url_hash: "hash-embedded" }], rowCount: 1 };
+      }
+      if (text.includes("FROM messages m") && text.includes("c.relevance_score")) {
+        return { rows: [embeddedMessage, missingMessage], rowCount: 2 };
+      }
+      if (text.includes("FROM links l")) {
+        return { rows: [embeddedLink, missingLink], rowCount: 2 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    embedTextsMock.mockResolvedValue({ vectors: [new Array<number>(64).fill(0.2)] });
+
+    const { refreshRailwayEnrichment } = await import("./admin-enrichment");
+    const result = await refreshRailwayEnrichment({
+      classifyLimit: 0,
+      messageEmbeddingLimit: 5,
+      linkEmbeddingLimit: 5,
+      rebuildAtlas: false,
+    });
+
+    expect(result.message_embeddings_written).toBe(1);
+    expect(result.link_embeddings_written).toBe(1);
+    const messageInsert = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO vibez_message_embeddings"),
+    );
+    const linkInsert = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO vibez_link_embeddings"),
+    );
+    expect(messageInsert?.[1]).toEqual(expect.arrayContaining(["m-missing"]));
+    expect(messageInsert?.[1]).not.toEqual(expect.arrayContaining(["m-embedded"]));
+    expect(linkInsert?.[1]).toEqual(expect.arrayContaining(["hash-missing"]));
+    expect(linkInsert?.[1]).not.toEqual(expect.arrayContaining(["hash-embedded"]));
+  });
+
   test("records publish job stages around an Atlas rebuild", async () => {
     queryMock.mockImplementation(async (sql: unknown) => {
       const text = String(sql);

@@ -15,6 +15,7 @@ import {
   applyPgvectorPayload,
   ensurePostgresCoreSchema,
   getPgPool,
+  getPgvectorPool,
   toContributionFlag,
   type LinkEmbeddingPayload,
   type MessageEmbeddingPayload,
@@ -146,6 +147,24 @@ async function tableExists(pool: Pool, name: string): Promise<boolean> {
   return Boolean(result.rows[0]?.table_name);
 }
 
+async function embeddedMessageIdSet(): Promise<Set<string> | null> {
+  const pool = getPgvectorPool();
+  if (!pool) return null;
+  const embeddingTable = tableName("VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings");
+  if (!await tableExists(pool, embeddingTable)) return null;
+  const result = await pool.query(`SELECT message_id FROM ${embeddingTable}`);
+  return new Set(result.rows.map((row: { message_id: string }) => String(row.message_id)));
+}
+
+async function embeddedLinkHashSet(): Promise<Set<string> | null> {
+  const pool = getPgvectorPool();
+  if (!pool) return null;
+  const embeddingTable = tableName("VIBEZ_PGVECTOR_LINK_TABLE", "vibez_link_embeddings");
+  if (!await tableExists(pool, embeddingTable)) return null;
+  const result = await pool.query(`SELECT url_hash FROM ${embeddingTable}`);
+  return new Set(result.rows.map((row: { url_hash: string }) => String(row.url_hash)));
+}
+
 async function selectMissingClassifications(
   pool: Pool,
   limit: number,
@@ -171,12 +190,7 @@ async function selectMissingMessageEmbeddings(
   limit: number,
 ): Promise<MissingMessageRow[]> {
   if (limit <= 0) return [];
-  const embeddingTable = tableName("VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings");
-  const hasEmbeddingTable = await tableExists(pool, embeddingTable);
-  const join = hasEmbeddingTable
-    ? `LEFT JOIN ${embeddingTable} e ON e.message_id = m.id`
-    : "";
-  const where = hasEmbeddingTable ? "AND e.message_id IS NULL" : "";
+  const embeddedIds = await embeddedMessageIdSet();
   const result = await pool.query(
     `
       SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body, m.timestamp,
@@ -184,15 +198,13 @@ async function selectMissingMessageEmbeddings(
              c.contribution_themes, c.contribution_hint, c.alert_level
       FROM messages m
       LEFT JOIN classifications c ON c.message_id = m.id
-      ${join}
       WHERE length(trim(m.body)) > 0
-      ${where}
       ORDER BY m.timestamp DESC
-      LIMIT $1
     `,
-    [limit],
   );
-  return result.rows as MissingMessageRow[];
+  const rows = result.rows as MissingMessageRow[];
+  if (!embeddedIds) return rows.slice(0, limit);
+  return rows.filter((row) => !embeddedIds.has(String(row.id))).slice(0, limit);
 }
 
 async function selectMissingLinkEmbeddings(
@@ -200,28 +212,21 @@ async function selectMissingLinkEmbeddings(
   limit: number,
 ): Promise<MissingLinkRow[]> {
   if (limit <= 0) return [];
-  const embeddingTable = tableName("VIBEZ_PGVECTOR_LINK_TABLE", "vibez_link_embeddings");
-  const hasEmbeddingTable = await tableExists(pool, embeddingTable);
-  const join = hasEmbeddingTable
-    ? `LEFT JOIN ${embeddingTable} e ON e.link_id = l.id`
-    : "";
-  const where = hasEmbeddingTable ? "AND e.link_id IS NULL" : "";
+  const embeddedHashes = await embeddedLinkHashSet();
   const result = await pool.query(
     `
       SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, l.shared_by,
              l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
              l.report_date, l.authored_by, l.pinned
       FROM links l
-      ${join}
       WHERE l.url IS NOT NULL
         AND l.url_hash IS NOT NULL
-      ${where}
       ORDER BY coalesce(l.last_seen, l.first_seen, l.report_date::timestamptz) DESC NULLS LAST, l.id DESC
-      LIMIT $1
     `,
-    [limit],
   );
-  return result.rows as MissingLinkRow[];
+  const rows = result.rows as MissingLinkRow[];
+  if (!embeddedHashes) return rows.slice(0, limit);
+  return rows.filter((row) => !embeddedHashes.has(String(row.url_hash))).slice(0, limit);
 }
 
 function classificationPrompt(message: MissingMessageRow): string {

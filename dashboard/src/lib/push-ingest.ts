@@ -309,7 +309,7 @@ export function getPgPool(): Pool | null {
   return pgPool;
 }
 
-function getPgvectorPool(): Pool | null {
+export function getPgvectorPool(): Pool | null {
   const url = (process.env.VIBEZ_PGVECTOR_URL || process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim();
   if (!url) return null;
   if (!pgvectorPool) {
