@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import http from "node:http";
+import https from "node:https";
 import pg from "pg";
 
 const { Pool } = pg;
@@ -9,6 +11,7 @@ const baseUrl = process.env.VIBEZ_ENRICH_WORKER_BASE_URL || `http://127.0.0.1:${
 const pushKey = process.env.VIBEZ_PUSH_API_KEY || "";
 const pollIntervalMs = Number.parseInt(process.env.VIBEZ_ENRICH_WORKER_POLL_INTERVAL_MS || "10000", 10);
 const startupDelayMs = Number.parseInt(process.env.VIBEZ_ENRICH_WORKER_STARTUP_DELAY_MS || "5000", 10);
+const requestTimeoutMs = Number.parseInt(process.env.VIBEZ_ENRICH_WORKER_REQUEST_TIMEOUT_MS || "2700000", 10);
 const connectionString = process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "";
 
 function readIntEnv(name) {
@@ -24,6 +27,40 @@ function sleep(ms) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function requestText(url, { method = "GET", headers = {} } = {}, body) {
+  const target = new URL(url);
+  const transport = target.protocol === "https:" ? https : http;
+  const payload = body === undefined ? undefined : Buffer.from(body);
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      target,
+      {
+        method,
+        headers: {
+          ...headers,
+          ...(payload ? { "content-length": String(payload.length) } : {}),
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode || 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.setTimeout(Math.max(requestTimeoutMs, 60_000), () => {
+      request.destroy(new Error(`request timed out after ${requestTimeoutMs}ms`));
+    });
+    request.on("error", reject);
+    if (payload) request.write(payload);
+    request.end();
+  });
 }
 
 async function ensureAtlasPublishSchema(pool) {
@@ -116,19 +153,17 @@ async function runJob(job) {
   if (messageEmbeddingLimit !== undefined) body.messageEmbeddingLimit = messageEmbeddingLimit;
   if (linkEmbeddingLimit !== undefined) body.linkEmbeddingLimit = linkEmbeddingLimit;
 
-  const response = await fetch(`${baseUrl}/api/admin/enrich`, {
+  const response = await requestText(`${baseUrl}/api/admin/enrich`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-vibez-push-key": pushKey,
     },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`enrichment job ${job.id} failed with ${response.status}: ${text.slice(0, 500)}`);
+  }, JSON.stringify(body));
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`enrichment job ${job.id} failed with ${response.status}: ${response.text.slice(0, 500)}`);
   }
-  return text;
+  return response.text;
 }
 
 async function main() {
