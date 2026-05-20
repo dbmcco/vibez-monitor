@@ -12,6 +12,7 @@ const ALLOWED_SYNC_STATE_KEYS = new Set([
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 const EMBEDDING_BATCH_SIZE = 100;
 let pgPool: Pool | null = null;
+let pgvectorPool: Pool | null = null;
 
 export interface MessagePayload {
   id: string;
@@ -196,7 +197,7 @@ export interface PgvectorWriter {
 
 function corePostgresConfigured(): boolean {
   return Boolean(
-    (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "").trim(),
+    (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim(),
   );
 }
 
@@ -289,7 +290,7 @@ function pgvectorDimensions(): number {
 }
 
 export function getPgPool(): Pool | null {
-  const url = (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "").trim();
+  const url = (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim();
   if (!url) return null;
   if (!pgPool) {
     pgPool = new Pool({
@@ -300,6 +301,20 @@ export function getPgPool(): Pool | null {
     });
   }
   return pgPool;
+}
+
+function getPgvectorPool(): Pool | null {
+  const url = (process.env.VIBEZ_PGVECTOR_URL || process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim();
+  if (!url) return null;
+  if (!pgvectorPool) {
+    pgvectorPool = new Pool({
+      connectionString: url,
+      max: 4,
+      idleTimeoutMillis: 10_000,
+      allowExitOnIdle: true,
+    });
+  }
+  return pgvectorPool;
 }
 
 export async function ensurePostgresCoreSchema(pool: Pool): Promise<void> {
@@ -1198,7 +1213,7 @@ async function upsertLinkEmbeddingBatch(
 }
 
 function createDefaultPgvectorWriter(): PgvectorWriter | null {
-  const pool = getPgPool();
+  const pool = getPgvectorPool();
   if (!pool) return null;
   return {
     async writeMessageEmbeddings(rows: MessageEmbeddingPayload[]) {

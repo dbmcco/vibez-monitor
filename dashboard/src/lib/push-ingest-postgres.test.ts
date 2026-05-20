@@ -19,7 +19,7 @@ describe("Postgres push ingestion", () => {
     vi.mocked(Pool).mockClear();
     process.env = {
       ...ORIGINAL_ENV,
-      VIBEZ_DATABASE_URL: "",
+      VIBEZ_DATABASE_URL: "postgres://core-host/railway",
       DATABASE_URL: "",
       VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
       VIBEZ_PGVECTOR_TABLE: "vibez_message_embeddings",
@@ -138,6 +138,33 @@ describe("Postgres push ingestion", () => {
     expect(queryMock.mock.calls.some(([sql]) =>
       String(sql).includes("ON CONFLICT (url_hash) DO UPDATE SET"),
     )).toBe(true);
+  });
+
+  test("uses the dedicated pgvector URL for embedding writes when core Postgres is separate", async () => {
+    process.env.VIBEZ_DATABASE_URL = "postgres://core-host/railway";
+    process.env.DATABASE_URL = "";
+    process.env.VIBEZ_PGVECTOR_URL = "postgres://pgvector-host/railway";
+
+    const { applyPgvectorPayload } = await import("./push-ingest");
+
+    await applyPgvectorPayload({
+      message_embeddings: [
+        {
+          message_id: "m-vector",
+          room_id: "room-1",
+          room_name: "Agents",
+          sender_id: "sender-1",
+          sender_name: "Dana",
+          body: "Vector writes should use pgvector.",
+          timestamp: 1776120000000,
+          embedding: `[${new Array(256).fill(0.1).join(",")}]`,
+        },
+      ],
+    });
+
+    expect(Pool).toHaveBeenCalledWith(expect.objectContaining({
+      connectionString: "postgres://pgvector-host/railway",
+    }));
   });
 
   test("persists canonical Beeper raw events idempotently with watermarks", async () => {
