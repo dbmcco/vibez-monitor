@@ -72,13 +72,22 @@ def initialize_beeper_cursors(config: Config, groups: list[dict]) -> None:
 
 
 async def classify_and_index(config: Config, messages: list[dict]) -> None:
-    from vibez.classifier import classify_messages
-    from vibez.semantic_index import index_links, index_messages
+    did_work = False
 
-    await classify_messages(config, messages)
+    if env_enabled("VIBEZ_SYNC_ONCE_CLASSIFY"):
+        from vibez.classifier import classify_messages
+
+        await classify_messages(config, messages)
+        did_work = True
 
     if not (config.database_url and config.pgvector_index_on_sync):
+        if not did_work:
+            logging.getLogger("vibez.sync_once").info(
+                "Skipping local classification/indexing; Railway enrichment owns analysis."
+            )
         return
+
+    from vibez.semantic_index import index_links, index_messages
 
     message_ids = [
         str(message.get("id"))

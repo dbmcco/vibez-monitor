@@ -67,7 +67,8 @@ class Config:
     pgvector_table: str = "vibez_message_embeddings"
     pgvector_link_table: str = "vibez_link_embeddings"
     pgvector_dimensions: int = 256
-    pgvector_index_on_sync: bool = True
+    pgvector_index_on_sync: bool = False
+    classify_on_sync: bool = False
     sync_timeout_ms: int = 30000
     poll_interval: int = 30
     classifier_model: str = "hermes3:8b"
@@ -180,7 +181,11 @@ class Config:
             ),
             pgvector_dimensions=int(os.environ.get("VIBEZ_PGVECTOR_DIM", "256")),
             pgvector_index_on_sync=os.environ.get(
-                "VIBEZ_PGVECTOR_INDEX_ON_SYNC", "true"
+                "VIBEZ_PGVECTOR_INDEX_ON_SYNC", "false"
+            ).lower()
+            not in {"0", "false", "no", "off"},
+            classify_on_sync=os.environ.get(
+                "VIBEZ_CLASSIFY_ON_SYNC", "false"
             ).lower()
             not in {"0", "false", "no", "off"},
             sync_timeout_ms=int(os.environ.get("SYNC_TIMEOUT_MS", "30000")),

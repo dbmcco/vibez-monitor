@@ -30,7 +30,6 @@ launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist 2>/
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.sync.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.synthesis.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.dashboard.plist
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.classify-missing.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.enrich-link-authors.plist
 launchctl load ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist
 ```
@@ -40,3 +39,6 @@ The `com.vibez-monitor.push-railway.plist` template is intended for lightweight 
 - It runs every 15 minutes via `StartInterval=900`
 - It calls `./scripts/local_sync_to_railway.sh --push-only`
 - It assumes `com.vibez-monitor.sync` is already keeping the local SQLite database current
+
+Local classification and embedding are disabled by default. Railway enrichment owns classifications,
+message embeddings, and link embeddings for the production website.

@@ -73,21 +73,28 @@ async def main():
         logger.warning(
             "Google Groups list ids set but IMAP credentials missing; source disabled."
         )
-    if config.database_url:
+    if config.database_url and config.pgvector_index_on_sync:
         logger.info(
             "pgvector indexing enabled (table=%s, dim=%d)",
             config.pgvector_table,
             config.pgvector_dimensions,
         )
-
-    # Classify new messages inline as they arrive
-    from vibez.classifier import classify_messages
-    from vibez.semantic_index import index_links, index_messages
+    else:
+        logger.info("Local pgvector indexing disabled; Railway enrichment owns embeddings.")
+    if config.classify_on_sync:
+        logger.info("Local inline classification enabled.")
+    else:
+        logger.info("Local inline classification disabled; Railway enrichment owns classifications.")
 
     async def on_messages(messages):
-        await classify_messages(config, messages)
+        if config.classify_on_sync:
+            from vibez.classifier import classify_messages
+
+            await classify_messages(config, messages)
         if not (config.database_url and config.pgvector_index_on_sync):
             return
+        from vibez.semantic_index import index_links, index_messages
+
         message_ids = [
             str(msg.get("id"))
             for msg in messages
