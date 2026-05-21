@@ -37,6 +37,17 @@ def test_local_sync_script_does_not_trigger_remote_analysis():
     assert "Local -> Railway sync complete." in script
 
 
+def test_sync_scripts_pass_pgvector_url_to_indexers():
+    continuous_sync = (ROOT / "backend" / "scripts" / "run_sync.py").read_text()
+    one_shot_sync = (ROOT / "backend" / "scripts" / "run_sync_once.py").read_text()
+    pgvector_index = (ROOT / "backend" / "scripts" / "pgvector_index.py").read_text()
+
+    assert "resolve_pgvector_index_url(config)," in continuous_sync
+    assert "resolve_pgvector_index_url(config)," in one_shot_sync
+    assert "index_messages(\n            pg_url," in pgvector_index
+    assert "index_links(\n            pg_url," in pgvector_index
+
+
 def test_push_railway_launchd_template_uses_supported_command():
     template = (ROOT / "launchd" / "com.vibez-monitor.push-railway.plist").read_text()
 

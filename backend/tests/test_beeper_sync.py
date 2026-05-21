@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from vibez import beeper_sync
 from vibez.beeper_sync import get_whatsapp_groups, parse_beeper_message
 from vibez.db import get_connection, init_db
@@ -35,6 +39,20 @@ def test_load_allowed_groups_reads_env_values(monkeypatch):
     }
 
 
+def test_get_whatsapp_groups_refuses_empty_allowlist(monkeypatch):
+    payload = {
+        "items": [
+            {"id": "g1", "network": "WhatsApp", "type": "group", "title": "Personal group"},
+        ]
+    }
+    monkeypatch.delenv("VIBEZ_ALLOWED_GROUPS", raising=False)
+    monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
+
+    groups = get_whatsapp_groups("http://localhost:23373", "token")
+
+    assert groups == []
+
+
 def test_get_whatsapp_groups_filters_to_whatsapp_groups(monkeypatch):
     payload = {
         "items": [
@@ -45,9 +63,23 @@ def test_get_whatsapp_groups_filters_to_whatsapp_groups(monkeypatch):
     }
     monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
 
-    groups = get_whatsapp_groups("http://localhost:23373", "token")
+    groups = get_whatsapp_groups("http://localhost:23373", "token", allowed_groups={"The vibez"})
 
     assert [g["id"] for g in groups] == ["g1"]
+
+
+def test_get_whatsapp_groups_limits_desktop_api_to_whatsapp_account(monkeypatch):
+    seen: list[tuple[str, dict | None]] = []
+
+    def fake_api_get(_base_url, path, _token, params=None):
+        seen.append((path, params))
+        return {"items": []}
+
+    monkeypatch.setattr(beeper_sync, "api_get", fake_api_get)
+
+    get_whatsapp_groups("http://localhost:23373", "token", allowed_groups={"The vibez"})
+
+    assert seen == [("/v1/chats", {"limit": "200", "accountIDs": "whatsapp"})]
 
 
 def test_get_whatsapp_groups_accepts_account_id_when_network_missing(monkeypatch):
@@ -60,7 +92,7 @@ def test_get_whatsapp_groups_accepts_account_id_when_network_missing(monkeypatch
     }
     monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
 
-    groups = get_whatsapp_groups("http://localhost:23373", "token")
+    groups = get_whatsapp_groups("http://localhost:23373", "token", allowed_groups={"The vibez"})
 
     assert [g["id"] for g in groups] == ["g1"]
 
@@ -75,7 +107,7 @@ def test_get_whatsapp_groups_excludes_known_non_community_groups(monkeypatch):
     }
     monkeypatch.setattr(beeper_sync, "api_get", lambda *_args, **_kwargs: payload)
 
-    groups = get_whatsapp_groups("http://localhost:23373", "token")
+    groups = get_whatsapp_groups("http://localhost:23373", "token", allowed_groups={"The vibez"})
 
     assert [g["title"] for g in groups] == ["The vibez"]
 
@@ -122,6 +154,66 @@ def test_get_whatsapp_groups_allowlist_matching_is_case_insensitive(monkeypatch)
         "Security",
         "audio intelligence",
     ]
+
+
+def test_backfill_group_discovery_respects_allowlist(monkeypatch):
+    from scripts import beeper_api_backfill
+
+    seen: list[tuple[str, dict | None]] = []
+
+    def fake_api_get(path, _token, params=None):
+        seen.append((path, params))
+        return {
+            "items": [
+                {"id": "g1", "accountID": "whatsapp", "type": "group", "title": "Show and Tell"},
+                {"id": "g2", "accountID": "whatsapp", "type": "group", "title": "Personal group"},
+                {"id": "d1", "accountID": "whatsapp", "type": "dm", "title": "Direct thread"},
+            ]
+        }
+
+    monkeypatch.setattr(beeper_api_backfill, "api_get", fake_api_get)
+
+    groups = beeper_api_backfill.get_whatsapp_groups("token", allowed_groups={"Show and Tell"})
+
+    assert seen == [("/v1/chats", {"limit": "200", "accountIDs": "whatsapp"})]
+    assert [group["title"] for group in groups] == ["Show and Tell"]
+
+
+def test_backfill_group_discovery_refuses_empty_allowlist(monkeypatch):
+    from scripts import beeper_api_backfill
+
+    monkeypatch.setattr(
+        beeper_api_backfill,
+        "api_get",
+        lambda *_args, **_kwargs: {"items": [{"id": "g1", "accountID": "whatsapp", "type": "group"}]},
+    )
+
+    assert beeper_api_backfill.get_whatsapp_groups("token", allowed_groups=set()) == []
+
+
+def test_sync_loop_passes_explicit_allowed_groups(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_get_whatsapp_groups(_base_url, _token, **kwargs):
+        seen["allowed_groups"] = kwargs.get("allowed_groups")
+        return []
+
+    monkeypatch.setattr(beeper_sync, "init_db", lambda _db_path: None)
+    monkeypatch.setattr(beeper_sync, "check_token_health", lambda _base_url, _token: None)
+    monkeypatch.setattr(beeper_sync, "get_whatsapp_groups", fake_get_whatsapp_groups)
+    monkeypatch.setattr(beeper_sync, "save_active_groups", lambda _db_path, _groups: None)
+    monkeypatch.setattr(beeper_sync, "poll_once", lambda *_args, **_kwargs: (_ for _ in ()).throw(asyncio.CancelledError()))
+
+    allowed = {"Show and Tell", "Security"}
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(beeper_sync.sync_loop(
+            tmp_path / "vibez.db",
+            "http://localhost:23373",
+            "token",
+            allowed_groups=allowed,
+        ))
+
+    assert seen["allowed_groups"] == allowed
 
 
 def test_parse_text_message():

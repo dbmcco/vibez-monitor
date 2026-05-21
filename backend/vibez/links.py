@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -63,7 +63,7 @@ def upsert_links(
         ).fetchone()
         if existing:
             new_count = (existing[1] or 1) + 1
-            days_ago = (datetime.now() - datetime.fromisoformat(existing[2]).replace(tzinfo=None)).days if existing[2] else 0
+            days_ago = _days_since_iso(existing[2])
             score = compute_value_score(new_count, days_ago)
             if not existing[3] and shared_by:
                 conn.execute(
@@ -215,12 +215,17 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
-def _days_since_iso(iso_timestamp: str | None) -> int:
+def _days_since_iso(iso_timestamp: str | datetime | date | None) -> int:
     if not iso_timestamp:
         return 0
     try:
-        parsed = datetime.fromisoformat(iso_timestamp)
-    except ValueError:
+        if isinstance(iso_timestamp, datetime):
+            parsed = iso_timestamp
+        elif isinstance(iso_timestamp, date):
+            parsed = datetime.combine(iso_timestamp, time.min, tzinfo=timezone.utc)
+        else:
+            parsed = datetime.fromisoformat(str(iso_timestamp))
+    except (TypeError, ValueError):
         return 0
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
@@ -340,7 +345,7 @@ def upsert_message_links(
                 """INSERT INTO links (url, url_hash, title, category, relevance,
                    shared_by, source_group, first_seen, last_seen, mention_count,
                    value_score, report_date)
-                   VALUES (%s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, '')""",
+                   VALUES (%s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, NULL)""",
                 (url, h, domain, context, senders,
                  ", ".join(sorted(data["rooms"])),
                  earliest_iso, latest_iso, data["count"], score),

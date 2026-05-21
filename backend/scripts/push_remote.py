@@ -21,7 +21,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from vibez.db import get_connection
+from vibez.db import close_db_connection, get_connection
 
 DEFAULT_ANALYSIS_SYNC_STATE_KEYS = (
     "beeper_active_group_ids",
@@ -124,6 +124,8 @@ def fetch_records(
     excluded_groups: set[str],
 ) -> list[dict[str, Any]]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    if not allowed_groups_normalized:
+        return []
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -192,6 +194,8 @@ def fetch_sync_state(
     excluded_groups: set[str],
 ) -> dict[str, str]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    if not allowed_groups_normalized:
+        return {}
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -273,6 +277,8 @@ def fetch_message_embeddings(
     *,
     cutoff_ts: int | None = None,
 ) -> list[dict[str, Any]]:
+    if not allowed_groups:
+        return []
     pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip() or os.environ.get("VIBEZ_DATABASE_URL", "").strip()
     if not pg_url:
         return []
@@ -315,6 +321,8 @@ def fetch_link_embeddings(
     *,
     cutoff_ts: int | None = None,
 ) -> list[dict[str, Any]]:
+    if not allowed_groups:
+        return []
     pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip() or os.environ.get("VIBEZ_DATABASE_URL", "").strip()
     if not pg_url:
         return []
@@ -593,6 +601,13 @@ def main() -> int:
     cutoff_ts = resolve_cutoff_ts(args.lookback_days)
     allowed_groups = load_allowed_groups()
     excluded_groups = load_excluded_groups()
+    if not allowed_groups:
+        print(
+            "Missing VIBEZ_ALLOWED_GROUPS. Refusing to push WhatsApp data without an explicit AGI community allowlist.",
+            file=sys.stderr,
+        )
+        close_db_connection()
+        return 2
     records = fetch_records(cutoff_ts, allowed_groups, excluded_groups)
     sync_state = fetch_sync_state(allowed_groups, excluded_groups)
 
@@ -607,6 +622,7 @@ def main() -> int:
 
     if args.dry_run:
         print("Dry run only; no remote writes.")
+        close_db_connection()
         return 0
 
     access_cookie = login_access_cookie(remote_url, access_code)
@@ -638,6 +654,7 @@ def main() -> int:
         f"Push complete: {len(records)} records over {batches} message batches "
         f"(remote messages_written={messages_written})."
     )
+    close_db_connection()
     return 0
 
 

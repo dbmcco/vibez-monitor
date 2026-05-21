@@ -15,6 +15,10 @@ from vibez.google_groups_sync import (
 )
 
 
+def resolve_pgvector_index_url(config: Config) -> str:
+    return config.pgvector_url or config.database_url
+
+
 async def main():
     config = Config.from_env()
     config.log_dir.mkdir(parents=True, exist_ok=True)
@@ -93,6 +97,7 @@ async def main():
             return
         try:
             indexed = index_messages(
+                resolve_pgvector_index_url(config),
                 table=config.pgvector_table,
                 dimensions=config.pgvector_dimensions,
                 message_ids=message_ids,
@@ -103,6 +108,7 @@ async def main():
             logger.exception("Failed to index sync batch into pgvector")
         try:
             indexed_links = index_links(
+                resolve_pgvector_index_url(config),
                 table=config.pgvector_link_table,
                 dimensions=config.pgvector_dimensions,
                 source_messages=messages,
@@ -131,6 +137,7 @@ async def main():
                         api_base=config.beeper_api_url,
                         api_token=config.beeper_api_token,
                         poll_interval=config.poll_interval,
+                        allowed_groups=allowed_groups,
                         on_messages=on_messages,
                     ),
                 )

@@ -9,10 +9,13 @@ from backend.scripts.push_remote import (
     fetch_daily_reports,
     fetch_link_embeddings,
     fetch_links,
+    fetch_message_embeddings,
+    fetch_records,
     fetch_sync_state,
     fetch_wisdom_items,
     fetch_wisdom_recommendations,
     fetch_wisdom_topics,
+    load_allowed_groups,
 )
 
 
@@ -170,6 +173,16 @@ def test_analysis_sync_state_key_set_stays_transport_safe():
         "wisdom_last_run",
         "links_last_refresh_ts",
     )
+
+
+def test_push_remote_fails_closed_without_allowed_groups(monkeypatch):
+    monkeypatch.delenv("VIBEZ_ALLOWED_GROUPS", raising=False)
+
+    assert load_allowed_groups() == set()
+    assert fetch_records(None, set(), set()) == []
+    assert fetch_sync_state(set(), set()) == {}
+    assert fetch_message_embeddings(set(), set()) == []
+    assert fetch_link_embeddings(set(), set()) == []
 
 
 def test_push_analysis_tables_sends_each_table_in_its_own_section(
