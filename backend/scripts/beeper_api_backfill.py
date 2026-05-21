@@ -21,6 +21,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from vibez.beeper_sync import load_allowed_groups
 from vibez.db import get_connection, init_db
 
 API_BASE = "http://localhost:23373"
@@ -37,8 +38,18 @@ def api_get(path: str, token: str, params: dict | None = None) -> dict:
     return json.loads(resp.read())
 
 
-def get_whatsapp_groups(token: str) -> list[dict]:
-    """List all WhatsApp group chats."""
+def get_whatsapp_groups(token: str, allowed_groups: set[str] | None = None) -> list[dict]:
+    """List explicitly allowed WhatsApp group chats."""
+    if allowed_groups is None:
+        allowed_groups = load_allowed_groups()
+    allowed_groups_normalized = {
+        name.strip().casefold()
+        for name in allowed_groups
+        if name.strip()
+    }
+    if not allowed_groups_normalized:
+        return []
+
     def is_whatsapp_group(chat: dict) -> bool:
         network = str(chat.get("network", "")).strip().casefold()
         account_id = str(chat.get("accountID", "")).strip().casefold()
@@ -51,10 +62,11 @@ def get_whatsapp_groups(token: str) -> list[dict]:
             )
         )
 
-    data = api_get("/v1/chats", token, {"limit": "200"})
+    data = api_get("/v1/chats", token, {"limit": "200", "accountIDs": "whatsapp"})
     return [
         c for c in data["items"]
         if is_whatsapp_group(c)
+        and str(c.get("title", "")).strip().casefold() in allowed_groups_normalized
     ]
 
 
@@ -171,9 +183,16 @@ def main():
     if not args.dry_run:
         init_db(db_path)
 
+    allowed_groups = load_allowed_groups()
+    if not allowed_groups:
+        parser.error(
+            "VIBEZ_ALLOWED_GROUPS is required. Refusing to backfill WhatsApp data "
+            "without an explicit AGI community allowlist."
+        )
+
     print(f"Fetching WhatsApp messages since {args.since} from Beeper Desktop API...")
-    groups = get_whatsapp_groups(token)
-    print(f"Found {len(groups)} WhatsApp groups")
+    groups = get_whatsapp_groups(token, allowed_groups=allowed_groups)
+    print(f"Found {len(groups)} allowed WhatsApp groups")
 
     total_fetched = 0
     total_imported = 0

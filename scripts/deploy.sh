@@ -84,6 +84,10 @@ build_worktree_snapshot() {
 
 copy_generated_artifacts() {
   local snapshot_dir="$1"
+  if [[ "${VIBEZ_DEPLOY_COPY_GENERATED:-1}" != "1" ]]; then
+    echo "Skipping generated artifacts for Railway deploy snapshot."
+    return 0
+  fi
   if [[ -d "$ROOT_DIR/dashboard/.generated" ]]; then
     mkdir -p "$snapshot_dir/dashboard"
     cp -a "$ROOT_DIR/dashboard/.generated" "$snapshot_dir/dashboard/.generated"

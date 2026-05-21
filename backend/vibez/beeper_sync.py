@@ -56,7 +56,12 @@ def parse_allowed_groups(raw: str | None) -> set[str]:
 
 
 def load_allowed_groups() -> set[str]:
-    """Load allowed group names from env, defaulting to no allowlist."""
+    """Load allowed group names from env.
+
+    An empty allowlist is intentionally fail-closed for Beeper discovery.
+    This process may have access to personal WhatsApp chats; only the
+    explicitly listed AGI community groups are in scope.
+    """
     return parse_allowed_groups(os.environ.get("VIBEZ_ALLOWED_GROUPS"))
 
 
@@ -114,6 +119,9 @@ def get_whatsapp_groups(
         allowed_groups = load_allowed_groups()
     excluded_groups_normalized = {name.strip().casefold() for name in excluded_groups}
     allowed_groups_normalized = {name.strip().casefold() for name in allowed_groups}
+    if not allowed_groups_normalized:
+        logger.warning("No VIBEZ_ALLOWED_GROUPS configured; refusing to monitor WhatsApp groups.")
+        return []
 
     def is_whatsapp_group(chat: dict) -> bool:
         network = str(chat.get("network", "")).strip().casefold()
@@ -127,7 +135,10 @@ def get_whatsapp_groups(
             )
         )
 
-    data = api_get(base_url, "/v1/chats", token, {"limit": "200"})
+    data = api_get(base_url, "/v1/chats", token, {
+        "limit": "200",
+        "accountIDs": "whatsapp",
+    })
     return [
         c for c in data.get("items", [])
         if is_whatsapp_group(c)
@@ -322,6 +333,7 @@ async def sync_loop(
     api_base: str,
     api_token: str,
     poll_interval: int = POLL_INTERVAL,
+    allowed_groups: set[str] | None = None,
     on_messages=None,
 ) -> None:
     """Main sync loop. Polls the Beeper Desktop API for new messages."""
@@ -332,7 +344,7 @@ async def sync_loop(
 
     check_token_health(api_base, api_token)
     logger.info("Discovering WhatsApp groups...")
-    groups = get_whatsapp_groups(api_base, api_token)
+    groups = get_whatsapp_groups(api_base, api_token, allowed_groups=allowed_groups)
     logger.info("Monitoring %d WhatsApp groups", len(groups))
     for g in groups:
         logger.info("  - %s", g["title"])

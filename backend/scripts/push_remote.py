@@ -15,6 +15,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,8 @@ def fetch_records(
     excluded_groups: set[str],
 ) -> list[dict[str, Any]]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    if not allowed_groups_normalized:
+        return []
     conn = get_connection()
     cur = conn.cursor()
     where_sql = "WHERE m.timestamp >= %s" if cutoff_ts is not None else ""
@@ -209,6 +212,8 @@ def fetch_sync_state(
     excluded_groups: set[str],
 ) -> dict[str, str]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    if not allowed_groups_normalized:
+        return {}
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -319,6 +324,8 @@ def fetch_raw_beeper_events(
     excluded_groups: set[str],
 ) -> list[dict[str, Any]]:
     allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    if not allowed_groups_normalized:
+        return []
     where_parts = ["m.id LIKE %s"]
     params: list[Any] = ["beeper-%"]
     if cutoff_ts is not None:
@@ -374,6 +381,8 @@ def fetch_message_embeddings(
     *,
     cutoff_ts: int | None = None,
 ) -> list[dict[str, Any]]:
+    if not allowed_groups:
+        return []
     pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip() or os.environ.get("VIBEZ_DATABASE_URL", "").strip()
     if not pg_url:
         return []
@@ -416,6 +425,8 @@ def fetch_link_embeddings(
     *,
     cutoff_ts: int | None = None,
 ) -> list[dict[str, Any]]:
+    if not allowed_groups:
+        return []
     pg_url = os.environ.get("VIBEZ_PGVECTOR_URL", "").strip() or os.environ.get("VIBEZ_DATABASE_URL", "").strip()
     if not pg_url:
         return []
@@ -519,22 +530,44 @@ def request_json(
     timeout: int = 120,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     data = json.dumps(to_jsonable(payload)).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Content-Type", "application/json")
-    for key, value in headers.items():
-        if value:
-            req.add_header(key, value)
+    max_attempts = max(1, int(os.environ.get("VIBEZ_REMOTE_PUSH_RETRIES", "4")))
+    retry_statuses = {408, 425, 429, 500, 502, 503, 504}
+    last_error: Exception | None = None
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            header_map = {k.lower(): v for k, v in resp.headers.items()}
-            if not raw:
-                return {}, header_map
-            return json.loads(raw), header_map
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{method} {url} failed ({exc.code}): {detail}") from exc
+    for attempt in range(1, max_attempts + 1):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        for key, value in headers.items():
+            if value:
+                req.add_header(key, value)
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                header_map = {k.lower(): v for k, v in resp.headers.items()}
+                if not raw:
+                    return {}, header_map
+                return json.loads(raw), header_map
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            last_error = RuntimeError(f"{method} {url} failed ({exc.code}): {detail}")
+            if exc.code not in retry_statuses or attempt >= max_attempts:
+                raise last_error from exc
+        except (TimeoutError, urllib.error.URLError) as exc:
+            last_error = RuntimeError(f"{method} {url} failed: {exc}")
+            if attempt >= max_attempts:
+                raise last_error from exc
+
+        sleep_seconds = min(60, 2 ** (attempt - 1) * 5)
+        print(
+            f"  transient remote error on {method} {url}; retrying in {sleep_seconds}s "
+            f"(attempt {attempt + 1}/{max_attempts})",
+            file=sys.stderr,
+            flush=True,
+        )
+        time.sleep(sleep_seconds)
+
+    raise last_error or RuntimeError(f"{method} {url} failed")
 
 
 def login_access_cookie(remote_url: str, access_code: str) -> str:
@@ -820,6 +853,13 @@ def main() -> int:
     cutoff_ts = resolve_cutoff_ts(args.lookback_days)
     allowed_groups = load_allowed_groups()
     excluded_groups = load_excluded_groups()
+    if not allowed_groups:
+        print(
+            "Missing VIBEZ_ALLOWED_GROUPS. Refusing to push WhatsApp data without an explicit AGI community allowlist.",
+            file=sys.stderr,
+        )
+        close_db_connection()
+        return 2
     if args.capture_only:
         events = fetch_raw_beeper_events(cutoff_ts, allowed_groups, excluded_groups)
         window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"

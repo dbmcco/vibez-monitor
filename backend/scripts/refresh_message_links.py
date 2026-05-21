@@ -36,10 +36,16 @@ def main() -> None:
     config = Config.from_env()
     db_path = Path(args.db) if args.db else config.db_path
     init_db(db_path)
+    allowed_groups = load_allowed_groups()
+    if not allowed_groups:
+        parser.error(
+            "VIBEZ_ALLOWED_GROUPS is required. Refusing to refresh links from "
+            "WhatsApp messages without an explicit AGI community allowlist."
+        )
 
     result = refresh_message_links(
         db_path=db_path,
-        allowed_groups=load_allowed_groups(),
+        allowed_groups=allowed_groups,
         full_rebuild=args.full_rebuild,
         batch_size=args.batch_size,
     )

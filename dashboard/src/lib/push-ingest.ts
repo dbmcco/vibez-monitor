@@ -666,7 +666,14 @@ export async function applyBeeperBatchPayload(
                 shared_by = COALESCE(links.shared_by, EXCLUDED.shared_by),
                 source_group = COALESCE(links.source_group, EXCLUDED.source_group),
                 first_seen = COALESCE(links.first_seen, EXCLUDED.first_seen),
-                last_seen = GREATEST(COALESCE(links.last_seen, ''), EXCLUDED.last_seen),
+                last_seen = CASE
+                  WHEN NULLIF(links.last_seen::text, '') IS NULL THEN EXCLUDED.last_seen
+                  WHEN NULLIF(EXCLUDED.last_seen::text, '') IS NULL THEN links.last_seen
+                  WHEN NULLIF(EXCLUDED.last_seen::text, '')::timestamptz
+                    >= NULLIF(links.last_seen::text, '')::timestamptz
+                  THEN EXCLUDED.last_seen
+                  ELSE links.last_seen
+                END,
                 mention_count = links.mention_count + 1
             `,
             [

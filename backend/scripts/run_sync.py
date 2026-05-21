@@ -137,6 +137,7 @@ async def main():
                         api_base=config.beeper_api_url,
                         api_token=config.beeper_api_token,
                         poll_interval=config.poll_interval,
+                        allowed_groups=allowed_groups,
                         on_messages=on_messages,
                     ),
                 )

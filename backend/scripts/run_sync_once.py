@@ -26,7 +26,7 @@ from vibez.beeper_sync import (  # noqa: E402
     save_cursor,
 )
 from vibez.config import Config  # noqa: E402
-from vibez.db import init_db  # noqa: E402
+from vibez.db import close_db_connection, init_db  # noqa: E402
 from vibez.google_groups_sync import (  # noqa: E402
     _save_active_groups as save_google_active_groups,
     _save_messages as save_google_messages,
@@ -155,7 +155,11 @@ async def main() -> None:
     if beeper_enabled:
         logger.info("Beeper one-shot sync: %s", config.beeper_api_url)
         check_token_health(config.beeper_api_url, config.beeper_api_token)
-        groups = get_whatsapp_groups(config.beeper_api_url, config.beeper_api_token)
+        groups = get_whatsapp_groups(
+            config.beeper_api_url,
+            config.beeper_api_token,
+            allowed_groups=allowed_groups,
+        )
         logger.info("Beeper groups in scope: %d", len(groups))
         save_beeper_active_groups(config.database_url, groups)
         initialize_beeper_cursors(config, groups)
@@ -230,4 +234,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        close_db_connection()

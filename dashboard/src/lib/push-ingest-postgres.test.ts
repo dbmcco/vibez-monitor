@@ -249,6 +249,11 @@ describe("Postgres push ingestion", () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO messages"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO links"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO raw_event_links"))).toBe(true);
+    const linkUpsertSql = queryMock.mock.calls
+      .map(([sql]) => String(sql))
+      .find((sql) => sql.includes("INSERT INTO links") && sql.includes("ON CONFLICT (url_hash)"));
+    expect(linkUpsertSql).toContain("NULLIF(links.last_seen::text, '')");
+    expect(linkUpsertSql).not.toContain("COALESCE(links.last_seen, '')");
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO source_watermarks"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("UPDATE ingest_batches"))).toBe(true);
   });

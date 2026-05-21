@@ -76,6 +76,7 @@ def main() -> int:
     indexed_links = 0
     if args.kind in {"messages", "both"}:
         indexed_messages = index_messages(
+            pg_url,
             table=table,
             dimensions=dimensions,
             lookback_days=lookback,
@@ -83,6 +84,7 @@ def main() -> int:
         )
     if args.kind in {"links", "both"}:
         indexed_links = index_links(
+            pg_url,
             table=link_table,
             dimensions=dimensions,
             lookback_days=lookback,
