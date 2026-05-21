@@ -6,6 +6,7 @@ const embedTextsMock = vi.fn();
 const getAtlasSnapshotMock = vi.fn();
 const generateAtlasEditorialReportMock = vi.fn();
 const writeAtlasArtifactMock = vi.fn();
+const readAtlasArtifactMock = vi.fn();
 const startAtlasPublishJobMock = vi.fn();
 const updateAtlasPublishStageMock = vi.fn();
 const upsertAtlasAssetMock = vi.fn();
@@ -31,6 +32,7 @@ vi.mock("./atlas-report", () => ({
 
 vi.mock("./atlas-artifact", () => ({
   writeAtlasArtifact: writeAtlasArtifactMock,
+  readAtlasArtifact: readAtlasArtifactMock,
   startAtlasPublishJob: startAtlasPublishJobMock,
   updateAtlasPublishStage: updateAtlasPublishStageMock,
   upsertAtlasAsset: upsertAtlasAssetMock,
@@ -48,6 +50,7 @@ describe("Railway admin enrichment", () => {
     getAtlasSnapshotMock.mockReset();
     generateAtlasEditorialReportMock.mockReset();
     writeAtlasArtifactMock.mockReset();
+    readAtlasArtifactMock.mockReset();
     startAtlasPublishJobMock.mockReset();
     updateAtlasPublishStageMock.mockReset();
     upsertAtlasAssetMock.mockReset();
@@ -244,6 +247,159 @@ describe("Railway admin enrichment", () => {
     expect(linkInsert?.[1]).not.toEqual(expect.arrayContaining(["hash-embedded"]));
   });
 
+  test("uses bounded candidate scans when filtering dedicated pgvector embeddings", async () => {
+    const messages = [
+      {
+        id: "m-embedded",
+        room_id: "room-1",
+        room_name: "Agent Harnesses",
+        sender_id: "member-1",
+        sender_name: "Dana",
+        body: "Already embedded message.",
+        timestamp: 1776120000000,
+      },
+      {
+        id: "m-missing",
+        room_id: "room-1",
+        room_name: "Agent Harnesses",
+        sender_id: "member-1",
+        sender_name: "Dana",
+        body: "Missing embedding message.",
+        timestamp: 1776120000001,
+      },
+    ];
+    const links = [
+      {
+        id: 21,
+        url: "https://example.com/embedded",
+        url_hash: "hash-embedded",
+        title: "Embedded",
+        category: "article",
+        relevance: "",
+        shared_by: "Dana",
+        source_group: "Agent Harnesses",
+        first_seen: "2026-05-18T10:00:00.000Z",
+        last_seen: "2026-05-18T11:00:00.000Z",
+        mention_count: 1,
+        value_score: 1,
+        report_date: "2026-05-18",
+        authored_by: "Dana",
+        pinned: 0,
+      },
+      {
+        id: 22,
+        url: "https://example.com/missing",
+        url_hash: "hash-missing",
+        title: "Missing",
+        category: "article",
+        relevance: "",
+        shared_by: "Dana",
+        source_group: "Agent Harnesses",
+        first_seen: "2026-05-18T10:00:00.000Z",
+        last_seen: "2026-05-18T11:00:00.000Z",
+        mention_count: 1,
+        value_score: 1,
+        report_date: "2026-05-18",
+        authored_by: "Dana",
+        pinned: 0,
+      },
+    ];
+
+    queryMock.mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("SELECT to_regclass")) {
+        return { rows: [{ table_name: "present" }], rowCount: 1 };
+      }
+      if (text.includes("SELECT message_id FROM vibez_message_embeddings")) {
+        return { rows: [{ message_id: "m-embedded" }], rowCount: 1 };
+      }
+      if (text.includes("SELECT url_hash FROM vibez_link_embeddings")) {
+        return { rows: [{ url_hash: "hash-embedded" }], rowCount: 1 };
+      }
+      if (text.includes("FROM messages m") && text.includes("c.relevance_score")) {
+        return { rows: messages, rowCount: messages.length };
+      }
+      if (text.includes("FROM links l")) {
+        return { rows: links, rowCount: links.length };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    embedTextsMock.mockResolvedValue({ vectors: [new Array<number>(64).fill(0.2)] });
+
+    const { refreshRailwayEnrichment } = await import("./admin-enrichment");
+    await refreshRailwayEnrichment({
+      classifyLimit: 0,
+      messageEmbeddingLimit: 1,
+      linkEmbeddingLimit: 1,
+      rebuildAtlas: false,
+    });
+
+    const messageSelection = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("FROM messages m") && String(sql).includes("c.relevance_score"),
+    );
+    const linkSelection = queryMock.mock.calls.find(([sql]) => String(sql).includes("FROM links l"));
+    const messageEmbeddingSelection = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("SELECT message_id FROM vibez_message_embeddings"),
+    );
+    const linkEmbeddingSelection = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("SELECT url_hash FROM vibez_link_embeddings"),
+    );
+
+    expect(String(messageSelection?.[0])).toContain("LIMIT $1 OFFSET $2");
+    expect(String(linkSelection?.[0])).toContain("LIMIT $1 OFFSET $2");
+    expect(String(messageEmbeddingSelection?.[0])).toMatch(/message_id = ANY\(\$1(?:::text\[\])?\)/);
+    expect(String(linkEmbeddingSelection?.[0])).toMatch(/url_hash = ANY\(\$1(?:::text\[\])?\)/);
+    expect(messageEmbeddingSelection?.[1]).toEqual([["m-embedded", "m-missing"]]);
+    expect(linkEmbeddingSelection?.[1]).toEqual([["hash-embedded", "hash-missing"]]);
+  });
+
+  test("stops scanning after bounded pages when recent candidates already have embeddings", async () => {
+    queryMock.mockImplementation(async (sql: unknown, params?: unknown[]) => {
+      const text = String(sql);
+      if (text.includes("SELECT to_regclass")) {
+        return { rows: [{ table_name: "present" }], rowCount: 1 };
+      }
+      if (text.includes("FROM messages m") && text.includes("c.relevance_score")) {
+        const page = queryMock.mock.calls
+          .filter(([query]) => String(query).includes("FROM messages m") && String(query).includes("c.relevance_score"))
+          .length;
+        const rows = Array.from({ length: 256 }, (_, index) => ({
+          id: `m-${page}-${index}`,
+          room_id: "room-1",
+          room_name: "Agent Harnesses",
+          sender_id: "member-1",
+          sender_name: "Dana",
+          body: "Already embedded message.",
+          timestamp: 1776120000000 - index,
+        }));
+        return { rows, rowCount: rows.length };
+      }
+      if (text.includes("SELECT message_id FROM vibez_message_embeddings")) {
+        const ids = Array.isArray(params?.[0]) ? params[0] as string[] : [];
+        return { rows: ids.map((message_id: string) => ({ message_id })), rowCount: ids.length };
+      }
+      if (text.includes("FROM links l")) {
+        return { rows: [], rowCount: 0 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    const { refreshRailwayEnrichment } = await import("./admin-enrichment");
+    const result = await refreshRailwayEnrichment({
+      classifyLimit: 0,
+      messageEmbeddingLimit: 1,
+      linkEmbeddingLimit: 0,
+      rebuildAtlas: false,
+    });
+
+    const messageSelections = queryMock.mock.calls.filter(([sql]) =>
+      String(sql).includes("FROM messages m") && String(sql).includes("c.relevance_score"),
+    );
+    expect(messageSelections).toHaveLength(8);
+    expect(result.message_embeddings_written).toBe(0);
+    expect(embedTextsMock).not.toHaveBeenCalled();
+  });
+
   test("records publish job stages around an Atlas rebuild", async () => {
     queryMock.mockImplementation(async (sql: unknown) => {
       const text = String(sql);
@@ -336,6 +492,67 @@ describe("Railway admin enrichment", () => {
         publish: "succeeded",
       },
       articles: 2,
+    });
+  });
+
+  test("refreshes images on the latest Atlas artifact without enrichment work", async () => {
+    const artifact = {
+      atlas: {
+        generated_at: "2026-05-19T10:00:00Z",
+        window: {
+          start: "2026-05-17T10:00:00Z",
+          end: "2026-05-19T10:00:00Z",
+          hours: 48,
+        },
+      },
+      editorial_report: {
+        issue: { date: "2026-05-19" },
+        articles: [
+          {
+            title: "Attack Surface",
+            section: "Agent Architecture",
+            image: { kind: "source", url: "https://example.com/source.jpg" },
+          },
+        ],
+        channel_reports: [],
+      },
+    };
+    readAtlasArtifactMock.mockResolvedValue(artifact);
+    writeAtlasArtifactMock.mockResolvedValue("/tmp/atlas-48.json");
+
+    const { refreshAtlasArticleImages } = await import("./admin-enrichment");
+    const result = await refreshAtlasArticleImages({ atlasHours: 48 });
+
+    expect(readAtlasArtifactMock).toHaveBeenCalledWith(48);
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: undefined,
+      stage: "generate_images",
+      status: "running",
+    });
+    expect(updateAtlasPublishStageMock).toHaveBeenCalledWith({
+      jobId: undefined,
+      stage: "publish",
+      status: "succeeded",
+    });
+    expect(writeAtlasArtifactMock).toHaveBeenCalledWith({
+      windowHours: 48,
+      atlas: artifact.atlas,
+      editorialReport: expect.objectContaining({
+        issue: { date: "2026-05-19" },
+      }),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      classifications_written: 0,
+      message_embeddings_written: 0,
+      link_embeddings_written: 0,
+      atlas: {
+        rebuilt: true,
+        edition_date: "2026-05-19",
+        edition_type: "daily",
+        window_hours: 48,
+        articles: 1,
+      },
     });
   });
 });

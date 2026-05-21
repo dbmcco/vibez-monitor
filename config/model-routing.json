@@ -78,8 +78,12 @@
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 8192,
       "temperature": 0.2,
-      "timeout_ms": 180000,
-      "context_window": 202752
+      "timeout_ms": 120000,
+      "context_window": 202800,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true,
+      "fallback_model": "openai/gpt-4.1",
+      "fallback_timeout_ms": 180000
     },
     "dashboard.atlas_deeper_dive": {
       "provider": "openrouter",

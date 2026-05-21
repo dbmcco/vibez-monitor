@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { embedTexts, generateImage, getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
+import { embedTexts, generateImage, generateJson, getRoute, loadRoutes, resolveProviderApiKey } from "./model-router";
 
 const ORIGINAL_ENV = process.env;
 
@@ -102,8 +102,20 @@ describe("model-router", () => {
         'api_key_env = "OPENROUTER_API_KEY"',
         "complete_timeout_seconds = 60",
         "",
+        "[credentials.vibez_atlascloud]",
+        'provider = "atlascloud"',
+        'source = "env"',
+        'env_var = "VIBEZ_ATLASCLOUD_API_KEY"',
+        "",
+        "[provider_surfaces.atlascloud_image]",
+        'provider = "atlascloud"',
+        'base_url = "https://api.atlascloud.ai/api/v1"',
+        'api_key_env = "ATLASCLOUD_API_KEY"',
+        "complete_timeout_seconds = 180",
+        "",
         '[service_credential_assignments."vibez-monitor"]',
         'openrouter = "vibez_openrouter"',
+        'atlascloud = "vibez_atlascloud"',
         "",
         '[model_routes."vibez.embedding_fast"]',
         'surface = "openrouter_embedding"',
@@ -112,6 +124,14 @@ describe("model-router", () => {
         'mode = "embedding"',
         'quality_tier = "embedding_fast"',
         "request_timeout_seconds = 45",
+        "",
+        '[model_routes."vibez.article_image"]',
+        'surface = "atlascloud_image"',
+        'provider = "atlascloud"',
+        'model = "google/nano-banana-pro/text-to-image"',
+        'mode = "image"',
+        'aspect_ratio = "16:9"',
+        "request_timeout_seconds = 240",
       ].join("\n"),
     );
     fs.writeFileSync(
@@ -122,6 +142,9 @@ describe("model-router", () => {
           "embedding.semantic": {
             registry_route: "vibez.embedding_fast",
             dimensions: 256,
+          },
+          "image.article": {
+            registry_route: "vibez.article_image",
           },
         },
       }),
@@ -141,6 +164,15 @@ describe("model-router", () => {
       api_key_env: "VIBEZ_OPENROUTER_API_KEY",
       timeout_ms: 45000,
       dimensions: 256,
+    });
+    expect(routes["image.article"]).toMatchObject({
+      provider: "atlascloud",
+      model: "google/nano-banana-pro/text-to-image",
+      mode: "image",
+      base_url: "https://api.atlascloud.ai/api/v1",
+      api_key_env: "VIBEZ_ATLASCLOUD_API_KEY",
+      timeout_ms: 240000,
+      aspect_ratio: "16:9",
     });
   });
 
@@ -204,6 +236,146 @@ describe("model-router", () => {
       encoding_format: "float",
     });
     expect(body).not.toHaveProperty("dimensions");
+  });
+
+  test("sends OpenRouter reasoning controls for JSON routes", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "dashboard.atlas_report": {
+            provider: "openrouter",
+            model: "z-ai/glm-5.1",
+            mode: "json",
+            base_url: "https://openrouter.ai/api/v1",
+            api_key_env: "VIBEZ_OPENROUTER_API_KEY",
+            max_tokens: 8192,
+            temperature: 0.2,
+            timeout_ms: 180000,
+            reasoning_effort: "none",
+            reasoning_exclude: true,
+            fallback_model: "openai/gpt-4.1",
+          },
+        },
+      }),
+    );
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_OPENROUTER_API_KEY: "test-openrouter-key",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "{\"ok\":true}" } }],
+          model: "z-ai/glm-5.1",
+          usage: { prompt_tokens: 3, completion_tokens: 4 },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateJson<{ ok: boolean }>({
+      taskId: "dashboard.atlas_report",
+      prompt: "Return {\"ok\":true}",
+      manifestPath,
+    });
+
+    expect(result.parsed).toEqual({ ok: true });
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toMatchObject({
+      model: "z-ai/glm-5.1",
+      response_format: { type: "json_object" },
+      reasoning: { effort: "none", exclude: true },
+    });
+  });
+
+  test("falls back when an OpenRouter JSON route returns empty content", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-router-"));
+    const manifestPath = path.join(dir, "model-routing.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          "dashboard.atlas_report": {
+            provider: "openrouter",
+            model: "z-ai/glm-5.1",
+            mode: "json",
+            base_url: "https://openrouter.ai/api/v1",
+            api_key_env: "VIBEZ_OPENROUTER_API_KEY",
+            max_tokens: 8192,
+            temperature: 0.2,
+            timeout_ms: 180000,
+            reasoning_effort: "none",
+            reasoning_exclude: true,
+            fallback_model: "openai/gpt-4.1",
+          },
+        },
+      }),
+    );
+    process.env = {
+      ...ORIGINAL_ENV,
+      VIBEZ_OPENROUTER_API_KEY: "test-openrouter-key",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "" } }],
+            model: "z-ai/glm-5.1",
+            usage: { prompt_tokens: 3, completion_tokens: 300 },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "{\"ok\":true}" } }],
+            model: "openai/gpt-4.1",
+            usage: { prompt_tokens: 3, completion_tokens: 4 },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateJson<{ ok: boolean }>({
+      taskId: "dashboard.atlas_report",
+      prompt: "Return {\"ok\":true}",
+      manifestPath,
+    });
+
+    expect(result).toMatchObject({
+      parsed: { ok: true },
+      model: "openai/gpt-4.1",
+    });
+    const primaryBody = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    const fallbackBody = JSON.parse(String(fetchMock.mock.calls[1][1].body));
+    expect(primaryBody).toMatchObject({
+      model: "z-ai/glm-5.1",
+      reasoning: { effort: "none", exclude: true },
+    });
+    expect(fallbackBody).toMatchObject({
+      model: "openai/gpt-4.1",
+      response_format: { type: "json_object" },
+    });
+    expect(fallbackBody).not.toHaveProperty("reasoning");
   });
 
   test("asks Ollama to truncate oversized embedding inputs at the model boundary", async () => {
@@ -322,10 +494,11 @@ describe("model-router", () => {
         routes: {
           "image.article": {
             provider: "atlascloud",
-            model: "qwen/qwen-image-2.0-pro/text-to-image",
+            model: "google/nano-banana-pro/text-to-image",
             mode: "image",
             base_url: "https://api.atlascloud.ai/api/v1",
             api_key_env: "VIBEZ_ATLASCLOUD_API_KEY",
+            aspect_ratio: "16:9",
             max_tokens: 0,
             temperature: 0,
             timeout_ms: 30000,
@@ -359,23 +532,24 @@ describe("model-router", () => {
 
     const result = await generateImage({
       taskId: "image.article",
-      prompt: "x".repeat(900),
+      prompt: "x".repeat(2200),
       manifestPath,
     });
 
     expect(result).toMatchObject({
       provider: "atlascloud",
-      model: "qwen/qwen-image-2.0-pro/text-to-image",
+      model: "google/nano-banana-pro/text-to-image",
       contentType: "image/png",
     });
     expect(result.data.toString("utf8")).toBe("atlas-png");
     expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.atlascloud.ai/api/v1/model/generateImage");
     const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
     expect(body).toMatchObject({
-      model: "qwen/qwen-image-2.0-pro/text-to-image",
+      model: "google/nano-banana-pro/text-to-image",
       seed: -1,
+      aspect_ratio: "16:9",
     });
-    expect(body.prompt.length).toBe(800);
+    expect(body.prompt.length).toBe(1800);
     expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.atlascloud.ai/api/v1/model/prediction/prediction-1");
     expect(String(fetchMock.mock.calls[3][0])).toBe("https://cdn.example.com/atlas.png");
   });

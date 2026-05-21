@@ -90,6 +90,7 @@ async function ensureAtlasPublishSchema(pool) {
       status TEXT NOT NULL,
       stage_status JSONB NOT NULL DEFAULT '{}'::jsonb,
       stage_errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+      request_options JSONB NOT NULL DEFAULT '{}'::jsonb,
       retry_count INTEGER NOT NULL DEFAULT 0,
       started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       completed_at TIMESTAMPTZ,
@@ -97,6 +98,9 @@ async function ensureAtlasPublishSchema(pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+  await pool.query(
+    "ALTER TABLE atlas_publish_jobs ADD COLUMN IF NOT EXISTS request_options JSONB NOT NULL DEFAULT '{}'::jsonb",
+  );
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_atlas_publish_jobs_edition ON atlas_publish_jobs (edition_date DESC, edition_type, window_hours)",
   );
@@ -129,7 +133,7 @@ async function ensureAtlasPublishSchema(pool) {
 
 async function nextQueuedJob(pool) {
   const result = await pool.query(
-    `SELECT id, window_hours
+    `SELECT id, window_hours, request_options
      FROM atlas_publish_jobs
      WHERE status = 'running'
        AND stage_status = '{}'::jsonb
@@ -140,7 +144,11 @@ async function nextQueuedJob(pool) {
 }
 
 async function runJob(job) {
+  const requestOptions = job.request_options && typeof job.request_options === "object"
+    ? job.request_options
+    : {};
   const body = {
+    ...requestOptions,
     rebuildAtlas: true,
     atlasHours: Number(job.window_hours) || 48,
     publishJobId: job.id,

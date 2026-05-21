@@ -8,6 +8,7 @@ const pushKey = process.env.VIBEZ_PUSH_API_KEY || "";
 const hours = Number.parseInt(process.argv[2] || process.env.VIBEZ_ATLAS_HOURS || "48", 10);
 const pollIntervalMs = Number.parseInt(process.env.VIBEZ_ENRICH_POLL_INTERVAL_MS || "5000", 10);
 const pollTimeoutMs = Number.parseInt(process.env.VIBEZ_ENRICH_POLL_TIMEOUT_MS || "2700000", 10);
+const requestRetries = Number.parseInt(process.env.VIBEZ_ENRICH_REQUEST_RETRIES || "4", 10);
 
 function readIntEnv(name) {
   const raw = process.env[name];
@@ -56,6 +57,32 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRetryableStatus(status) {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+}
+
+async function requestJsonWithRetry(url, options = {}, body) {
+  const attempts = Math.max(Number.isFinite(requestRetries) ? requestRetries : 4, 1);
+  let last = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const result = await requestJson(url, options, body);
+      if (!isRetryableStatus(result.status) || attempt >= attempts) {
+        return result;
+      }
+      last = result;
+    } catch (error) {
+      last = error;
+      if (attempt >= attempts) throw error;
+    }
+    const delayMs = Math.min(60_000, 5000 * 2 ** (attempt - 1));
+    console.error(`Transient request failure for ${url}; retrying in ${delayMs}ms (${attempt + 1}/${attempts})`);
+    await sleep(delayMs);
+  }
+  if (last instanceof Error) throw last;
+  return last;
+}
+
 if (!pushKey.trim()) {
   console.error("VIBEZ_PUSH_API_KEY is required for Railway enrichment.");
   process.exit(1);
@@ -63,7 +90,7 @@ if (!pushKey.trim()) {
 
 let cookie = "";
 if (accessCode.trim()) {
-  const auth = await requestJson(`${baseUrl}/api/access`, { method: "POST" }, { code: accessCode });
+  const auth = await requestJsonWithRetry(`${baseUrl}/api/access`, { method: "POST" }, { code: accessCode });
   cookie = auth.headers["set-cookie"]?.map((value) => value.split(";")[0]).join("; ") || "";
 }
 
@@ -85,7 +112,7 @@ const headers = {
   "x-vibez-push-key": pushKey,
   ...(cookie ? { cookie } : {}),
 };
-const result = await requestJson(
+const result = await requestJsonWithRetry(
   `${baseUrl}/api/admin/enrich`,
   { method: "POST", headers },
   payload,
@@ -107,7 +134,7 @@ if (result.json?.mode === "async") {
   let latest = result.json.job;
   while (Date.now() - startedAt < pollTimeoutMs) {
     await sleep(Math.max(pollIntervalMs, 1000));
-    const status = await requestJson(
+    const status = await requestJsonWithRetry(
       `${baseUrl}/api/admin/enrich?jobId=${encodeURIComponent(jobId)}`,
       { method: "GET", headers },
     );

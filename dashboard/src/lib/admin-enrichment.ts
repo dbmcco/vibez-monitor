@@ -4,6 +4,7 @@ import { attachGeneratedArticleImages, summarizeAtlasImageGeneration } from "./a
 import { generateAtlasEditorialReport } from "./atlas-report";
 import {
   editionTypeForWindow,
+  readAtlasArtifact,
   startAtlasPublishJob,
   updateAtlasPublishStage,
   writeAtlasArtifact,
@@ -23,6 +24,8 @@ import {
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 const EMBEDDING_BATCH_SIZE = 64;
+const CANDIDATE_SCAN_PAGE_SIZE = 256;
+const CANDIDATE_SCAN_MAX_PAGES = 8;
 
 interface MissingMessageRow {
   id: string;
@@ -77,6 +80,11 @@ export interface RailwayEnrichmentOptions {
   atlasHours?: number;
   publishJobId?: string;
   prestartedPublishJob?: boolean;
+}
+
+export interface AtlasImageRefreshOptions {
+  atlasHours?: number;
+  publishJobId?: string;
 }
 
 export interface RailwayEnrichmentResult {
@@ -147,21 +155,29 @@ async function tableExists(pool: Pool, name: string): Promise<boolean> {
   return Boolean(result.rows[0]?.table_name);
 }
 
-async function embeddedMessageIdSet(): Promise<Set<string> | null> {
+async function embeddedMessageIdSetFor(messageIds: string[]): Promise<Set<string> | null> {
+  if (messageIds.length === 0) return new Set();
   const pool = getPgvectorPool();
   if (!pool) return null;
   const embeddingTable = tableName("VIBEZ_PGVECTOR_TABLE", "vibez_message_embeddings");
   if (!await tableExists(pool, embeddingTable)) return null;
-  const result = await pool.query(`SELECT message_id FROM ${embeddingTable}`);
+  const result = await pool.query(
+    `SELECT message_id FROM ${embeddingTable} WHERE message_id = ANY($1::text[])`,
+    [messageIds],
+  );
   return new Set(result.rows.map((row: { message_id: string }) => String(row.message_id)));
 }
 
-async function embeddedLinkHashSet(): Promise<Set<string> | null> {
+async function embeddedLinkHashSetFor(urlHashes: string[]): Promise<Set<string> | null> {
+  if (urlHashes.length === 0) return new Set();
   const pool = getPgvectorPool();
   if (!pool) return null;
   const embeddingTable = tableName("VIBEZ_PGVECTOR_LINK_TABLE", "vibez_link_embeddings");
   if (!await tableExists(pool, embeddingTable)) return null;
-  const result = await pool.query(`SELECT url_hash FROM ${embeddingTable}`);
+  const result = await pool.query(
+    `SELECT url_hash FROM ${embeddingTable} WHERE url_hash = ANY($1::text[])`,
+    [urlHashes],
+  );
   return new Set(result.rows.map((row: { url_hash: string }) => String(row.url_hash)));
 }
 
@@ -190,21 +206,31 @@ async function selectMissingMessageEmbeddings(
   limit: number,
 ): Promise<MissingMessageRow[]> {
   if (limit <= 0) return [];
-  const embeddedIds = await embeddedMessageIdSet();
-  const result = await pool.query(
-    `
-      SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body, m.timestamp,
-             c.relevance_score, c.topics, c.entities, c.contribution_flag,
-             c.contribution_themes, c.contribution_hint, c.alert_level
-      FROM messages m
-      LEFT JOIN classifications c ON c.message_id = m.id
-      WHERE length(trim(m.body)) > 0
-      ORDER BY m.timestamp DESC
-    `,
-  );
-  const rows = result.rows as MissingMessageRow[];
-  if (!embeddedIds) return rows.slice(0, limit);
-  return rows.filter((row) => !embeddedIds.has(String(row.id))).slice(0, limit);
+  const missing: MissingMessageRow[] = [];
+  const pageSize = Math.max(CANDIDATE_SCAN_PAGE_SIZE, limit);
+  for (let page = 0; missing.length < limit && page < CANDIDATE_SCAN_MAX_PAGES; page += 1) {
+    const offset = page * pageSize;
+    const result = await pool.query(
+      `
+        SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body, m.timestamp,
+               c.relevance_score, c.topics, c.entities, c.contribution_flag,
+               c.contribution_themes, c.contribution_hint, c.alert_level
+        FROM messages m
+        LEFT JOIN classifications c ON c.message_id = m.id
+        WHERE length(trim(m.body)) > 0
+        ORDER BY m.timestamp DESC
+        LIMIT $1 OFFSET $2
+      `,
+      [pageSize, offset],
+    );
+    const rows = result.rows as MissingMessageRow[];
+    if (rows.length === 0) break;
+    const embeddedIds = await embeddedMessageIdSetFor(rows.map((row) => String(row.id)));
+    if (!embeddedIds) return rows.slice(0, limit);
+    missing.push(...rows.filter((row) => !embeddedIds.has(String(row.id))));
+    if (rows.length < pageSize) break;
+  }
+  return missing.slice(0, limit);
 }
 
 async function selectMissingLinkEmbeddings(
@@ -212,21 +238,31 @@ async function selectMissingLinkEmbeddings(
   limit: number,
 ): Promise<MissingLinkRow[]> {
   if (limit <= 0) return [];
-  const embeddedHashes = await embeddedLinkHashSet();
-  const result = await pool.query(
-    `
-      SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, l.shared_by,
-             l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
-             l.report_date, l.authored_by, l.pinned
-      FROM links l
-      WHERE l.url IS NOT NULL
-        AND l.url_hash IS NOT NULL
-      ORDER BY coalesce(l.last_seen, l.first_seen, l.report_date::timestamptz) DESC NULLS LAST, l.id DESC
-    `,
-  );
-  const rows = result.rows as MissingLinkRow[];
-  if (!embeddedHashes) return rows.slice(0, limit);
-  return rows.filter((row) => !embeddedHashes.has(String(row.url_hash))).slice(0, limit);
+  const missing: MissingLinkRow[] = [];
+  const pageSize = Math.max(CANDIDATE_SCAN_PAGE_SIZE, limit);
+  for (let page = 0; missing.length < limit && page < CANDIDATE_SCAN_MAX_PAGES; page += 1) {
+    const offset = page * pageSize;
+    const result = await pool.query(
+      `
+        SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, l.shared_by,
+               l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
+               l.report_date, l.authored_by, l.pinned
+        FROM links l
+        WHERE l.url IS NOT NULL
+          AND l.url_hash IS NOT NULL
+        ORDER BY coalesce(l.last_seen, l.first_seen, l.report_date::timestamptz) DESC NULLS LAST, l.id DESC
+        LIMIT $1 OFFSET $2
+      `,
+      [pageSize, offset],
+    );
+    const rows = result.rows as MissingLinkRow[];
+    if (rows.length === 0) break;
+    const embeddedHashes = await embeddedLinkHashSetFor(rows.map((row) => String(row.url_hash)));
+    if (!embeddedHashes) return rows.slice(0, limit);
+    missing.push(...rows.filter((row) => !embeddedHashes.has(String(row.url_hash))));
+    if (rows.length < pageSize) break;
+  }
+  return missing.slice(0, limit);
 }
 
 function classificationPrompt(message: MissingMessageRow): string {
@@ -505,6 +541,95 @@ async function rebuildAtlas(
     stage_summary: stageSummary,
     articles: editorialReport.articles.length,
     sections: editorialReport.articles.map((article) => article.section),
+  };
+}
+
+export async function refreshAtlasArticleImages(
+  options: AtlasImageRefreshOptions = {},
+): Promise<RailwayEnrichmentResult> {
+  const atlasHours = clampInt(options.atlasHours, 48, 6, 168);
+  const artifact = await readAtlasArtifact(atlasHours);
+  if (!artifact) {
+    throw new Error("Atlas editorial artifact unavailable.");
+  }
+
+  const publishJobId = options.publishJobId;
+  let editorialReport = artifact.editorial_report;
+  const stageSummary: Record<string, string> = {};
+  try {
+    await updateAtlasPublishStage({
+      jobId: publishJobId,
+      stage: "generate_images",
+      status: "running",
+    });
+    editorialReport = await attachGeneratedArticleImages({
+      report: editorialReport,
+      windowHours: atlasHours,
+      publishJobId,
+    });
+    const imageSummary = summarizeAtlasImageGeneration(editorialReport);
+    const imageStage = imageSummary.ready > 0 ? "succeeded" : "skipped";
+    stageSummary.generate_images = imageStage;
+    await updateAtlasPublishStage({
+      jobId: publishJobId,
+      stage: "generate_images",
+      status: imageStage,
+    });
+  } catch (error) {
+    await updateAtlasPublishStage({
+      jobId: publishJobId,
+      stage: "generate_images",
+      status: "failed",
+      error: errorMessage(error),
+    });
+    throw error;
+  }
+
+  let artifactPath = "";
+  try {
+    await updateAtlasPublishStage({
+      jobId: publishJobId,
+      stage: "publish",
+      status: "running",
+    });
+    artifactPath = await writeAtlasArtifact({
+      windowHours: atlasHours,
+      atlas: artifact.atlas,
+      editorialReport,
+    });
+    stageSummary.publish = "succeeded";
+    await updateAtlasPublishStage({
+      jobId: publishJobId,
+      stage: "publish",
+      status: "succeeded",
+    });
+  } catch (error) {
+    await updateAtlasPublishStage({
+      jobId: publishJobId,
+      stage: "publish",
+      status: "failed",
+      error: errorMessage(error),
+    });
+    throw error;
+  }
+
+  return {
+    ok: true,
+    classifications_written: 0,
+    message_embeddings_written: 0,
+    link_embeddings_written: 0,
+    atlas: {
+      rebuilt: true,
+      artifact_path: artifactPath,
+      publish_job_id: publishJobId,
+      edition_date: editorialReport.issue.date,
+      edition_type: editionTypeForWindow(atlasHours),
+      window_hours: atlasHours,
+      published_at: new Date().toISOString(),
+      stage_summary: stageSummary,
+      articles: editorialReport.articles.length,
+      sections: editorialReport.articles.map((article) => article.section),
+    },
   };
 }
 

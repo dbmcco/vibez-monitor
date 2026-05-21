@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import sharp from "sharp";
 
 import {
   editionTypeForWindow,
@@ -17,6 +18,9 @@ import type {
 } from "./atlas-report";
 
 const execFileAsync = promisify(execFile);
+const ARTICLE_IMAGE_WIDTH = 1440;
+const ARTICLE_IMAGE_HEIGHT = 810;
+const ARTICLE_IMAGE_WEBP_QUALITY = 80;
 
 export type AtlasImageRunner = (input: {
   prompt: string;
@@ -64,25 +68,76 @@ function textList(value: unknown): string[] {
   return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
+function clipText(value: unknown, maxChars: number): string {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function sanitizeSceneBrief(value: string): string {
+  return value
+    .replace(/\bGitHub\b/gi, "an unlabeled code-hosting service")
+    .replace(/\boctocat\b/gi, "a plain peeled patch")
+    .replace(/\bstickers?\b/gi, "plain tape marks")
+    .replace(/\bsticky notes?\b/gi, "unlabeled paper slips")
+    .replace(/\bticker boards?\b/gi, "abstract market display panels")
+    .replace(/\bcharts?\b/gi, "unlabeled visual indicators")
+    .replace(/\bscreens?\b/gi, "dark glass panels")
+    .replace(/\blogos?\b|\bbrand marks?\b/gi, "unlabeled marks")
+    .replace(/\breadable text\b|\btypography\b|\bcaptions?\b|\blabels?\b|\bsigns?\b/gi, "unreadable detail");
+}
+
 function imagePromptFor(article: AtlasEditorialArticle, imagePrompt?: string): string {
   const channels = textList(article.channels);
   const evidenceRefs = textList(article.evidence_refs);
   const body = textList(article.body);
+  const storyFacts = clipText(body.slice(0, 2).join(" "), 650);
+  const sceneBrief = clipText(
+    sanitizeSceneBrief(imagePrompt || `Documentary editorial photograph for ${article.title}`),
+    420,
+  );
   return [
-    imagePrompt || `NYTimes-style documentary editorial photograph for ${article.title}`,
-    "Make it look like a real newspaper photo: restrained, specific, observational, and human.",
-    "Use dry, clever, nerdy humor only as a subtle visual twist, never as cartoon text or a fake UI.",
-    "Avoid screenshots, typography, logos, charts, and obvious AI-gloss. No readable text in the image.",
-    "",
-    `Article: ${article.title}`,
-    `Section: ${article.section}`,
-    `Dek: ${article.dek}`,
-    `Channels: ${channels.join(", ")}`,
-    `Citations: ${evidenceRefs.join(", ")}`,
-    "",
-    "Article body:",
-    body.join("\n\n"),
+    "Article-specific photo assignment:",
+    "Use ONLY this article. Do not borrow context, characters, or metaphors from any other article.",
+    `Title: ${clipText(article.title, 160)}`,
+    `Section: ${clipText(article.section, 80)}`,
+    `Dek: ${clipText(article.dek, 220)}`,
+    "Hard bans: no readable text, logos, brand marks, stickers, mascots, icons, emoji, UI screenshots, or charts. If the scene brief mentions one, treat it as a concept and replace it with an unlabeled real-world equivalent.",
+    `Scene brief: ${sceneBrief}`,
+    `Story facts to depict: ${storyFacts}`,
+    `Channels/citations: ${clipText(`${channels.join(", ")} ${evidenceRefs.join(", ")}`.trim(), 220)}`,
+    "Meaning requirement: the scene must clearly relate to this article's concrete facts, tensions, and named concepts. Do not make a generic tech or business stock photo.",
+    "Humor requirement: add snarky nerd humor only through plausible real-world object arrangement, scale, juxtaposition, or human body language. The joke should reward someone who read the article.",
+    "Create a New York Times-style, single photorealistic documentary editorial photograph.",
+    "Make it restrained, specific, observational, human, and plausible as a real newspaper photo.",
+    "If the scene brief mentions a readable screen, book, sign, label, or chart, replace it with an unlabeled real-world equivalent.",
+    "Avoid screenshots, typography, logos, charts, synthetic glow, glossy AI art, and product mockups. No readable text in the image.",
+    "No stickers, icons, emoji, doodles, mascots, or symbols. Avoid books, sticky notes, labels, signs, screens, or packaging with legible writing.",
   ].join("\n").trim();
+}
+
+async function optimizeArticleImage(data: Buffer): Promise<{
+  data: Buffer;
+  contentType: string;
+}> {
+  const optimized = await sharp(data, { animated: false })
+    .rotate()
+    .resize({
+      width: ARTICLE_IMAGE_WIDTH,
+      height: ARTICLE_IMAGE_HEIGHT,
+      fit: "cover",
+      position: "center",
+    })
+    .webp({
+      quality: ARTICLE_IMAGE_WEBP_QUALITY,
+      effort: 5,
+      smartSubsample: true,
+    })
+    .toBuffer();
+  return {
+    data: optimized,
+    contentType: "image/webp",
+  };
 }
 
 async function commandImageRunner(input: Parameters<AtlasImageRunner>[0]) {
@@ -147,6 +202,7 @@ export async function attachGeneratedArticleImages(
 ): Promise<AtlasEditorialReport> {
   const editionType = editionTypeForWindow(windowHours);
   const editionDate = report.issue.date;
+  const generationId = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
   const articles = [];
 
   for (const article of report.articles) {
@@ -160,7 +216,7 @@ export async function attachGeneratedArticleImages(
     }
 
     const articleSlug = safePathSegment(article.slug || article.title);
-    const assetKey = `${editionDate}/${editionType}/${articleSlug}.png`;
+    const assetKey = `${editionDate}/${editionType}/${articleSlug}-${generationId}.webp`;
     const publicPath = `/api/atlas/image/${assetKey}`;
     const prompt = imagePromptFor(article, currentImage.prompt);
     const baseAsset = {
@@ -203,14 +259,15 @@ export async function attachGeneratedArticleImages(
         channels: textList(article.channels),
       });
       if (generated?.data?.length) {
+        const optimized = await optimizeArticleImage(generated.data);
         status = "ready";
         url = publicPath;
-        writeAtlasGeneratedAsset(assetKey, generated.data);
+        writeAtlasGeneratedAsset(assetKey, optimized.data);
         await upsertAtlasAsset({
           ...baseAsset,
           status,
-          assetBytes: generated.data,
-          contentType: generated.contentType,
+          assetBytes: optimized.data,
+          contentType: optimized.contentType,
           provider: generated.provider || null,
           model: generated.model || null,
         });

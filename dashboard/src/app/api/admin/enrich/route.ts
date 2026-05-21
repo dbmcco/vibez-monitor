@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { refreshRailwayEnrichment } from "@/lib/admin-enrichment";
+import { refreshAtlasArticleImages, refreshRailwayEnrichment } from "@/lib/admin-enrichment";
 import {
   editionTypeForWindow,
   getAtlasPublishJob,
@@ -107,6 +107,14 @@ export async function POST(request: NextRequest) {
   };
 
   try {
+    if (body.refreshAtlasImagesOnly === true) {
+      const result = await refreshAtlasArticleImages({
+        atlasHours,
+        publishJobId: typeof body.publishJobId === "string" ? body.publishJobId : undefined,
+      });
+      return NextResponse.json(result);
+    }
+
     if (body.async === true) {
       if (rebuildAtlas === false) {
         return NextResponse.json(
@@ -118,6 +126,7 @@ export async function POST(request: NextRequest) {
         editionDate: new Date().toISOString().slice(0, 10),
         editionType: editionTypeForWindow(atlasHours),
         windowHours: atlasHours,
+        requestOptions: options,
       });
       if (!job) {
         return NextResponse.json(

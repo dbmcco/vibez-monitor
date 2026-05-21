@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const refreshRailwayEnrichmentMock = vi.fn();
+const refreshAtlasArticleImagesMock = vi.fn();
 const startAtlasPublishJobMock = vi.fn();
 const getAtlasPublishJobMock = vi.fn();
 
 vi.mock("@/lib/admin-enrichment", () => ({
+  refreshAtlasArticleImages: refreshAtlasArticleImagesMock,
   refreshRailwayEnrichment: refreshRailwayEnrichmentMock,
 }));
 
@@ -20,6 +22,7 @@ describe("POST /api/admin/enrich", () => {
     vi.resetModules();
     vi.stubEnv("VIBEZ_PUSH_API_KEY", "push-secret");
     refreshRailwayEnrichmentMock.mockReset();
+    refreshAtlasArticleImagesMock.mockReset();
     startAtlasPublishJobMock.mockReset();
     getAtlasPublishJobMock.mockReset();
     refreshRailwayEnrichmentMock.mockResolvedValue({
@@ -28,6 +31,13 @@ describe("POST /api/admin/enrich", () => {
       message_embeddings_written: 3,
       link_embeddings_written: 1,
       atlas: { rebuilt: true, articles: 3 },
+    });
+    refreshAtlasArticleImagesMock.mockResolvedValue({
+      ok: true,
+      classifications_written: 0,
+      message_embeddings_written: 0,
+      link_embeddings_written: 0,
+      atlas: { rebuilt: true, articles: 5, stage_summary: { generate_images: "succeeded" } },
     });
     startAtlasPublishJobMock.mockResolvedValue({
       id: "atlas-job-1",
@@ -105,6 +115,15 @@ describe("POST /api/admin/enrich", () => {
       editionDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       editionType: "daily",
       windowHours: 48,
+      requestOptions: {
+        classifyLimit: 0,
+        messageEmbeddingLimit: 0,
+        linkEmbeddingLimit: 0,
+        rebuildAtlas: undefined,
+        atlasHours: 48,
+        publishJobId: undefined,
+        prestartedPublishJob: false,
+      },
     });
     expect(body).toEqual({
       ok: true,
@@ -130,17 +149,57 @@ describe("POST /api/admin/enrich", () => {
     });
   });
 
+  test("refreshes Atlas article images without rerunning enrichment", async () => {
+    const { POST } = await import("./route");
+    const response = await POST(new NextRequest("http://test.local/api/admin/enrich", {
+      method: "POST",
+      headers: { "x-vibez-push-key": "push-secret" },
+      body: JSON.stringify({
+        refreshAtlasImagesOnly: true,
+        atlasHours: 48,
+      }),
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(refreshAtlasArticleImagesMock).toHaveBeenCalledWith({
+      atlasHours: 48,
+      publishJobId: undefined,
+    });
+    expect(refreshRailwayEnrichmentMock).not.toHaveBeenCalled();
+    expect(body.atlas).toEqual({
+      rebuilt: true,
+      articles: 5,
+      stage_summary: { generate_images: "succeeded" },
+    });
+  });
+
   test("queues async Atlas enrichment for the Railway worker when enabled", async () => {
     vi.stubEnv("VIBEZ_ENRICH_WORKER_ENABLED", "1");
     const { POST } = await import("./route");
     const response = await POST(new NextRequest("http://test.local/api/admin/enrich", {
       method: "POST",
       headers: { "x-vibez-push-key": "push-secret" },
-      body: JSON.stringify({ async: true, atlasHours: 48 }),
+      body: JSON.stringify({
+        async: true,
+        atlasHours: 48,
+        classifyLimit: 0,
+        messageEmbeddingLimit: 0,
+        linkEmbeddingLimit: 0,
+      }),
     }));
 
     expect(response.status).toBe(200);
-    expect(startAtlasPublishJobMock).toHaveBeenCalledOnce();
+    expect(startAtlasPublishJobMock).toHaveBeenCalledWith({
+      editionDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      editionType: "daily",
+      windowHours: 48,
+      requestOptions: expect.objectContaining({
+        classifyLimit: 0,
+        messageEmbeddingLimit: 0,
+        linkEmbeddingLimit: 0,
+      }),
+    });
     expect(refreshRailwayEnrichmentMock).not.toHaveBeenCalled();
   });
 

@@ -117,12 +117,17 @@ describe("listAtlasEditions", () => {
       windowHours: 48,
       sourceWindowStart: "2026-05-17T10:00:00Z",
       sourceWindowEnd: "2026-05-19T10:00:00Z",
+      requestOptions: { classifyLimit: 0, messageEmbeddingLimit: 0 },
     });
 
     expect(job?.id).toBe("job-2026-05-19");
+    expect(job?.request_options).toEqual({ classifyLimit: 0, messageEmbeddingLimit: 0 });
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS atlas_publish_jobs"))).toBe(true);
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("ADD COLUMN IF NOT EXISTS request_options"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("CREATE TABLE IF NOT EXISTS atlas_assets"))).toBe(true);
-    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO atlas_publish_jobs"))).toBe(true);
+    const insertCall = queryMock.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO atlas_publish_jobs"));
+    expect(insertCall).toBeTruthy();
+    expect(insertCall?.[1]).toContain(JSON.stringify({ classifyLimit: 0, messageEmbeddingLimit: 0 }));
   });
 
   test("records publish stage status and errors as durable job state", async () => {
@@ -151,6 +156,7 @@ describe("listAtlasEditions", () => {
 
   test("stores and reads durable Atlas image assets by key", async () => {
     queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })

@@ -15,6 +15,15 @@ export interface ModelRoute {
   api_key_env?: string;
   dimensions?: number;
   context_window?: number;
+  aspect_ratio?: string;
+  negative_prompt?: string;
+  num_images?: number;
+  reasoning_effort?: "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
+  reasoning_exclude?: boolean;
+  reasoning_enabled?: boolean;
+  reasoning_max_tokens?: number;
+  fallback_model?: string;
+  fallback_timeout_ms?: number;
 }
 
 type ModelRouteManifestEntry =
@@ -153,6 +162,19 @@ function routeModeFromRegistry(
   return value === "text" || value === "json" || value === "embedding" || value === "image" ? value : undefined;
 }
 
+function reasoningEffortFromRegistry(
+  value: string | number | boolean | undefined,
+): ModelRoute["reasoning_effort"] | undefined {
+  return value === "xhigh" ||
+    value === "high" ||
+    value === "medium" ||
+    value === "low" ||
+    value === "minimal" ||
+    value === "none"
+    ? value
+    : undefined;
+}
+
 function resolveRegistryCredentialEnv({
   provider,
   surface,
@@ -194,6 +216,15 @@ function resolveRegistryRoute(registryRouteId: string): Partial<ModelRoute> {
     base_url: stringFromRegistry(surface?.base_url),
     api_key_env: provider ? resolveRegistryCredentialEnv({ provider, surface, registry }) : undefined,
     context_window: numberFromRegistry(route.context_window),
+    aspect_ratio: stringFromRegistry(route.aspect_ratio),
+    negative_prompt: stringFromRegistry(route.negative_prompt),
+    num_images: numberFromRegistry(route.num_images),
+    reasoning_effort: reasoningEffortFromRegistry(route.reasoning_effort),
+    reasoning_exclude: typeof route.reasoning_exclude === "boolean" ? route.reasoning_exclude : undefined,
+    reasoning_enabled: typeof route.reasoning_enabled === "boolean" ? route.reasoning_enabled : undefined,
+    reasoning_max_tokens: numberFromRegistry(route.reasoning_max_tokens),
+    fallback_model: stringFromRegistry(route.fallback_model),
+    fallback_timeout_ms: numberFromRegistry(route.fallback_timeout_ms),
   };
 }
 
@@ -218,6 +249,15 @@ function finalizeRoute(routeId: string, entry: ModelRouteManifestEntry): ModelRo
     api_key_env: merged.api_key_env,
     dimensions: merged.dimensions,
     context_window: merged.context_window,
+    aspect_ratio: merged.aspect_ratio,
+    negative_prompt: merged.negative_prompt,
+    num_images: merged.num_images,
+    reasoning_effort: merged.reasoning_effort,
+    reasoning_exclude: merged.reasoning_exclude,
+    reasoning_enabled: merged.reasoning_enabled,
+    reasoning_max_tokens: merged.reasoning_max_tokens,
+    fallback_model: merged.fallback_model,
+    fallback_timeout_ms: merged.fallback_timeout_ms,
   };
 }
 
@@ -426,27 +466,95 @@ async function runOpenRouterRoute(
   route: ModelRoute,
   payload: ModelMessage[],
 ): Promise<ModelTextResult> {
+  try {
+    return await runSingleOpenRouterRoute(route, payload);
+  } catch (error) {
+    if (!route.fallback_model) throw error;
+    return runSingleOpenRouterRoute({
+      ...route,
+      model: route.fallback_model,
+      timeout_ms: route.fallback_timeout_ms ?? route.timeout_ms,
+      fallback_model: undefined,
+      fallback_timeout_ms: undefined,
+      reasoning_effort: undefined,
+      reasoning_exclude: undefined,
+      reasoning_enabled: undefined,
+      reasoning_max_tokens: undefined,
+    }, payload);
+  }
+}
+
+async function runSingleOpenRouterRoute(
+  route: ModelRoute,
+  payload: ModelMessage[],
+): Promise<ModelTextResult> {
   if (!route.base_url) {
     throw new Error("openrouter base_url not configured");
   }
-  const client = new OpenAI({
-    apiKey: resolveRouteApiKey(route),
-    baseURL: route.base_url,
-    timeout: route.timeout_ms,
-  });
-  const response = await client.chat.completions.create({
+  const reasoning = buildOpenRouterReasoning(route);
+  const requestBody = {
     model: route.model,
     messages: payload,
     max_tokens: route.max_tokens,
     temperature: route.temperature,
     response_format: route.mode === "json" ? { type: "json_object" } : undefined,
-  });
+    ...(reasoning ? { reasoning } : {}),
+  };
+  let response: Response;
+  try {
+    response = await fetch(`${route.base_url.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${resolveRouteApiKey(route)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(route.timeout_ms),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "request timed out";
+    throw new Error(`openrouter request failed for ${route.model}: ${message}`);
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`openrouter request failed for ${route.model}: ${response.status} ${body.slice(0, 500)}`);
+  }
+  const json = await response.json() as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+    };
+  };
+  const text = json.choices?.[0]?.message?.content || "";
+  if (!text.trim()) {
+    throw new Error(`openrouter model returned empty content: ${route.model}`);
+  }
   return {
-    text: response.choices[0]?.message?.content || "",
+    text,
     model: route.model,
     provider: route.provider,
-    usage: usageFromOpenAIChat(response),
+    usage: usageFromOpenAIChat(json),
   };
+}
+
+function buildOpenRouterReasoning(route: ModelRoute):
+  | {
+      effort?: NonNullable<ModelRoute["reasoning_effort"]>;
+      exclude?: boolean;
+      enabled?: boolean;
+      max_tokens?: number;
+    }
+  | undefined {
+  const reasoning = {
+    effort: route.reasoning_effort,
+    exclude: route.reasoning_exclude,
+    enabled: route.reasoning_enabled,
+    max_tokens: route.reasoning_max_tokens,
+  };
+  return Object.values(reasoning).some((value) => value !== undefined) ? reasoning : undefined;
 }
 
 async function runOpenAIEmbeddingRoute(
@@ -557,7 +665,23 @@ function atlasCloudBaseUrl(route: ModelRoute): string {
 }
 
 function atlasCloudImagePrompt(prompt: string): string {
-  return prompt.slice(0, 800);
+  const configured = Number.parseInt(process.env.VIBEZ_ATLASCLOUD_IMAGE_PROMPT_CHARS || "", 10);
+  const maxChars = Number.isFinite(configured)
+    ? Math.min(Math.max(configured, 800), 4000)
+    : 1800;
+  return prompt.slice(0, maxChars);
+}
+
+function atlasCloudImagePayload(route: ModelRoute, prompt: string): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    model: route.model,
+    prompt: atlasCloudImagePrompt(prompt),
+    seed: -1,
+  };
+  if (route.aspect_ratio) payload.aspect_ratio = route.aspect_ratio;
+  if (route.negative_prompt) payload.negative_prompt = route.negative_prompt;
+  if (route.num_images && route.num_images > 0) payload.num_images = Math.trunc(route.num_images);
+  return payload;
 }
 
 function atlasCloudPollIntervalMs(): number {
@@ -602,11 +726,7 @@ async function runAtlasCloudImageRoute(
       "user-agent": ATLASCLOUD_USER_AGENT,
     },
     signal: AbortSignal.timeout(route.timeout_ms),
-    body: JSON.stringify({
-      model: route.model,
-      prompt: atlasCloudImagePrompt(prompt),
-      seed: -1,
-    }),
+    body: JSON.stringify(atlasCloudImagePayload(route, prompt)),
   });
   const submitPayload = await readAtlasCloudJson(submit);
   if (!submit.ok) {

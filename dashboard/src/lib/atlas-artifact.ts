@@ -48,6 +48,7 @@ export interface AtlasPublishJob {
   edition_type: AtlasPublishEditionType;
   window_hours: number;
   status: AtlasPublishJobStatus;
+  request_options?: Record<string, unknown>;
   stage_status?: Record<string, AtlasPublishStageStatus>;
   stage_errors?: Record<string, string>;
   started_at?: string;
@@ -115,6 +116,7 @@ async function ensureAtlasPublishSchema(pool: Pool): Promise<void> {
       status TEXT NOT NULL,
       stage_status JSONB NOT NULL DEFAULT '{}'::jsonb,
       stage_errors JSONB NOT NULL DEFAULT '{}'::jsonb,
+      request_options JSONB NOT NULL DEFAULT '{}'::jsonb,
       retry_count INTEGER NOT NULL DEFAULT 0,
       started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       completed_at TIMESTAMPTZ,
@@ -122,6 +124,9 @@ async function ensureAtlasPublishSchema(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+  await pool.query(
+    "ALTER TABLE atlas_publish_jobs ADD COLUMN IF NOT EXISTS request_options JSONB NOT NULL DEFAULT '{}'::jsonb",
+  );
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_atlas_publish_jobs_edition ON atlas_publish_jobs (edition_date DESC, edition_type, window_hours)",
   );
@@ -459,6 +464,7 @@ export async function startAtlasPublishJob({
   windowHours,
   sourceWindowStart = null,
   sourceWindowEnd = null,
+  requestOptions = {},
 }: {
   jobId?: string;
   editionDate: string;
@@ -466,6 +472,7 @@ export async function startAtlasPublishJob({
   windowHours: number;
   sourceWindowStart?: string | null;
   sourceWindowEnd?: string | null;
+  requestOptions?: Record<string, unknown>;
 }): Promise<AtlasPublishJob | null> {
   const pool = getAtlasPool();
   if (!pool) return null;
@@ -474,18 +481,27 @@ export async function startAtlasPublishJob({
   await pool.query(
     `INSERT INTO atlas_publish_jobs
        (id, edition_date, edition_type, window_hours, source_window_start, source_window_end,
-        status, stage_status, stage_errors, retry_count, started_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'running', '{}'::jsonb, '{}'::jsonb, 0, now(), now())
+        status, stage_status, stage_errors, request_options, retry_count, started_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'running', '{}'::jsonb, '{}'::jsonb, $7::jsonb, 0, now(), now())
      ON CONFLICT (id) DO UPDATE SET
        edition_date = EXCLUDED.edition_date,
        edition_type = EXCLUDED.edition_type,
        window_hours = EXCLUDED.window_hours,
        source_window_start = EXCLUDED.source_window_start,
        source_window_end = EXCLUDED.source_window_end,
+       request_options = EXCLUDED.request_options,
        status = 'running',
        retry_count = atlas_publish_jobs.retry_count + 1,
        updated_at = now()`,
-    [id, editionDate, editionType, windowHours, sourceWindowStart, sourceWindowEnd],
+    [
+      id,
+      editionDate,
+      editionType,
+      windowHours,
+      sourceWindowStart,
+      sourceWindowEnd,
+      JSON.stringify(requestOptions || {}),
+    ],
   );
   return {
     id,
@@ -493,6 +509,7 @@ export async function startAtlasPublishJob({
     edition_type: editionType,
     window_hours: windowHours,
     status: "running",
+    request_options: requestOptions || {},
   };
 }
 
@@ -548,6 +565,7 @@ export async function getAtlasPublishJob(jobId: string): Promise<AtlasPublishJob
        edition_type,
        window_hours,
        status,
+       request_options,
        stage_status,
        stage_errors,
        started_at,
@@ -566,6 +584,7 @@ export async function getAtlasPublishJob(jobId: string): Promise<AtlasPublishJob
     edition_type: row.edition_type === "sunday_review" ? "sunday_review" : "daily",
     window_hours: Number(row.window_hours) || 48,
     status: row.status === "succeeded" || row.status === "failed" ? row.status : "running",
+    request_options: row.request_options || {},
     stage_status: row.stage_status || {},
     stage_errors: row.stage_errors || {},
     started_at: row.started_at ? new Date(row.started_at).toISOString() : undefined,

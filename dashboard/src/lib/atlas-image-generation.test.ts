@@ -5,6 +5,10 @@ import type { AtlasEditorialReport } from "./atlas-report";
 const upsertAtlasAssetMock = vi.fn();
 const writeAtlasGeneratedAssetMock = vi.fn();
 const generateImageMock = vi.fn();
+const TEST_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGklEQVR42mP8z8DwnwEJMDIwMDAwAgA0xgQEVS4tWQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 vi.mock("./atlas-artifact", () => ({
   editionTypeForWindow: (windowHours: number) => windowHours >= 120 ? "sunday_review" : "daily",
@@ -54,7 +58,7 @@ function sampleReport(): AtlasEditorialReport {
         channels: ["Personal Agents"],
         image: {
           kind: "generated",
-          prompt: "NYTimes-style documentary photo of a crowded toolbench for AI agents",
+          prompt: "NYTimes-style documentary photo of a crowded toolbench with a GitHub octocat sticker for AI agents",
           alt: "A crowded toolbench as a metaphor for agent skills",
         },
         related_article_slugs: [],
@@ -80,7 +84,7 @@ describe("Atlas article image generation", () => {
     upsertAtlasAssetMock.mockResolvedValue({ asset_key: "unused" });
     writeAtlasGeneratedAssetMock.mockReturnValue("/tmp/skill-bloat.png");
     const runner = vi.fn().mockResolvedValue({
-      data: Buffer.from("fake-png"),
+      data: TEST_PNG,
       contentType: "image/png",
       provider: "test-runner",
       model: "test-model",
@@ -97,19 +101,40 @@ describe("Atlas article image generation", () => {
       prompt: expect.stringContaining("crowded toolbench"),
       articleTitle: "Skill Bloat Is Now a Design Problem",
     }));
+    const prompt = runner.mock.calls[0][0].prompt;
+    const atlasCloudVisiblePrompt = prompt.slice(0, 800);
+    expect(atlasCloudVisiblePrompt).toContain("Title: Skill Bloat Is Now a Design Problem");
+    expect(atlasCloudVisiblePrompt).toContain("Dek: The tool list became part of the work.");
+    expect(atlasCloudVisiblePrompt).toContain("Hard bans: no readable text, logos, brand marks, stickers");
+    expect(atlasCloudVisiblePrompt).toContain("crowded toolbench");
+    expect(atlasCloudVisiblePrompt).toContain("unlabeled code-hosting service");
+    expect(atlasCloudVisiblePrompt).toContain("plain peeled patch");
+    expect(atlasCloudVisiblePrompt).not.toContain("GitHub");
+    expect(atlasCloudVisiblePrompt).not.toContain("octocat");
+    expect(atlasCloudVisiblePrompt).toContain("reasoning overhead");
+    expect(prompt).toContain("Use ONLY this article");
+    expect(prompt).not.toContain("Additional article context");
+    expect(prompt).toContain("New York Times-style");
+    expect(prompt).toContain("single photorealistic documentary editorial photograph");
+    expect(prompt).toContain("snarky nerd humor");
+    expect(prompt).toContain("Do not make a generic tech or business stock photo");
+    expect(prompt).toContain("No readable text");
+    expect(prompt).toContain("No stickers, icons, emoji, doodles, mascots, or symbols");
     expect(upsertAtlasAssetMock).toHaveBeenCalledWith(expect.objectContaining({
-      assetKey: "2026-05-19/daily/skill-bloat.png",
+      assetKey: expect.stringMatching(/^2026-05-19\/daily\/skill-bloat-\d{14}\.webp$/),
       status: "ready",
-      assetBytes: Buffer.from("fake-png"),
-      contentType: "image/png",
+      assetBytes: expect.any(Buffer),
+      contentType: "image/webp",
     }));
+    const readyAsset = upsertAtlasAssetMock.mock.calls.find((call) => call[0].status === "ready")?.[0];
+    expect(readyAsset.assetBytes.length).toBeLessThan(350_000);
     expect(writeAtlasGeneratedAssetMock).toHaveBeenCalledWith(
-      "2026-05-19/daily/skill-bloat.png",
-      Buffer.from("fake-png"),
+      expect.stringMatching(/^2026-05-19\/daily\/skill-bloat-\d{14}\.webp$/),
+      expect.any(Buffer),
     );
     expect(report.articles[0].image).toMatchObject({
       status: "ready",
-      url: "/api/atlas/image/2026-05-19/daily/skill-bloat.png",
+      url: expect.stringMatching(/^\/api\/atlas\/image\/2026-05-19\/daily\/skill-bloat-\d{14}\.webp$/),
     });
   });
 
@@ -117,7 +142,7 @@ describe("Atlas article image generation", () => {
     upsertAtlasAssetMock.mockResolvedValue({ asset_key: "unused" });
     writeAtlasGeneratedAssetMock.mockReturnValue("/tmp/skill-bloat.png");
     generateImageMock.mockResolvedValue({
-      data: Buffer.from("model-png"),
+      data: TEST_PNG,
       contentType: "image/png",
       provider: "openai",
       model: "gpt-image-1",
@@ -135,15 +160,16 @@ describe("Atlas article image generation", () => {
       prompt: expect.stringContaining("crowded toolbench"),
     });
     expect(upsertAtlasAssetMock).toHaveBeenCalledWith(expect.objectContaining({
-      assetKey: "2026-05-19/daily/skill-bloat.png",
+      assetKey: expect.stringMatching(/^2026-05-19\/daily\/skill-bloat-\d{14}\.webp$/),
       status: "ready",
-      assetBytes: Buffer.from("model-png"),
+      assetBytes: expect.any(Buffer),
+      contentType: "image/webp",
       provider: "openai",
       model: "gpt-image-1",
     }));
     expect(report.articles[0].image).toMatchObject({
       status: "ready",
-      url: "/api/atlas/image/2026-05-19/daily/skill-bloat.png",
+      url: expect.stringMatching(/^\/api\/atlas\/image\/2026-05-19\/daily\/skill-bloat-\d{14}\.webp$/),
     });
   });
 
@@ -159,7 +185,7 @@ describe("Atlas article image generation", () => {
     }, runner);
 
     expect(upsertAtlasAssetMock).toHaveBeenCalledWith(expect.objectContaining({
-      assetKey: "2026-05-19/daily/skill-bloat.png",
+      assetKey: expect.stringMatching(/^2026-05-19\/daily\/skill-bloat-\d{14}\.webp$/),
       status: "failed",
       error: "image provider timed out",
     }));
