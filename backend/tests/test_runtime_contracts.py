@@ -50,6 +50,17 @@ def test_sync_scripts_pass_pgvector_url_to_indexers():
     assert "index_links(\n            pg_url," in pgvector_index
 
 
+def test_local_sync_defaults_to_railway_owned_analysis():
+    config_source = (ROOT / "backend" / "vibez" / "config.py").read_text()
+    continuous_sync = (ROOT / "backend" / "scripts" / "run_sync.py").read_text()
+    one_shot_sync = (ROOT / "backend" / "scripts" / "run_sync_once.py").read_text()
+
+    assert '"VIBEZ_PGVECTOR_INDEX_ON_SYNC", "false"' in config_source
+    assert '"VIBEZ_CLASSIFY_ON_SYNC", "false"' in config_source
+    assert "if config.classify_on_sync:" in continuous_sync
+    assert 'env_enabled("VIBEZ_SYNC_ONCE_CLASSIFY")' in one_shot_sync
+
+
 def test_push_railway_launchd_template_uses_supported_command():
     template = (ROOT / "launchd" / "com.vibez-monitor.push-railway.plist").read_text()
 
@@ -60,6 +71,8 @@ def test_push_railway_launchd_template_uses_supported_command():
 def test_classify_missing_launchd_template_uses_shared_backfill_route():
     template = (ROOT / "launchd" / "com.vibez-monitor.classify-missing.plist").read_text()
 
+    assert "<key>Disabled</key>" in template
+    assert "<true/>" in template
     assert "--model" not in template
     assert "qwen2.5:3b" not in template
     assert "--task-id" in template

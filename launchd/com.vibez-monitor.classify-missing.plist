@@ -4,6 +4,8 @@
 <dict>
     <key>Label</key>
     <string>com.vibez-monitor.classify-missing</string>
+    <key>Disabled</key>
+    <true/>
     <key>ProgramArguments</key>
     <array>
         <string>__VIBEZ_ROOT__/backend/.venv/bin/python</string>

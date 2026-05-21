@@ -17,6 +17,10 @@
         <string>__VIBEZ_ROOT__/vibez.db</string>
         <key>BEEPER_API_URL</key>
         <string>http://localhost:23373</string>
+        <key>VIBEZ_CLASSIFY_ON_SYNC</key>
+        <string>false</string>
+        <key>VIBEZ_PGVECTOR_INDEX_ON_SYNC</key>
+        <string>false</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

@@ -60,6 +60,8 @@ def test_config_defaults(tmp_path):
     assert cfg.google_groups_bootstrap_max_uids == 2000
     assert cfg.classifier_model == "claude-sonnet-4-6"
     assert cfg.synthesis_model == "claude-sonnet-4-6"
+    assert cfg.classify_on_sync is False
+    assert cfg.pgvector_index_on_sync is False
     assert cfg.subject_name == "User"
     assert cfg.self_aliases == ("User",)
     assert cfg.model_routing_path == Path("config/model-routing.json")
