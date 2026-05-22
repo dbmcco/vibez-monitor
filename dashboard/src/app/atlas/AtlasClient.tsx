@@ -69,6 +69,19 @@ interface AtlasPeopleInsights {
     intro_refs: string[];
     detection_reasons: Array<"first_seen" | "intros_channel" | "member_event" | "phone_or_name_addition">;
   }>;
+  identity_signals: Array<{
+    name: string;
+    sender_id: string | null;
+    first_seen: string;
+    first_seen_ts: number;
+    signal_seen: string;
+    signal_seen_ts: number;
+    signal_channel: string;
+    message_count_7d: number;
+    channels: string[];
+    intro_refs: string[];
+    signal_reasons: Array<"intros_channel" | "member_event" | "phone_or_name_addition">;
+  }>;
   top_contributors: Array<{
     name: string;
     sender_id: string | null;
@@ -928,6 +941,7 @@ function PeopleDesk({
   onOpenCitation: (ref: string) => void;
 }) {
   const newFaces = atlas.people?.new_faces || [];
+  const identitySignals = atlas.people?.identity_signals || [];
   const topContributors = atlas.people?.top_contributors || [];
   return (
     <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
@@ -936,16 +950,23 @@ function PeopleDesk({
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
             Society Desk
           </p>
-          <h2 className="mt-1 font-serif text-2xl font-black">New Faces This Week</h2>
+          <h2 className="mt-1 font-serif text-2xl font-black">People Desk</h2>
         </div>
         <p className="max-w-xl text-sm leading-6 text-[#5e5238]">
-          A rolling seven-day read on who newly appeared, where they surfaced, and who carried the
-          conversation.
+          A rolling seven-day read on genuinely new participants, identity signals, and who carried
+          the conversation.
         </p>
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.9fr]">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-4">
+          <div>
+            <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Actually New</h3>
+            <p className="mt-1 text-xs leading-5 text-[#786846]">
+              First observed in the tracked archive during this seven-day window.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
           {newFaces.length > 0 ? (
             newFaces.slice(0, 6).map((person) => (
               <article key={`${person.name}-${person.first_seen_ts}`} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
@@ -971,17 +992,59 @@ function PeopleDesk({
                     onClick={() => onOpenCitation(person.intro_refs[0])}
                     className="mt-3 border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
                   >
-                    Open intro evidence
-                  </button>
-                )}
-              </article>
+                  Open intro evidence
+                </button>
+              )}
+            </article>
             ))
           ) : (
             <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4 text-sm leading-6 text-[#5e5238] sm:col-span-2">
-              No new-face signals in the rolling seven-day window. The directory and contributor
+              No genuinely new participants in the rolling seven-day window. The identity and contributor
               list still show who was active.
             </div>
           )}
+          </div>
+
+          {identitySignals.length > 0 ? (
+            <div>
+              <h3 className="font-serif text-xl font-bold text-[#1f1a12]">
+                Introductions & Identity Signals
+              </h3>
+              <p className="mt-1 text-xs leading-5 text-[#786846]">
+                Longtime participants with intro, join, or identity-change signals this week.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {identitySignals.slice(0, 4).map((person) => (
+                  <article key={`${person.name}-${person.signal_seen_ts}`} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8b5f21]">
+                      <span>{person.signal_channel}</span>
+                      {person.signal_reasons.slice(0, 2).map((reason) => (
+                        <span key={reason} className="text-[#786846]">
+                          {personReasonLabel(reason)}
+                        </span>
+                      ))}
+                    </div>
+                    <h4 className="mt-2 font-serif text-lg font-bold text-[#1f1a12]">
+                      {person.name}
+                    </h4>
+                    <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+                      Seen in the archive since {formatTimestamp(person.first_seen_ts)}. Posted{" "}
+                      {person.message_count_7d.toLocaleString()} time
+                      {person.message_count_7d === 1 ? "" : "s"} this week.
+                    </p>
+                    {person.intro_refs[0] && (
+                      <button
+                        onClick={() => onOpenCitation(person.intro_refs[0])}
+                        className="mt-3 border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+                      >
+                        Open signal evidence
+                      </button>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <aside className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">

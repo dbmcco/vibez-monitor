@@ -147,6 +147,83 @@ describe("getAtlasSnapshot", () => {
     }));
   });
 
+  test("keeps longtime intro posters out of Atlas new faces", async () => {
+    const now = Date.now();
+    const oldFirstSeen = now - 45 * 24 * 60 * 60 * 1000;
+    const recentIntro = now - 60 * 60 * 1000;
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "m-old-intro",
+            room_id: "intros",
+            room_name: "Intros <- start here",
+            sender_id: "@longtime:example",
+            sender_name: "Longtime Member",
+            body: "Reintroducing myself for the new folks.",
+            timestamp: recentIntro,
+            raw_event: "{}",
+            relevance_score: 5,
+            topics: JSON.stringify(["introductions"]),
+            alert_level: "normal",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "m-old-intro",
+            room_id: "intros",
+            room_name: "Intros <- start here",
+            sender_id: "@longtime:example",
+            sender_name: "Longtime Member",
+            body: "Reintroducing myself for the new folks.",
+            timestamp: recentIntro,
+            raw_event: "{}",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            person_key: "@longtime:example",
+            first_ts: oldFirstSeen,
+          },
+        ],
+      });
+
+    const { getAtlasSnapshot } = await import("./db");
+    const atlas = await getAtlasSnapshot({ windowHours: 48 });
+
+    expect(atlas.people.new_faces).toEqual([]);
+    expect(atlas.people.identity_signals[0]).toMatchObject({
+      name: "Longtime Member",
+      signal_reasons: ["intros_channel"],
+    });
+  });
+
+  test("looks up Atlas first-seen history by sender id and display name", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const { getAtlasSnapshot } = await import("./db");
+    await getAtlasSnapshot({ windowHours: 48 });
+
+    const firstSeenSql = String(queryMock.mock.calls[6][0]);
+    expect(firstSeenSql).toContain("UNION ALL");
+    expect(firstSeenSql).toContain("LOWER(COALESCE(m.sender_name, ''))");
+  });
+
   test("falls back to all rooms when pgvector database has no sync_state table", async () => {
     const error = new Error("relation \"sync_state\" does not exist") as Error & { code: string };
     error.code = "42P01";

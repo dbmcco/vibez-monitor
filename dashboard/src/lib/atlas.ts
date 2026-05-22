@@ -124,6 +124,22 @@ export interface AtlasNewFace {
   detection_reasons: AtlasNewFaceReason[];
 }
 
+export type AtlasIdentitySignalReason = Exclude<AtlasNewFaceReason, "first_seen">;
+
+export interface AtlasIdentitySignal {
+  name: string;
+  sender_id: string | null;
+  first_seen: string;
+  first_seen_ts: number;
+  signal_seen: string;
+  signal_seen_ts: number;
+  signal_channel: string;
+  message_count_7d: number;
+  channels: string[];
+  intro_refs: string[];
+  signal_reasons: AtlasIdentitySignalReason[];
+}
+
 export interface AtlasTopContributor {
   name: string;
   sender_id: string | null;
@@ -139,6 +155,7 @@ export interface AtlasPeopleInsights {
   window_days: 7;
   generated_at: string;
   new_faces: AtlasNewFace[];
+  identity_signals: AtlasIdentitySignal[];
   top_contributors: AtlasTopContributor[];
 }
 
@@ -441,6 +458,7 @@ function buildFallbackPeopleInsights(generatedAt: string, messages: AtlasMessage
     window_days: 7,
     generated_at: generatedAt,
     new_faces: [],
+    identity_signals: [],
     top_contributors: Array.from(people.values())
       .sort((a, b) => b.count - a.count)
       .slice(0, 8)

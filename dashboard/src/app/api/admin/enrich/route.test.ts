@@ -5,6 +5,9 @@ const refreshRailwayEnrichmentMock = vi.fn();
 const refreshAtlasArticleImagesMock = vi.fn();
 const startAtlasPublishJobMock = vi.fn();
 const getAtlasPublishJobMock = vi.fn();
+const readAtlasArtifactMock = vi.fn();
+const writeAtlasArtifactMock = vi.fn();
+const getAtlasSnapshotMock = vi.fn();
 
 vi.mock("@/lib/admin-enrichment", () => ({
   refreshAtlasArticleImages: refreshAtlasArticleImagesMock,
@@ -14,7 +17,13 @@ vi.mock("@/lib/admin-enrichment", () => ({
 vi.mock("@/lib/atlas-artifact", () => ({
   editionTypeForWindow: (hours: number) => (hours >= 168 ? "sunday_review" : "daily"),
   getAtlasPublishJob: getAtlasPublishJobMock,
+  readAtlasArtifact: readAtlasArtifactMock,
   startAtlasPublishJob: startAtlasPublishJobMock,
+  writeAtlasArtifact: writeAtlasArtifactMock,
+}));
+
+vi.mock("@/lib/db", () => ({
+  getAtlasSnapshot: getAtlasSnapshotMock,
 }));
 
 describe("POST /api/admin/enrich", () => {
@@ -25,6 +34,9 @@ describe("POST /api/admin/enrich", () => {
     refreshAtlasArticleImagesMock.mockReset();
     startAtlasPublishJobMock.mockReset();
     getAtlasPublishJobMock.mockReset();
+    readAtlasArtifactMock.mockReset();
+    writeAtlasArtifactMock.mockReset();
+    getAtlasSnapshotMock.mockReset();
     refreshRailwayEnrichmentMock.mockResolvedValue({
       ok: true,
       classifications_written: 2,
@@ -46,6 +58,14 @@ describe("POST /api/admin/enrich", () => {
       window_hours: 48,
       status: "running",
     });
+    readAtlasArtifactMock.mockResolvedValue({
+      editorial_report: { issue: { date: "2026-05-19" }, articles: [] },
+    });
+    getAtlasSnapshotMock.mockResolvedValue({
+      generated_at: "2026-05-19T12:00:00Z",
+      window: { hours: 48 },
+    });
+    writeAtlasArtifactMock.mockResolvedValue("/tmp/atlas-48.json");
   });
 
   test("rejects requests without the push key", async () => {
@@ -171,6 +191,39 @@ describe("POST /api/admin/enrich", () => {
       rebuilt: true,
       articles: 5,
       stage_summary: { generate_images: "succeeded" },
+    });
+  });
+
+  test("refreshes Atlas data without regenerating articles or images", async () => {
+    const { POST } = await import("./route");
+    const response = await POST(new NextRequest("http://test.local/api/admin/enrich", {
+      method: "POST",
+      headers: { "x-vibez-push-key": "push-secret" },
+      body: JSON.stringify({
+        refreshAtlasDataOnly: true,
+        atlasHours: 48,
+      }),
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(readAtlasArtifactMock).toHaveBeenCalledWith(48);
+    expect(getAtlasSnapshotMock).toHaveBeenCalledWith({ windowHours: 48 });
+    expect(writeAtlasArtifactMock).toHaveBeenCalledWith({
+      windowHours: 48,
+      atlas: {
+        generated_at: "2026-05-19T12:00:00Z",
+        window: { hours: 48 },
+      },
+      editorialReport: { issue: { date: "2026-05-19" }, articles: [] },
+    });
+    expect(refreshRailwayEnrichmentMock).not.toHaveBeenCalled();
+    expect(refreshAtlasArticleImagesMock).not.toHaveBeenCalled();
+    expect(body).toEqual({
+      ok: true,
+      mode: "data_only",
+      artifact_path: "/tmp/atlas-48.json",
+      atlas: { rebuilt: true, articles: 0 },
     });
   });
 

@@ -278,7 +278,13 @@ function sampleAtlas(date: string) {
     concerns: [],
     links: [],
     citations: {},
-    people: { window_days: 7, generated_at: `${date}T12:00:00Z`, new_faces: [], top_contributors: [] },
+    people: {
+      window_days: 7,
+      generated_at: `${date}T12:00:00Z`,
+      new_faces: [],
+      identity_signals: [],
+      top_contributors: [],
+    },
     narrative: {
       title: "Atlas",
       summary: "",

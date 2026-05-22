@@ -4,8 +4,11 @@ import { refreshAtlasArticleImages, refreshRailwayEnrichment } from "@/lib/admin
 import {
   editionTypeForWindow,
   getAtlasPublishJob,
+  readAtlasArtifact,
   startAtlasPublishJob,
+  writeAtlasArtifact,
 } from "@/lib/atlas-artifact";
+import { getAtlasSnapshot } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -113,6 +116,31 @@ export async function POST(request: NextRequest) {
         publishJobId: typeof body.publishJobId === "string" ? body.publishJobId : undefined,
       });
       return NextResponse.json(result);
+    }
+
+    if (body.refreshAtlasDataOnly === true) {
+      const existing = await readAtlasArtifact(atlasHours);
+      if (!existing?.editorial_report) {
+        return NextResponse.json(
+          { ok: false, error: "Atlas editorial artifact is unavailable." },
+          { status: 404 },
+        );
+      }
+      const atlas = await getAtlasSnapshot({ windowHours: atlasHours });
+      const artifactPath = await writeAtlasArtifact({
+        windowHours: atlasHours,
+        atlas,
+        editorialReport: existing.editorial_report,
+      });
+      return NextResponse.json({
+        ok: true,
+        mode: "data_only",
+        artifact_path: artifactPath,
+        atlas: {
+          rebuilt: true,
+          articles: existing.editorial_report.articles.length,
+        },
+      });
     }
 
     if (body.async === true) {

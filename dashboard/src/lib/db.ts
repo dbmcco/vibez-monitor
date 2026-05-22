@@ -7,6 +7,7 @@ import {
   type AtlasMessageRow,
   type AtlasLinkRow,
   type AtlasPeopleInsights,
+  type AtlasIdentitySignalReason,
   type AtlasNewFaceReason,
 } from "./atlas";
 import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search";
@@ -1670,13 +1671,21 @@ function buildAtlasPeopleInsightsFromRows(input: {
       citation_refs: entry.citationRefs,
     }));
 
-  const newFaces = Array.from(people.values())
+  const personSignals = Array.from(people.values()).map((entry) => {
+    const signalReasons = Array.from(entry.reasons).filter(
+      (reason): reason is AtlasIdentitySignalReason => reason !== "first_seen",
+    );
+    const isFirstSeenRecently = entry.firstEverTs >= recentStartTs;
+    return { entry, signalReasons, isFirstSeenRecently };
+  });
+
+  const newFaces = personSignals
+    .filter(({ isFirstSeenRecently }) => isFirstSeenRecently)
     .map((entry) => {
-      const reasons = new Set(entry.reasons);
-      if (entry.firstEverTs >= recentStartTs) reasons.add("first_seen");
-      return { entry, reasons: Array.from(reasons) };
+      const reasons = new Set<AtlasNewFaceReason>(entry.signalReasons);
+      reasons.add("first_seen");
+      return { entry: entry.entry, reasons: Array.from(reasons) };
     })
-    .filter(({ reasons }) => reasons.length > 0)
     .sort((a, b) => b.entry.firstEverTs - a.entry.firstEverTs)
     .slice(0, 12)
     .map(({ entry, reasons }) => ({
@@ -1691,10 +1700,29 @@ function buildAtlasPeopleInsightsFromRows(input: {
       detection_reasons: reasons.sort(),
     }));
 
+  const identitySignals = personSignals
+    .filter(({ isFirstSeenRecently, signalReasons }) => !isFirstSeenRecently && signalReasons.length > 0)
+    .sort((a, b) => b.entry.firstRecentTs - a.entry.firstRecentTs)
+    .slice(0, 12)
+    .map(({ entry, signalReasons }) => ({
+      name: entry.name,
+      sender_id: entry.senderId,
+      first_seen: new Date(entry.firstEverTs).toISOString(),
+      first_seen_ts: entry.firstEverTs,
+      signal_seen: new Date(entry.firstRecentTs).toISOString(),
+      signal_seen_ts: entry.firstRecentTs,
+      signal_channel: entry.firstRecentChannel,
+      message_count_7d: entry.count,
+      channels: Array.from(entry.channels).sort(),
+      intro_refs: entry.introRefs,
+      signal_reasons: signalReasons.sort(),
+    }));
+
   return {
     window_days: 7,
     generated_at: input.generatedAt,
     new_faces: newFaces,
+    identity_signals: identitySignals,
     top_contributors: topContributors,
   };
 }
@@ -1724,15 +1752,25 @@ function getAtlasPeopleInsightsFromSqlite(
     .all(...params) as AtlasPeopleWindowRow[];
 
   const firstScope = buildSqliteRoomScopeWhere("m", scope);
+  const firstWhere = firstScope.clause ? `WHERE ${firstScope.clause}` : "";
   const firstRows = db
     .prepare(
-      `SELECT COALESCE(NULLIF(m.sender_id, ''), LOWER(COALESCE(m.sender_name, ''))) AS person_key,
-              MIN(m.timestamp) AS first_ts
-       FROM messages m
-       ${firstScope.clause ? `WHERE ${firstScope.clause}` : ""}
+      `SELECT person_key, MIN(first_ts) AS first_ts
+       FROM (
+         SELECT NULLIF(m.sender_id, '') AS person_key, MIN(m.timestamp) AS first_ts
+         FROM messages m
+         ${firstWhere}
+         GROUP BY person_key
+         UNION ALL
+         SELECT LOWER(COALESCE(m.sender_name, '')) AS person_key, MIN(m.timestamp) AS first_ts
+         FROM messages m
+         ${firstWhere}
+         GROUP BY person_key
+       ) first_seen_keys
+       WHERE person_key IS NOT NULL AND person_key != ''
        GROUP BY person_key`,
     )
-    .all(...firstScope.params) as AtlasPersonFirstSeenRow[];
+    .all(...firstScope.params, ...firstScope.params) as AtlasPersonFirstSeenRow[];
 
   return buildAtlasPeopleInsightsFromRows({
     generatedAt: now.toISOString(),
@@ -1765,11 +1803,21 @@ async function getAtlasPeopleInsights(
   );
 
   const firstScope = buildRoomScopeWhere("m", scope, 1);
+  const firstWhere = firstScope.clause ? `WHERE ${firstScope.clause}` : "";
   const { rows: firstRows } = await pool.query(
-    `SELECT COALESCE(NULLIF(m.sender_id, ''), LOWER(COALESCE(m.sender_name, ''))) AS person_key,
-            MIN(m.timestamp) AS first_ts
-     FROM messages m
-     ${firstScope.clause ? `WHERE ${firstScope.clause}` : ""}
+    `SELECT person_key, MIN(first_ts) AS first_ts
+     FROM (
+       SELECT NULLIF(m.sender_id, '') AS person_key, MIN(m.timestamp) AS first_ts
+       FROM messages m
+       ${firstWhere}
+       GROUP BY person_key
+       UNION ALL
+       SELECT LOWER(COALESCE(m.sender_name, '')) AS person_key, MIN(m.timestamp) AS first_ts
+       FROM messages m
+       ${firstWhere}
+       GROUP BY person_key
+     ) first_seen_keys
+     WHERE person_key IS NOT NULL AND person_key != ''
      GROUP BY person_key`,
     firstScope.params,
   );
