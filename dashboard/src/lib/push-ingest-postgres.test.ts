@@ -257,4 +257,39 @@ describe("Postgres push ingestion", () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO source_watermarks"))).toBe(true);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("UPDATE ingest_batches"))).toBe(true);
   });
+
+  test("does not index Matrix profile mentions as Links Desk links", async () => {
+    queryMock.mockImplementation((sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("INSERT INTO raw_events")) {
+        return Promise.resolve({ rows: [{ id: "raw-1" }], rowCount: 1 });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const { applyBeeperBatchPayload } = await import("./push-ingest");
+
+    await applyBeeperBatchPayload({
+      source: "beeper",
+      batch_key: "batch-profile-mentions",
+      events: [
+        {
+          source_event_key: "room-1:event-profile",
+          source_room_id: "room-1",
+          room_name: "Agent Harnesses",
+          sender_key: "member-1",
+          sender_display_name: "Dana",
+          source_timestamp: "2026-05-19T08:30:00.000Z",
+          body: "cc https://matrix.to/#/@whatsapp_lid-123:beeper.local and see https://example.com/harness",
+          raw_payload_json: { event_id: "event-profile" },
+        },
+      ],
+    });
+
+    const rawEventLinkParams = queryMock.mock.calls
+      .filter(([sql]) => String(sql).includes("INSERT INTO raw_event_links"))
+      .map(([, params]) => params);
+    expect(rawEventLinkParams).toHaveLength(1);
+    expect(rawEventLinkParams[0]).toEqual(expect.arrayContaining(["https://example.com/harness"]));
+    expect(String(rawEventLinkParams[0])).not.toContain("matrix.to");
+  });
 });

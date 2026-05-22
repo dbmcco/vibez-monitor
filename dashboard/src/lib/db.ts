@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import Database from "better-sqlite3";
 import path from "path";
+import { createHash } from "crypto";
 import {
   buildAtlasSnapshotFromRows,
   type AtlasSnapshot,
@@ -4840,6 +4841,101 @@ export interface LinkStats {
   authors: { name: string; count: number }[];
 }
 
+export interface LinkStarState {
+  count: number;
+  starred: boolean;
+}
+
+const MATRIX_PROFILE_LINK_SQLITE_FILTER =
+  "url NOT LIKE 'https://matrix.to/#/@%' AND url NOT LIKE 'http://matrix.to/#/@%'";
+const MATRIX_PROFILE_LINK_POSTGRES_FILTER =
+  "l.url NOT LIKE 'https://matrix.to/#/@%' AND l.url NOT LIKE 'http://matrix.to/#/@%'";
+
+function linkUrlHash(url: string): string {
+  return createHash("sha256").update(url.trim()).digest("hex");
+}
+
+function normalizeLinkUrls(urls: string[]): string[] {
+  return Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean)));
+}
+
+function sqliteHasTable(db: Database.Database, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
+  return Boolean(row?.name);
+}
+
+function sqliteFirstSharerExpr(db: Database.Database): string {
+  if (!sqliteHasTable(db, "raw_events") || !sqliteHasTable(db, "raw_event_links")) {
+    return "shared_by";
+  }
+  return `COALESCE((
+    SELECT re.sender_display_name
+    FROM raw_event_links rel
+    JOIN raw_events re ON re.id = rel.raw_event_id
+    WHERE rel.normalized_url = links.url
+      AND rel.url NOT LIKE 'https://matrix.to/#/@%'
+      AND rel.url NOT LIKE 'http://matrix.to/#/@%'
+    ORDER BY re.source_timestamp ASC, rel.position ASC, re.id ASC
+    LIMIT 1
+  ), shared_by)`;
+}
+
+function ensureSqliteLinkStars(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS link_stars (
+      url_hash TEXT NOT NULL,
+      url TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (url_hash, client_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_stars_url_hash ON link_stars (url_hash);
+  `);
+}
+
+async function ensurePostgresLinkStars() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS link_stars (
+      url_hash TEXT NOT NULL,
+      url TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (url_hash, client_id)
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_link_stars_url_hash ON link_stars (url_hash)");
+}
+
+async function postgresRawLinksAvailable(): Promise<boolean> {
+  const { rows } = await pool.query(
+    "SELECT to_regclass('public.raw_events') AS raw_events, to_regclass('public.raw_event_links') AS raw_event_links",
+  );
+  return Boolean(rows[0]?.raw_events && rows[0]?.raw_event_links);
+}
+
+function postgresFirstShareJoin(rawLinksAvailable: boolean): { joinSql: string; sharedByExpr: string } {
+  if (!rawLinksAvailable) {
+    return { joinSql: "", sharedByExpr: "l.shared_by" };
+  }
+  return {
+    sharedByExpr: "COALESCE(fs.first_shared_by, l.shared_by)",
+    joinSql: `
+      LEFT JOIN (
+        SELECT DISTINCT ON (rel.normalized_url)
+          rel.normalized_url,
+          re.sender_display_name AS first_shared_by
+        FROM raw_event_links rel
+        JOIN raw_events re ON re.id = rel.raw_event_id
+        WHERE rel.url NOT LIKE 'https://matrix.to/#/@%'
+          AND rel.url NOT LIKE 'http://matrix.to/#/@%'
+        ORDER BY rel.normalized_url, re.source_timestamp ASC, rel.position ASC, re.id ASC
+      ) fs ON fs.normalized_url = l.url
+    `,
+  };
+}
+
 function sourceFromUrl(url: string): string {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "");
@@ -4881,8 +4977,8 @@ function sqliteLinkWhere(opts: {
   sharedBy?: string;
   authoredBy?: string;
   pinned?: boolean;
-}): { whereSql: string; params: unknown[] } {
-  const where: string[] = [];
+}, sharedByExpr = "shared_by"): { whereSql: string; params: unknown[] } {
+  const where: string[] = [MATRIX_PROFILE_LINK_SQLITE_FILTER];
   const params: unknown[] = [];
   if (opts.category) {
     where.push("category = ?");
@@ -4914,7 +5010,7 @@ function sqliteLinkWhere(opts: {
     }
   }
   if (opts.sharedBy) {
-    where.push("shared_by LIKE ?");
+    where.push(`${sharedByExpr} LIKE ?`);
     params.push(`%${opts.sharedBy}%`);
   }
   if (opts.authoredBy === "any") {
@@ -4935,7 +5031,8 @@ function sqliteLinkWhere(opts: {
 function getLinkStatsFromSqlite(opts: { days?: number }): LinkStats {
   const db = new Database(SQLITE_DB_PATH, { readonly: true });
   try {
-    const { whereSql, params } = sqliteLinkWhere({ days: opts.days });
+    const firstSharerExpr = sqliteFirstSharerExpr(db);
+    const { whereSql, params } = sqliteLinkWhere({ days: opts.days }, firstSharerExpr);
     const totalRow = db.prepare(
       `SELECT COUNT(*) as c, COALESCE(SUM(mention_count), 0) as mentions, MIN(first_seen) as first_seen, MAX(last_seen) as last_seen
        FROM links ${whereSql}`,
@@ -4945,7 +5042,10 @@ function getLinkStatsFromSqlite(opts: { days?: number }): LinkStats {
       .all(...params) as { category: string | null; cnt: number }[];
     const sharerRows = db
       .prepare(
-        `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql}${whereSql ? " AND" : " WHERE"} shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`,
+        `SELECT ${firstSharerExpr} AS shared_by, COUNT(*) as cnt
+         FROM links ${whereSql} AND ${firstSharerExpr} <> ''
+         GROUP BY ${firstSharerExpr}
+         ORDER BY cnt DESC LIMIT 20`,
       )
       .all(...params) as { shared_by: string; cnt: number }[];
     const urlRows = db.prepare(`SELECT url FROM links ${whereSql}`).all(...params) as { url: string }[];
@@ -4990,12 +5090,13 @@ function getLinksFromSqlite(opts: {
 }): LinkRow[] {
   const db = new Database(SQLITE_DB_PATH, { readonly: true });
   try {
-    const { whereSql, params } = sqliteLinkWhere(opts);
+    const firstSharerExpr = sqliteFirstSharerExpr(db);
+    const { whereSql, params } = sqliteLinkWhere(opts, firstSharerExpr);
     const orderBy = SQLITE_LINK_SORT_MAP[opts.sort || "value"] || SQLITE_LINK_SORT_MAP.value;
     const limit = Math.min(Math.max(1, opts.limit || 50), 200);
     return db
       .prepare(
-        `SELECT id, url, url_hash, title, category, relevance, shared_by,
+        `SELECT id, url, url_hash, title, category, relevance, ${firstSharerExpr} AS shared_by,
                 source_group, first_seen, last_seen, mention_count, value_score,
                 report_date, authored_by, pinned
          FROM links ${whereSql}
@@ -5012,35 +5113,49 @@ export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> 
   if (shouldUseSqliteAtlas()) {
     return getLinkStatsFromSqlite(opts);
   }
+  const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
   let pi = 1;
-  const where: string[] = [];
+  const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
   const params: unknown[] = [];
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push(`last_seen >= $${pi++}`);
+    where.push(`l.last_seen >= $${pi++}`);
     params.push(cutoff);
   }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const whereSql = `WHERE ${where.join(" AND ")}`;
 
   const { rows: totalRows } = await pool.query(
-    `SELECT COUNT(*) as c, COALESCE(SUM(mention_count), 0) as mentions, MIN(first_seen) as first_seen, MAX(last_seen) as last_seen
-     FROM links ${whereSql}`,
+    `SELECT COUNT(*) as c, COALESCE(SUM(l.mention_count), 0) as mentions, MIN(l.first_seen) as first_seen, MAX(l.last_seen) as last_seen
+     FROM links l
+     ${joinSql}
+     ${whereSql}`,
     params,
   );
   const totalRow = totalRows[0] as { c: unknown; mentions: unknown; first_seen: string | null; last_seen: string | null };
   const total = Number(totalRow.c || 0);
 
   const { rows: catRows } = await pool.query(
-    `SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`,
+    `SELECT l.category AS category, COUNT(*) as cnt
+     FROM links l
+     ${joinSql}
+     ${whereSql}
+     GROUP BY l.category ORDER BY cnt DESC`,
     params,
   );
 
-  const sharerSql = `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql}${where.length ? " AND" : " WHERE"} shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`;
+  const sharerSql = `SELECT ${sharedByExpr} AS shared_by, COUNT(*) as cnt
+    FROM links l
+    ${joinSql}
+    ${whereSql} AND ${sharedByExpr} <> ''
+    GROUP BY ${sharedByExpr}
+    ORDER BY cnt DESC LIMIT 20`;
   const { rows: sharerRows } = await pool.query(sharerSql, params);
 
   // For sources, we need to compute from URLs — do it in JS
   const { rows: urlRows } = await pool.query(
-    `SELECT url FROM links ${whereSql}`,
+    `SELECT l.url FROM links l
+     ${joinSql}
+     ${whereSql}`,
     params,
   );
 
@@ -5053,7 +5168,11 @@ export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> 
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
 
-  const authorSql = `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql}${where.length ? " AND" : " WHERE"} authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`;
+  const authorSql = `SELECT l.authored_by AS authored_by, COUNT(*) as cnt
+    FROM links l
+    ${joinSql}
+    ${whereSql} AND l.authored_by <> '' AND l.authored_by IS NOT NULL
+    GROUP BY l.authored_by ORDER BY cnt DESC`;
   const { rows: authorRows } = await pool.query(authorSql, params);
 
   return {
@@ -5081,16 +5200,17 @@ export async function getLinks(opts: {
   if (shouldUseSqliteAtlas()) {
     return getLinksFromSqlite(opts);
   }
+  const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
   let pi = 1;
-  const where: string[] = [];
+  const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
   const params: unknown[] = [];
   if (opts.category) {
-    where.push(`category = $${pi++}`);
+    where.push(`l.category = $${pi++}`);
     params.push(opts.category);
   }
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push(`last_seen >= $${pi++}`);
+    where.push(`l.last_seen >= $${pi++}`);
     params.push(cutoff);
   }
   if (opts.source && opts.source !== "all") {
@@ -5109,37 +5229,139 @@ export async function getLinks(opts: {
     };
     const pat = patterns[opts.source];
     if (pat) {
-      where.push(`url LIKE $${pi++}`);
+      where.push(`l.url LIKE $${pi++}`);
       params.push(pat);
     }
   }
   if (opts.sharedBy) {
-    where.push(`shared_by LIKE $${pi++}`);
+    where.push(`${sharedByExpr} LIKE $${pi++}`);
     params.push(`%${opts.sharedBy}%`);
   }
   if (opts.authoredBy === "any") {
-    where.push("authored_by IS NOT NULL AND authored_by <> ''");
+    where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
   } else if (opts.authoredBy) {
-    where.push(`authored_by LIKE $${pi++}`);
+    where.push(`l.authored_by LIKE $${pi++}`);
     params.push(`%${opts.authoredBy}%`);
   }
   if (opts.pinned) {
-    where.push("pinned = 1");
+    where.push("l.pinned = 1");
   }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const whereSql = `WHERE ${where.join(" AND ")}`;
   const orderBy = SORT_MAP[opts.sort || "value"] || SORT_MAP.value;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
   const { rows } = await pool.query(
-    `SELECT id, url, url_hash, title, category, relevance, shared_by,
-            source_group, first_seen, last_seen, mention_count, value_score,
-            report_date, authored_by, pinned
-     FROM links ${whereSql}
+    `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, ${sharedByExpr} AS shared_by,
+            l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
+            l.report_date, l.authored_by, l.pinned
+     FROM links l
+     ${joinSql}
+     ${whereSql}
      ORDER BY ${orderBy}
      LIMIT $${pi++}`,
     params,
   );
   return rows as LinkRow[];
+}
+
+export async function getLinkStars(opts: { urls: string[]; clientId?: string }): Promise<Record<string, LinkStarState>> {
+  const urls = normalizeLinkUrls(opts.urls);
+  const empty = Object.fromEntries(urls.map((url) => [url, { count: 0, starred: false }]));
+  if (!urls.length) return empty;
+  const hashes = urls.map(linkUrlHash);
+  const urlByHash = new Map(hashes.map((hash, index) => [hash, urls[index]]));
+  const clientId = opts.clientId?.trim() || "";
+
+  if (shouldUseSqliteAtlas()) {
+    const db = new Database(SQLITE_DB_PATH);
+    try {
+      ensureSqliteLinkStars(db);
+      const placeholders = hashes.map(() => "?").join(", ");
+      const countRows = db
+        .prepare(`SELECT url_hash, COUNT(*) AS cnt FROM link_stars WHERE url_hash IN (${placeholders}) GROUP BY url_hash`)
+        .all(...hashes) as { url_hash: string; cnt: number }[];
+      const result: Record<string, LinkStarState> = { ...empty };
+      for (const row of countRows) {
+        const url = urlByHash.get(row.url_hash);
+        if (url) result[url] = { ...result[url], count: Number(row.cnt || 0) };
+      }
+      if (clientId) {
+        const starredRows = db
+          .prepare(`SELECT url_hash FROM link_stars WHERE client_id = ? AND url_hash IN (${placeholders})`)
+          .all(clientId, ...hashes) as { url_hash: string }[];
+        for (const row of starredRows) {
+          const url = urlByHash.get(row.url_hash);
+          if (url) result[url] = { ...result[url], starred: true };
+        }
+      }
+      return result;
+    } finally {
+      db.close();
+    }
+  }
+
+  await ensurePostgresLinkStars();
+  const { rows: countRows } = await pool.query(
+    "SELECT url_hash, COUNT(*) AS cnt FROM link_stars WHERE url_hash = ANY($1::text[]) GROUP BY url_hash",
+    [hashes],
+  );
+  const result: Record<string, LinkStarState> = { ...empty };
+  for (const row of countRows as { url_hash: string; cnt: unknown }[]) {
+    const url = urlByHash.get(row.url_hash);
+    if (url) result[url] = { ...result[url], count: Number(row.cnt || 0) };
+  }
+  if (clientId) {
+    const { rows: starredRows } = await pool.query(
+      "SELECT url_hash FROM link_stars WHERE client_id = $1 AND url_hash = ANY($2::text[])",
+      [clientId, hashes],
+    );
+    for (const row of starredRows as { url_hash: string }[]) {
+      const url = urlByHash.get(row.url_hash);
+      if (url) result[url] = { ...result[url], starred: true };
+    }
+  }
+  return result;
+}
+
+export async function setLinkStar(opts: { url: string; clientId: string; starred: boolean }): Promise<LinkStarState> {
+  const url = opts.url.trim();
+  const clientId = opts.clientId.trim();
+  if (!url || !clientId) {
+    throw new Error("Link stars require url and clientId.");
+  }
+  const urlHash = linkUrlHash(url);
+
+  if (shouldUseSqliteAtlas()) {
+    const db = new Database(SQLITE_DB_PATH);
+    try {
+      ensureSqliteLinkStars(db);
+      if (opts.starred) {
+        db.prepare(
+          `INSERT INTO link_stars (url_hash, url, client_id)
+           VALUES (?, ?, ?)
+           ON CONFLICT(url_hash, client_id) DO UPDATE SET url = excluded.url`,
+        ).run(urlHash, url, clientId);
+      } else {
+        db.prepare("DELETE FROM link_stars WHERE url_hash = ? AND client_id = ?").run(urlHash, clientId);
+      }
+    } finally {
+      db.close();
+    }
+    return (await getLinkStars({ urls: [url], clientId }))[url];
+  }
+
+  await ensurePostgresLinkStars();
+  if (opts.starred) {
+    await pool.query(
+      `INSERT INTO link_stars (url_hash, url, client_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (url_hash, client_id) DO UPDATE SET url = EXCLUDED.url`,
+      [urlHash, url, clientId],
+    );
+  } else {
+    await pool.query("DELETE FROM link_stars WHERE url_hash = $1 AND client_id = $2", [urlHash, clientId]);
+  }
+  return (await getLinkStars({ urls: [url], clientId }))[url];
 }
 
 export async function searchLinksFts(
@@ -5156,11 +5378,12 @@ export async function searchLinksFts(
     ["links_fts"],
   );
   const ftsExists = ftsCheck.length > 0;
+  const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
 
   if (ftsExists) {
     const matchScore = buildLinkTermMatchScore("l", terms, 1);
     let pi = matchScore.nextIndex;
-    const where: string[] = [];
+    const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
     const params: unknown[] = [...matchScore.params];
     const ftsTsvector = "to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,''))";
     const ftsQueryParam = `plainto_tsquery('english', $${pi++})`;
@@ -5183,7 +5406,7 @@ export async function searchLinksFts(
       };
       if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
     }
-    if (opts.sharedBy) { where.push(`l.shared_by LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
+    if (opts.sharedBy) { where.push(`${sharedByExpr} LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
     if (opts.authoredBy === "any") {
       where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
     } else if (opts.authoredBy) {
@@ -5195,11 +5418,12 @@ export async function searchLinksFts(
 
     const { rows } = await pool.query(
       `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
-              l.shared_by, l.source_group, l.first_seen, l.last_seen,
+              ${sharedByExpr} AS shared_by, l.source_group, l.first_seen, l.last_seen,
               l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
               (${matchScore.sql}) AS term_match_score,
               ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
        FROM links l
+       ${joinSql}
        WHERE ${ftsTsvector} @@ ${ftsQueryParam}
        ${extraWhere}
        ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
@@ -5211,10 +5435,10 @@ export async function searchLinksFts(
 
   // Fallback: LIKE-based search when FTS table hasn't been built yet
   let pi = 1;
-  const where: string[] = [];
+  const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
   const params: unknown[] = [];
   const likeClauses = terms.map(() => {
-    const clause = `(title LIKE $${pi} OR relevance LIKE $${pi + 2} OR category LIKE $${pi + 1} OR url LIKE $${pi + 3})`;
+    const clause = `(l.title LIKE $${pi} OR l.relevance LIKE $${pi + 2} OR l.category LIKE $${pi + 1} OR l.url LIKE $${pi + 3})`;
     pi += 4;
     return clause;
   });
@@ -5226,24 +5450,45 @@ export async function searchLinksFts(
     pi += 4;
   }
   if (opts.category) {
-    where.push(`category = $${pi++}`);
+    where.push(`l.category = $${pi++}`);
     params.push(opts.category);
   }
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push(`last_seen >= $${pi++}`);
+    where.push(`l.last_seen >= $${pi++}`);
     params.push(cutoff);
+  }
+  if (opts.source && opts.source !== "all") {
+    const patterns: Record<string, string> = {
+      github: "%github.com%", x: "%x.com%", youtube: "%youtu%",
+      substack: "%substack.com%", medium: "%medium.com%", arxiv: "%arxiv.org%",
+      reddit: "%reddit.com%", hackernews: "%news.ycombinator.com%",
+      linkedin: "%linkedin.com%", notion: "%notion.so%", gdocs: "%docs.google.com%",
+    };
+    if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
+  }
+  if (opts.sharedBy) {
+    where.push(`${sharedByExpr} LIKE $${pi++}`);
+    params.push(`%${opts.sharedBy}%`);
+  }
+  if (opts.authoredBy === "any") {
+    where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
+  } else if (opts.authoredBy) {
+    where.push(`l.authored_by LIKE $${pi++}`);
+    params.push(`%${opts.authoredBy}%`);
   }
   const whereSql = `WHERE ${where.join(" AND ")}`;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
 
   const { rows } = await pool.query(
-    `SELECT id, url, url_hash, title, category, relevance, shared_by,
-            source_group, first_seen, last_seen, mention_count, value_score,
-            report_date, authored_by, pinned
-     FROM links ${whereSql}
-     ORDER BY value_score DESC, last_seen DESC
+    `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, ${sharedByExpr} AS shared_by,
+            l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
+            l.report_date, l.authored_by, l.pinned
+     FROM links l
+     ${joinSql}
+     ${whereSql}
+     ORDER BY l.value_score DESC, l.last_seen DESC
      LIMIT $${pi++}`,
     params,
   );
@@ -5262,6 +5507,9 @@ export async function searchLinks(opts: {
   pinned?: boolean;
   semanticOnly?: boolean;
 }): Promise<LinkRow[]> {
+  if (opts.sharedBy) {
+    return searchLinksFts(opts.query, opts);
+  }
   const semanticRows = await searchHybridLinks({
     query: opts.query,
     category: opts.category,

@@ -1,12 +1,12 @@
 // ABOUTME: Links page with NLP search, source/sharer filtering, sort, and browse.
-// ABOUTME: Responsive browse view with mobile cards, category filters, and local starring.
+// ABOUTME: Responsive browse view with mobile cards, category filters, and persistent counted starring.
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { StarButton } from "@/components/StarButton";
-import { linkStarKey, useStars } from "@/lib/stars";
+import { useLinkStars } from "@/lib/link-stars-client";
 
 interface Link {
   id: number;
@@ -267,7 +267,11 @@ export default function LinksPage() {
   const [starredOnly, setStarredOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const { stars, isLinkStarred, toggleLinkStar } = useStars();
+  const starUrls = useMemo(
+    () => [...links, ...pinnedLinks].map((link) => link.url),
+    [links, pinnedLinks],
+  );
+  const { stars, isLinkStarred, linkStarCount, toggleLinkStar } = useLinkStars(starUrls);
 
   const openLink = useCallback((url: string) => {
     window.open(url, "_blank", "noopener,noreferrer");
@@ -371,9 +375,9 @@ export default function LinksPage() {
   const topCategories = (stats?.categories || []).slice(0, 8);
   const topAuthors = (stats?.authors || []).slice(0, 10);
   const visibleLinks = starredOnly
-    ? links.filter((link) => Boolean(stars.links[linkStarKey(link.url)]))
+    ? links.filter((link) => Boolean(stars[link.url]?.starred))
     : links;
-  const starredCount = Object.keys(stars.links).length;
+  const starredCount = Object.values(stars).filter((entry) => entry.starred).length;
   const archiveRange =
     stats?.first_seen && stats.last_seen
       ? `${formatArchiveDate(stats.first_seen)} to ${formatArchiveDate(stats.last_seen)}`
@@ -611,11 +615,12 @@ export default function LinksPage() {
                     <StarButton
                       compact
                       active={isLinkStarred(link.url)}
+                      count={linkStarCount(link.url)}
                       label={link.url}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        toggleLinkStar(link.url);
+                        void toggleLinkStar(link.url);
                       }}
                     />
                   </div>
@@ -694,11 +699,12 @@ export default function LinksPage() {
                           <StarButton
                             compact
                             active={isLinkStarred(link.url)}
+                            count={linkStarCount(link.url)}
                             label={link.url}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
-                              toggleLinkStar(link.url);
+                              void toggleLinkStar(link.url);
                             }}
                           />
                         </div>

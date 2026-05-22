@@ -4,6 +4,7 @@ interface StarButtonProps {
   active: boolean;
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   label: string;
+  count?: number;
   compact?: boolean;
   className?: string;
 }
@@ -12,6 +13,7 @@ export function StarButton({
   active,
   onClick,
   label,
+  count = 0,
   compact = false,
   className = "",
 }: StarButtonProps) {
@@ -43,6 +45,7 @@ export function StarButton({
         />
       </svg>
       {!compact ? <span>{active ? "Starred" : "Star"}</span> : null}
+      {count > 0 ? <span className="tabular-nums">{count}</span> : null}
     </button>
   );
 }

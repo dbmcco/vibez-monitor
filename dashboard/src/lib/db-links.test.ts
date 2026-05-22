@@ -70,6 +70,27 @@ describe("link queries", () => {
         authored_by TEXT,
         pinned INTEGER DEFAULT 0
       );
+      CREATE TABLE raw_events (
+        id INTEGER PRIMARY KEY,
+        source TEXT NOT NULL,
+        source_event_key TEXT NOT NULL,
+        source_room_id TEXT NOT NULL,
+        room_name TEXT NOT NULL,
+        sender_key TEXT NOT NULL,
+        sender_display_name TEXT NOT NULL,
+        source_timestamp TEXT NOT NULL,
+        body TEXT NOT NULL,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
+        raw_payload_json TEXT NOT NULL DEFAULT '{}',
+        body_hash TEXT NOT NULL
+      );
+      CREATE TABLE raw_event_links (
+        raw_event_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        normalized_url TEXT NOT NULL,
+        host TEXT,
+        position INTEGER NOT NULL DEFAULT 0
+      );
     `);
     db.prepare(`
       INSERT INTO links
@@ -83,7 +104,23 @@ describe("link queries", () => {
         (2, 'https://example.com/notes', 'hash-2', 'Notes', 'article',
          'Background notes', 'Lee', 'Workflows',
          '2026-05-10T10:00:00.000Z', '2026-05-10T11:00:00.000Z', 1, 1.2,
-         '2026-05-10', NULL, 0)
+        '2026-05-10', NULL, 0)
+    `).run();
+    db.prepare(`
+      INSERT INTO raw_events
+        (id, source, source_event_key, source_room_id, room_name, sender_key,
+         sender_display_name, source_timestamp, body, body_hash)
+      VALUES
+        (1, 'beeper', 'room:event-1', 'room', 'Agents', 'dana', 'Dana',
+         '2026-05-17T10:00:00.000Z', 'https://github.com/example/atlas', 'h1'),
+        (2, 'beeper', 'room:event-2', 'room', 'Agents', 'lee', 'Lee',
+         '2026-05-17T12:00:00.000Z', 'https://github.com/example/atlas', 'h2')
+    `).run();
+    db.prepare(`
+      INSERT INTO raw_event_links (raw_event_id, url, normalized_url, host, position)
+      VALUES
+        (1, 'https://github.com/example/atlas', 'https://github.com/example/atlas', 'github.com', 0),
+        (2, 'https://github.com/example/atlas', 'https://github.com/example/atlas', 'github.com', 0)
     `).run();
     db.close();
     process.env = {
@@ -115,6 +152,42 @@ describe("link queries", () => {
     });
   });
 
+  test("filters links by first sharer instead of aggregate shared_by", async () => {
+    const db = new Database(dbPath);
+    db.prepare("UPDATE links SET shared_by = ? WHERE id = 1").run("Dana, Lee");
+    db.close();
+    const { getLinks } = await import("./db");
+
+    const danaLinks = await getLinks({ sharedBy: "Dana", limit: 5 });
+    const leeLinks = await getLinks({ sharedBy: "Lee", limit: 5 });
+
+    expect(danaLinks.map((link) => link.id)).toContain(1);
+    expect(leeLinks.map((link) => link.id)).not.toContain(1);
+  });
+
+  test("persists counted link stars per client", async () => {
+    const { getLinkStars, setLinkStar } = await import("./db");
+
+    await setLinkStar({ url: "https://github.com/example/atlas", clientId: "client-a", starred: true });
+    await setLinkStar({ url: "https://github.com/example/atlas", clientId: "client-a", starred: true });
+    await setLinkStar({ url: "https://github.com/example/atlas", clientId: "client-b", starred: true });
+
+    const starred = await getLinkStars({
+      urls: ["https://github.com/example/atlas"],
+      clientId: "client-a",
+    });
+
+    expect(starred["https://github.com/example/atlas"]).toEqual({ count: 2, starred: true });
+
+    await setLinkStar({ url: "https://github.com/example/atlas", clientId: "client-a", starred: false });
+    const afterUnstar = await getLinkStars({
+      urls: ["https://github.com/example/atlas"],
+      clientId: "client-a",
+    });
+
+    expect(afterUnstar["https://github.com/example/atlas"]).toEqual({ count: 1, starred: false });
+  });
+
   test("computes link stats from SQLite when no Postgres URL is configured", async () => {
     const { getLinkStats } = await import("./db");
 
@@ -137,6 +210,7 @@ describe("link queries", () => {
       VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
     };
     queryMock
+      .mockResolvedValueOnce({ rows: [{ raw_events: null, raw_event_links: null }] })
       .mockResolvedValueOnce({
         rows: [{ c: "7", mentions: "12", first_seen: "2025-04-07", last_seen: "2026-05-17" }],
       })

@@ -537,6 +537,9 @@ function extractLinks(body: string): Array<{ url: string; normalized_url: string
     } catch {
       normalizedUrl = url.trim();
     }
+    if (host === "matrix.to" && url.includes("#/@")) {
+      continue;
+    }
     links.push({
       url,
       normalized_url: normalizedUrl,
