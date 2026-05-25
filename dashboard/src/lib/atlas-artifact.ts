@@ -48,6 +48,7 @@ export interface AtlasPublishJob {
   edition_type: AtlasPublishEditionType;
   window_hours: number;
   status: AtlasPublishJobStatus;
+  reused?: boolean;
   request_options?: Record<string, unknown>;
   stage_status?: Record<string, AtlasPublishStageStatus>;
   stage_errors?: Record<string, string>;
@@ -477,6 +478,38 @@ export async function startAtlasPublishJob({
   const pool = getAtlasPool();
   if (!pool) return null;
   await ensureAtlasPublishSchema(pool);
+  if (!jobId) {
+    const existing = await pool.query(
+      `SELECT id, edition_date, edition_type, window_hours, status,
+              stage_status, stage_errors, request_options, started_at, updated_at
+       FROM atlas_publish_jobs
+       WHERE edition_date = $1
+         AND edition_type = $2
+         AND window_hours = $3
+         AND status IN ('running', 'succeeded')
+       ORDER BY
+         CASE status WHEN 'succeeded' THEN 0 ELSE 1 END,
+         updated_at DESC
+       LIMIT 1`,
+      [editionDate, editionType, windowHours],
+    );
+    const row = existing.rows[0] as AtlasPublishJob | undefined;
+    if (row) {
+      return {
+        id: String(row.id),
+        edition_date: String(row.edition_date),
+        edition_type: row.edition_type,
+        window_hours: Number(row.window_hours),
+        status: row.status,
+        reused: true,
+        request_options: row.request_options || {},
+        stage_status: row.stage_status || {},
+        stage_errors: row.stage_errors || {},
+        started_at: row.started_at,
+        updated_at: row.updated_at,
+      };
+    }
+  }
   const id = jobId || `atlas-${editionType}-${editionDate}-${windowHours}-${randomUUID()}`;
   await pool.query(
     `INSERT INTO atlas_publish_jobs
