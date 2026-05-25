@@ -291,6 +291,7 @@ describe("link queries", () => {
     }));
     const ftsSql = String(queryMock.mock.calls[1][0]);
     expect(ftsSql).toContain("websearch_to_tsquery");
+    expect(ftsSql).toContain(" OR (");
     expect(ftsSql).toContain("shared_by");
   });
 });

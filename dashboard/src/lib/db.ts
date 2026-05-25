@@ -5432,7 +5432,7 @@ export async function searchLinksFts(
             ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
      FROM links l
      ${joinSql}
-     WHERE ${ftsTsvector} @@ ${ftsQueryParam}
+     WHERE (${ftsTsvector} @@ ${ftsQueryParam} OR (${matchScore.sql}) > 0)
      ${extraWhere}
      ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
      LIMIT $${pi++}`,
