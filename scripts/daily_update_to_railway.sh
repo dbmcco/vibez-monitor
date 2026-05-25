@@ -45,6 +45,8 @@ load_env_file "$ROOT_DIR/dashboard/.env.local"
 
 export TZ="${TZ:-America/New_York}"
 export VIBEZ_PUSH_LOOKBACK_DAYS="${VIBEZ_DAILY_PUSH_LOOKBACK_DAYS:-${VIBEZ_PUSH_LOOKBACK_DAYS:-3}}"
+export VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT="${VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT:-0}"
+export VIBEZ_DAILY_LINK_EMBEDDING_LIMIT="${VIBEZ_DAILY_LINK_EMBEDDING_LIMIT:-0}"
 
 timestamp() {
   date "+%Y-%m-%dT%H:%M:%S%z"
@@ -52,6 +54,8 @@ timestamp() {
 
 echo "[$(timestamp)] Starting daily Vibez update"
 echo "Lookback days: $VIBEZ_PUSH_LOOKBACK_DAYS"
+echo "Daily message embedding limit: $VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT"
+echo "Daily link embedding limit: $VIBEZ_DAILY_LINK_EMBEDDING_LIMIT"
 
 run_with_retry() {
   local label="$1"
