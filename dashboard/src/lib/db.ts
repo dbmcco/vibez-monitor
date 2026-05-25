@@ -5444,7 +5444,15 @@ export async function searchLinksFts(
 function mergeLinkRows(primary: LinkRow[], secondary: LinkRow[], limit: number): LinkRow[] {
   const merged: LinkRow[] = [];
   const seen = new Set<string>();
-  for (const row of [...primary, ...secondary]) {
+  const blended = primary.length > 0 ? [primary[0]] : [];
+  const remainingPrimary = primary.slice(1);
+  const maxLength = Math.max(remainingPrimary.length, secondary.length);
+  for (let i = 0; i < maxLength; i += 1) {
+    if (secondary[i]) blended.push(secondary[i]);
+    if (remainingPrimary[i]) blended.push(remainingPrimary[i]);
+  }
+
+  for (const row of blended) {
     const key = row.url_hash || row.url;
     if (!key || seen.has(key)) continue;
     seen.add(key);

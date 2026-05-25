@@ -229,7 +229,7 @@ describe("link queries", () => {
     expect(stats.categories).toEqual([{ name: "repo", count: 4 }]);
   });
 
-  test("keeps exact FTS link hits ahead of semantic results", async () => {
+  test("blends semantic link hits after the strongest exact result", async () => {
     process.env = {
       ...process.env,
       VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
@@ -256,27 +256,63 @@ describe("link queries", () => {
         authored_by: null,
         pinned: 0,
       },
+      {
+        id: 4,
+        url: "https://github.com/example/semantic-followup",
+        url_hash: "semantic-followup-hash",
+        title: "Semantic followup",
+        category: "repo",
+        relevance: "Another semantic neighbor",
+        shared_by: "Manuel",
+        source_group: "Show and Tell",
+        first_seen: "2026-05-24T20:00:00.000Z",
+        last_seen: "2026-05-24T20:00:00.000Z",
+        mention_count: 1,
+        value_score: 1,
+        report_date: "2026-05-24",
+        authored_by: null,
+        pinned: 0,
+      },
     ]);
     queryMock
       .mockResolvedValueOnce({ rows: [{ raw_events: null, raw_event_links: null }] })
       .mockResolvedValueOnce({
-        rows: [{
-          id: 1,
-          url: "https://github.com/taylorsatula/bugout",
-          url_hash: "bugout-hash",
-          title: "",
-          category: null,
-          relevance: "",
-          shared_by: "Taylor - MIRA",
-          source_group: "Show and Tell",
-          first_seen: "2026-05-24T21:37:08.000Z",
-          last_seen: "2026-05-24T21:37:08.000Z",
-          mention_count: 1,
-          value_score: 0,
-          report_date: "2026-05-24",
-          authored_by: null,
-          pinned: 0,
-        }],
+        rows: [
+          {
+            id: 1,
+            url: "https://github.com/taylorsatula/bugout",
+            url_hash: "bugout-hash",
+            title: "",
+            category: null,
+            relevance: "",
+            shared_by: "Taylor - MIRA",
+            source_group: "Show and Tell",
+            first_seen: "2026-05-24T21:37:08.000Z",
+            last_seen: "2026-05-24T21:37:08.000Z",
+            mention_count: 1,
+            value_score: 0,
+            report_date: "2026-05-24",
+            authored_by: null,
+            pinned: 0,
+          },
+          {
+            id: 3,
+            url: "https://github.com/taylorsatula/mira-OSS",
+            url_hash: "mira-hash",
+            title: "mira OSS",
+            category: "repo",
+            relevance: "",
+            shared_by: "Taylor - MIRA",
+            source_group: "Show and Tell",
+            first_seen: "2026-05-24T21:37:08.000Z",
+            last_seen: "2026-05-24T21:37:08.000Z",
+            mention_count: 1,
+            value_score: 0,
+            report_date: "2026-05-24",
+            authored_by: null,
+            pinned: 0,
+          },
+        ],
       });
 
     const { searchLinks } = await import("./db");
@@ -285,6 +321,8 @@ describe("link queries", () => {
     expect(links.map((link) => link.url)).toEqual([
       "https://github.com/taylorsatula/bugout",
       "https://github.com/example/other",
+      "https://github.com/taylorsatula/mira-OSS",
+      "https://github.com/example/semantic-followup",
     ]);
     expect(semantic.searchHybridLinks).toHaveBeenCalledWith(expect.objectContaining({
       query: "taylor bugout",
