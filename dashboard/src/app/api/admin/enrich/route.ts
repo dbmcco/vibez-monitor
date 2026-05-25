@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
           { status: 503 },
         );
       }
-      if (!workerOwnsAsyncJobs() && !job.reused) {
+      if (!workerOwnsAsyncJobs()) {
         runAsyncEnrichment({
           ...options,
           publishJobId: job.id,

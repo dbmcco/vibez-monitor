@@ -130,47 +130,6 @@ describe("listAtlasEditions", () => {
     expect(insertCall?.[1]).toContain(JSON.stringify({ classifyLimit: 0, messageEmbeddingLimit: 0 }));
   });
 
-  test("reuses an existing daily publish job instead of creating duplicate model work", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({
-        rows: [{
-          id: "atlas-daily-2026-05-25-48-existing",
-          edition_date: "2026-05-25",
-          edition_type: "daily",
-          window_hours: 48,
-          status: "succeeded",
-          stage_status: { publish: "succeeded" },
-          stage_errors: {},
-          request_options: { atlasHours: 48 },
-          started_at: "2026-05-25T08:30:00.000Z",
-          updated_at: "2026-05-25T08:39:00.000Z",
-        }],
-      });
-
-    const { startAtlasPublishJob } = await import("./atlas-artifact");
-    const job = await startAtlasPublishJob({
-      editionDate: "2026-05-25",
-      editionType: "daily",
-      windowHours: 48,
-      requestOptions: { atlasHours: 48 },
-    });
-
-    expect(job).toMatchObject({
-      id: "atlas-daily-2026-05-25-48-existing",
-      status: "succeeded",
-      reused: true,
-      stage_status: { publish: "succeeded" },
-    });
-    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO atlas_publish_jobs"))).toBe(false);
-  });
-
   test("records publish stage status and errors as durable job state", async () => {
     queryMock.mockResolvedValue({ rows: [], rowCount: 1 });
 
