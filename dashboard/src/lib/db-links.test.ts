@@ -228,4 +228,67 @@ describe("link queries", () => {
     expect(stats.sources).toEqual([{ name: "github", count: 1 }]);
     expect(stats.categories).toEqual([{ name: "repo", count: 4 }]);
   });
+
+  test("keeps exact FTS link hits ahead of semantic results", async () => {
+    process.env = {
+      ...process.env,
+      VIBEZ_PGVECTOR_URL: "postgres://pgvector-host/railway",
+    };
+    const linkSearch = await import("@/lib/link-search");
+    const semantic = await import("@/lib/semantic");
+    vi.mocked(linkSearch.buildLinksFtsQuery).mockReturnValue(`"bugout"`);
+    vi.mocked(linkSearch.normalizeLinkSearchTerms).mockReturnValue(["bugout"]);
+    vi.mocked(semantic.searchHybridLinks).mockResolvedValue([
+      {
+        id: 2,
+        url: "https://github.com/example/other",
+        url_hash: "other-hash",
+        title: "Other repo",
+        category: "repo",
+        relevance: "Semantic neighbor",
+        shared_by: "Manuel",
+        source_group: "Show and Tell",
+        first_seen: "2026-05-24T20:00:00.000Z",
+        last_seen: "2026-05-24T20:00:00.000Z",
+        mention_count: 1,
+        value_score: 1,
+        report_date: "2026-05-24",
+        authored_by: null,
+        pinned: 0,
+      },
+    ]);
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ table_name: "links_fts" }] })
+      .mockResolvedValueOnce({ rows: [{ raw_events: null, raw_event_links: null }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 1,
+          url: "https://github.com/taylorsatula/bugout",
+          url_hash: "bugout-hash",
+          title: "",
+          category: null,
+          relevance: "",
+          shared_by: "Taylor - MIRA",
+          source_group: "Show and Tell",
+          first_seen: "2026-05-24T21:37:08.000Z",
+          last_seen: "2026-05-24T21:37:08.000Z",
+          mention_count: 1,
+          value_score: 0,
+          report_date: "2026-05-24",
+          authored_by: null,
+          pinned: 0,
+        }],
+      });
+
+    const { searchLinks } = await import("./db");
+    const links = await searchLinks({ query: "bugout", limit: 10 });
+
+    expect(links.map((link) => link.url)).toEqual([
+      "https://github.com/taylorsatula/bugout",
+      "https://github.com/example/other",
+    ]);
+    expect(semantic.searchHybridLinks).toHaveBeenCalledWith(expect.objectContaining({
+      query: "bugout",
+    }));
+  });
 });

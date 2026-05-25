@@ -5366,7 +5366,16 @@ export async function setLinkStar(opts: { url: string; clientId: string; starred
 
 export async function searchLinksFts(
   query: string,
-  opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string; authoredBy?: string }
+  opts: {
+    category?: string;
+    days?: number;
+    limit?: number;
+    sort?: string;
+    source?: string;
+    sharedBy?: string;
+    authoredBy?: string;
+    pinned?: boolean;
+  }
 ): Promise<LinkRow[]> {
   const ftsQuery = buildLinksFtsQuery(query);
   const terms = normalizeLinkSearchTerms(query);
@@ -5411,6 +5420,9 @@ export async function searchLinksFts(
       where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
     } else if (opts.authoredBy) {
       where.push(`l.authored_by LIKE $${pi++}`); params.push(`%${opts.authoredBy}%`);
+    }
+    if (opts.pinned) {
+      where.push("l.pinned = 1");
     }
     const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
     const limit = Math.min(Math.max(1, opts.limit || 50), 200);
@@ -5477,6 +5489,9 @@ export async function searchLinksFts(
     where.push(`l.authored_by LIKE $${pi++}`);
     params.push(`%${opts.authoredBy}%`);
   }
+  if (opts.pinned) {
+    where.push("l.pinned = 1");
+  }
   const whereSql = `WHERE ${where.join(" AND ")}`;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
@@ -5495,6 +5510,19 @@ export async function searchLinksFts(
   return rows as LinkRow[];
 }
 
+function mergeLinkRows(primary: LinkRow[], secondary: LinkRow[], limit: number): LinkRow[] {
+  const merged: LinkRow[] = [];
+  const seen = new Set<string>();
+  for (const row of [...primary, ...secondary]) {
+    const key = row.url_hash || row.url;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+    if (merged.length >= limit) break;
+  }
+  return merged;
+}
+
 export async function searchLinks(opts: {
   query: string;
   category?: string;
@@ -5509,6 +5537,26 @@ export async function searchLinks(opts: {
 }): Promise<LinkRow[]> {
   if (opts.sharedBy) {
     return searchLinksFts(opts.query, opts);
+  }
+  if (!opts.semanticOnly) {
+    const ftsRows = await searchLinksFts(opts.query, opts);
+    const semanticRows = await searchHybridLinks({
+      query: opts.query,
+      category: opts.category,
+      days: opts.days,
+      limit: opts.limit,
+      source: opts.source,
+      sharedBy: opts.sharedBy,
+      authoredBy: opts.authoredBy,
+      pinned: opts.pinned,
+    });
+    if (ftsRows.length > 0) {
+      return mergeLinkRows(ftsRows, semanticRows || [], Math.min(Math.max(1, opts.limit || 50), 200));
+    }
+    if (semanticRows && semanticRows.length > 0) {
+      return semanticRows;
+    }
+    return [];
   }
   const semanticRows = await searchHybridLinks({
     query: opts.query,
