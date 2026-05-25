@@ -353,7 +353,10 @@ export async function searchHybridLinks(opts: {
 
   const limit = Math.max(1, Math.min(opts.limit || 50, 200));
   const params: unknown[] = [];
-  const whereParts: string[] = [];
+  const whereParts: string[] = [
+    "l.url NOT LIKE 'https://matrix.to/#/@%'",
+    "l.url NOT LIKE 'http://matrix.to/#/@%'",
+  ];
 
   if (opts.category) {
     params.push(opts.category);

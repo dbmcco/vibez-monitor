@@ -128,6 +128,7 @@ describe("semantic pgvector search", () => {
       dimensions: 64,
     });
     expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(String(queryMock.mock.calls[0][0])).toContain("matrix.to/#/@");
     expect(rows?.[0]).toMatchObject({
       url: "https://wiki.thirdgulfwar.com/",
       title: "wiki.thirdgulfwar.com",
