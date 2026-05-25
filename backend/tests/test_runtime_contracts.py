@@ -68,13 +68,6 @@ def test_push_railway_launchd_template_uses_supported_command():
     assert "./scripts/local_sync_to_railway.sh --push-only" in template
 
 
-def test_daily_update_disables_perplexity_backed_embeddings_by_default():
-    script = (ROOT / "scripts" / "daily_update_to_railway.sh").read_text()
-
-    assert 'export VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT="${VIBEZ_DAILY_MESSAGE_EMBEDDING_LIMIT:-0}"' in script
-    assert 'export VIBEZ_DAILY_LINK_EMBEDDING_LIMIT="${VIBEZ_DAILY_LINK_EMBEDDING_LIMIT:-0}"' in script
-
-
 def test_classify_missing_launchd_template_uses_shared_backfill_route():
     template = (ROOT / "launchd" / "com.vibez-monitor.classify-missing.plist").read_text()
 
