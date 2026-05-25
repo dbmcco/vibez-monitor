@@ -417,12 +417,14 @@ function buildLinkTermMatchScore(
   alias: string,
   terms: string[],
   startIndex: number,
+  extraSearchSql = "",
 ): {
   sql: string;
   params: unknown[];
   nextIndex: number;
 } {
-  const searchable = `lower(coalesce(${alias}.title,'') || ' ' || coalesce(${alias}.relevance,'') || ' ' || coalesce(${alias}.category,'') || ' ' || coalesce(${alias}.url,''))`;
+  const extra = extraSearchSql ? ` || ' ' || ${extraSearchSql}` : "";
+  const searchable = `lower(coalesce(${alias}.title,'') || ' ' || coalesce(${alias}.relevance,'') || ' ' || coalesce(${alias}.category,'') || ' ' || coalesce(${alias}.url,'')${extra})`;
   if (!terms.length) {
     return { sql: "0", params: [], nextIndex: startIndex };
   }
@@ -5390,12 +5392,13 @@ export async function searchLinksFts(
   const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
 
   if (ftsExists) {
-    const matchScore = buildLinkTermMatchScore("l", terms, 1);
+    const extraSearchSql = `coalesce(${sharedByExpr}, '') || ' ' || coalesce(l.source_group, '') || ' ' || coalesce(l.authored_by, '')`;
+    const matchScore = buildLinkTermMatchScore("l", terms, 1, extraSearchSql);
     let pi = matchScore.nextIndex;
     const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
     const params: unknown[] = [...matchScore.params];
-    const ftsTsvector = "to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,''))";
-    const ftsQueryParam = `plainto_tsquery('english', $${pi++})`;
+    const ftsTsvector = `to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,'') || ' ' || ${extraSearchSql})`;
+    const ftsQueryParam = `websearch_to_tsquery('english', $${pi++})`;
     params.push(ftsQuery);
     if (opts.category) {
       where.push(`l.category = $${pi++}`);
@@ -5450,16 +5453,16 @@ export async function searchLinksFts(
   const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
   const params: unknown[] = [];
   const likeClauses = terms.map(() => {
-    const clause = `(l.title LIKE $${pi} OR l.relevance LIKE $${pi + 2} OR l.category LIKE $${pi + 1} OR l.url LIKE $${pi + 3})`;
-    pi += 4;
+    const clause = `(l.title LIKE $${pi} OR l.category LIKE $${pi + 1} OR l.relevance LIKE $${pi + 2} OR l.url LIKE $${pi + 3} OR ${sharedByExpr} LIKE $${pi + 4} OR l.source_group LIKE $${pi + 5} OR l.authored_by LIKE $${pi + 6})`;
+    pi += 7;
     return clause;
   });
   pi = 1;
   where.push(`(${likeClauses.join(" OR ")})`);
   for (const t of terms) {
     const p = `%${t}%`;
-    params.push(p, p, p, p);
-    pi += 4;
+    params.push(p, p, p, p, p, p, p);
+    pi += 7;
   }
   if (opts.category) {
     where.push(`l.category = $${pi++}`);

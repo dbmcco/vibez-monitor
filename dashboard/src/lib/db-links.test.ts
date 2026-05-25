@@ -236,8 +236,8 @@ describe("link queries", () => {
     };
     const linkSearch = await import("@/lib/link-search");
     const semantic = await import("@/lib/semantic");
-    vi.mocked(linkSearch.buildLinksFtsQuery).mockReturnValue(`"bugout"`);
-    vi.mocked(linkSearch.normalizeLinkSearchTerms).mockReturnValue(["bugout"]);
+    vi.mocked(linkSearch.buildLinksFtsQuery).mockReturnValue(`"taylor" OR "bugout"`);
+    vi.mocked(linkSearch.normalizeLinkSearchTerms).mockReturnValue(["taylor", "bugout"]);
     vi.mocked(semantic.searchHybridLinks).mockResolvedValue([
       {
         id: 2,
@@ -281,14 +281,17 @@ describe("link queries", () => {
       });
 
     const { searchLinks } = await import("./db");
-    const links = await searchLinks({ query: "bugout", limit: 10 });
+    const links = await searchLinks({ query: "taylor bugout", limit: 10 });
 
     expect(links.map((link) => link.url)).toEqual([
       "https://github.com/taylorsatula/bugout",
       "https://github.com/example/other",
     ]);
     expect(semantic.searchHybridLinks).toHaveBeenCalledWith(expect.objectContaining({
-      query: "bugout",
+      query: "taylor bugout",
     }));
+    const ftsSql = String(queryMock.mock.calls[2][0]);
+    expect(ftsSql).toContain("websearch_to_tsquery");
+    expect(ftsSql).toContain("shared_by");
   });
 });
