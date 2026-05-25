@@ -5383,87 +5383,16 @@ export async function searchLinksFts(
   const terms = normalizeLinkSearchTerms(query);
   if (!ftsQuery || !terms.length) return getLinks(opts);
 
-  // Check if FTS table exists
-  const { rows: ftsCheck } = await pool.query(
-    "SELECT table_name FROM information_schema.tables WHERE table_name = $1",
-    ["links_fts"],
-  );
-  const ftsExists = ftsCheck.length > 0;
   const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
 
-  if (ftsExists) {
-    const extraSearchSql = `coalesce(${sharedByExpr}, '') || ' ' || coalesce(l.source_group, '') || ' ' || coalesce(l.authored_by, '')`;
-    const matchScore = buildLinkTermMatchScore("l", terms, 1, extraSearchSql);
-    let pi = matchScore.nextIndex;
-    const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
-    const params: unknown[] = [...matchScore.params];
-    const ftsTsvector = `to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,'') || ' ' || ${extraSearchSql})`;
-    const ftsQueryParam = `websearch_to_tsquery('english', $${pi++})`;
-    params.push(ftsQuery);
-    if (opts.category) {
-      where.push(`l.category = $${pi++}`);
-      params.push(opts.category);
-    }
-    if (opts.days) {
-      const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-      where.push(`l.last_seen >= $${pi++}`);
-      params.push(cutoff);
-    }
-    if (opts.source && opts.source !== "all") {
-      const patterns: Record<string, string> = {
-        github: "%github.com%", x: "%x.com%", youtube: "%youtu%",
-        substack: "%substack.com%", medium: "%medium.com%", arxiv: "%arxiv.org%",
-        reddit: "%reddit.com%", hackernews: "%news.ycombinator.com%",
-        linkedin: "%linkedin.com%", notion: "%notion.so%", gdocs: "%docs.google.com%",
-      };
-      if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
-    }
-    if (opts.sharedBy) { where.push(`${sharedByExpr} LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
-    if (opts.authoredBy === "any") {
-      where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
-    } else if (opts.authoredBy) {
-      where.push(`l.authored_by LIKE $${pi++}`); params.push(`%${opts.authoredBy}%`);
-    }
-    if (opts.pinned) {
-      where.push("l.pinned = 1");
-    }
-    const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
-    const limit = Math.min(Math.max(1, opts.limit || 50), 200);
-    params.push(limit);
-
-    const { rows } = await pool.query(
-      `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
-              ${sharedByExpr} AS shared_by, l.source_group, l.first_seen, l.last_seen,
-              l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
-              (${matchScore.sql}) AS term_match_score,
-              ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
-       FROM links l
-       ${joinSql}
-       WHERE ${ftsTsvector} @@ ${ftsQueryParam}
-       ${extraWhere}
-       ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
-       LIMIT $${pi++}`,
-      params,
-    );
-    return rows as LinkRow[];
-  }
-
-  // Fallback: LIKE-based search when FTS table hasn't been built yet
-  let pi = 1;
+  const extraSearchSql = `coalesce(${sharedByExpr}, '') || ' ' || coalesce(l.source_group, '') || ' ' || coalesce(l.authored_by, '')`;
+  const matchScore = buildLinkTermMatchScore("l", terms, 1, extraSearchSql);
+  let pi = matchScore.nextIndex;
   const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
-  const params: unknown[] = [];
-  const likeClauses = terms.map(() => {
-    const clause = `(l.title LIKE $${pi} OR l.category LIKE $${pi + 1} OR l.relevance LIKE $${pi + 2} OR l.url LIKE $${pi + 3} OR ${sharedByExpr} LIKE $${pi + 4} OR l.source_group LIKE $${pi + 5} OR l.authored_by LIKE $${pi + 6})`;
-    pi += 7;
-    return clause;
-  });
-  pi = 1;
-  where.push(`(${likeClauses.join(" OR ")})`);
-  for (const t of terms) {
-    const p = `%${t}%`;
-    params.push(p, p, p, p, p, p, p);
-    pi += 7;
-  }
+  const params: unknown[] = [...matchScore.params];
+  const ftsTsvector = `to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,'') || ' ' || ${extraSearchSql})`;
+  const ftsQueryParam = `websearch_to_tsquery('english', $${pi++})`;
+  params.push(ftsQuery);
   if (opts.category) {
     where.push(`l.category = $${pi++}`);
     params.push(opts.category);
@@ -5482,31 +5411,30 @@ export async function searchLinksFts(
     };
     if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
   }
-  if (opts.sharedBy) {
-    where.push(`${sharedByExpr} LIKE $${pi++}`);
-    params.push(`%${opts.sharedBy}%`);
-  }
+  if (opts.sharedBy) { where.push(`${sharedByExpr} LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
   if (opts.authoredBy === "any") {
     where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
   } else if (opts.authoredBy) {
-    where.push(`l.authored_by LIKE $${pi++}`);
-    params.push(`%${opts.authoredBy}%`);
+    where.push(`l.authored_by LIKE $${pi++}`); params.push(`%${opts.authoredBy}%`);
   }
   if (opts.pinned) {
     where.push("l.pinned = 1");
   }
-  const whereSql = `WHERE ${where.join(" AND ")}`;
+  const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
 
   const { rows } = await pool.query(
-    `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, ${sharedByExpr} AS shared_by,
-            l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
-            l.report_date, l.authored_by, l.pinned
+    `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
+            ${sharedByExpr} AS shared_by, l.source_group, l.first_seen, l.last_seen,
+            l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
+            (${matchScore.sql}) AS term_match_score,
+            ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
      FROM links l
      ${joinSql}
-     ${whereSql}
-     ORDER BY l.value_score DESC, l.last_seen DESC
+     WHERE ${ftsTsvector} @@ ${ftsQueryParam}
+     ${extraWhere}
+     ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
      LIMIT $${pi++}`,
     params,
   );

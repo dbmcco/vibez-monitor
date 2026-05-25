@@ -258,7 +258,6 @@ describe("link queries", () => {
       },
     ]);
     queryMock
-      .mockResolvedValueOnce({ rows: [{ table_name: "links_fts" }] })
       .mockResolvedValueOnce({ rows: [{ raw_events: null, raw_event_links: null }] })
       .mockResolvedValueOnce({
         rows: [{
@@ -290,7 +289,7 @@ describe("link queries", () => {
     expect(semantic.searchHybridLinks).toHaveBeenCalledWith(expect.objectContaining({
       query: "taylor bugout",
     }));
-    const ftsSql = String(queryMock.mock.calls[2][0]);
+    const ftsSql = String(queryMock.mock.calls[1][0]);
     expect(ftsSql).toContain("websearch_to_tsquery");
     expect(ftsSql).toContain("shared_by");
   });
