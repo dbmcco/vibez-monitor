@@ -292,4 +292,49 @@ describe("Postgres push ingestion", () => {
     expect(rawEventLinkParams[0]).toEqual(expect.arrayContaining(["https://example.com/harness"]));
     expect(String(rawEventLinkParams[0])).not.toContain("matrix.to");
   });
+
+  test("does not upsert Matrix profile URLs from direct link payloads or embeddings", async () => {
+    const { applyPgvectorPayload, applyPostgresPayload } = await import("./push-ingest");
+
+    const postgresResult = await applyPostgresPayload({
+      links: [
+        {
+          url: "https://matrix.to/#/@whatsapp_lid-123:beeper.local",
+          url_hash: "matrix-profile-hash",
+        },
+        {
+          url: "https://example.com/harness",
+          url_hash: "example-harness-hash",
+        },
+      ],
+      link_embeddings: [
+        {
+          link_id: 1,
+          url: "https://matrix.to/#/@whatsapp_lid-456:beeper.local",
+          url_hash: "matrix-profile-embedding-hash",
+          embedding: `[${new Array(256).fill(0.1).join(",")}]`,
+        },
+      ],
+    });
+
+    expect(postgresResult?.links_written).toBe(1);
+    const postgresParams = queryMock.mock.calls.map(([, params]) => JSON.stringify(params));
+    expect(postgresParams.join("\n")).toContain("https://example.com/harness");
+    expect(postgresParams.join("\n")).not.toContain("matrix.to/#/@whatsapp");
+
+    queryMock.mockClear();
+    const pgvectorResult = await applyPgvectorPayload({
+      link_embeddings: [
+        {
+          link_id: 1,
+          url: "https://matrix.to/#/@whatsapp_lid-789:beeper.local",
+          url_hash: "matrix-profile-vector-hash",
+          embedding: `[${new Array(256).fill(0.1).join(",")}]`,
+        },
+      ],
+    });
+
+    expect(pgvectorResult.link_embeddings_written).toBe(0);
+    expect(queryMock.mock.calls.map(([, params]) => JSON.stringify(params)).join("\n")).not.toContain("matrix.to/#/@whatsapp");
+  });
 });

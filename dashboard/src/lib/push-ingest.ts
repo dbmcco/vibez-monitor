@@ -537,7 +537,7 @@ function extractLinks(body: string): Array<{ url: string; normalized_url: string
     } catch {
       normalizedUrl = url.trim();
     }
-    if (host === "matrix.to" && url.includes("#/@")) {
+    if (isMatrixProfileUrl(url)) {
       continue;
     }
     links.push({
@@ -548,6 +548,17 @@ function extractLinks(body: string): Array<{ url: string; normalized_url: string
     });
   }
   return links;
+}
+
+function isMatrixProfileUrl(url: string | null | undefined): boolean {
+  const raw = String(url || "").trim().toLowerCase();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.hostname === "matrix.to" && parsed.hash.startsWith("#/@");
+  } catch {
+    return raw.startsWith("https://matrix.to/#/@") || raw.startsWith("http://matrix.to/#/@");
+  }
 }
 
 export async function applyBeeperBatchPayload(
@@ -1265,7 +1276,7 @@ export async function applyPgvectorPayload(
     (row) => row && isValidMessageEmbedding(row),
   );
   const linkEmbeddings = asArray<LinkEmbeddingPayload>(payload.link_embeddings).filter(
-    (row) => row && isValidLinkEmbedding(row),
+    (row) => row && isValidLinkEmbedding(row) && !isMatrixProfileUrl(row.url),
   );
 
   const result = {
@@ -1301,14 +1312,14 @@ export async function applyPostgresPayload(
   await ensurePostgresCoreSchema(pool);
 
   const records = asArray<RecordPayload>(payload.records);
-  const links = asArray<LinkPayload>(payload.links);
+  const links = asArray<LinkPayload>(payload.links).filter((link) => !isMatrixProfileUrl(link?.url));
   const dailyReports = asArray<DailyReportPayload>(payload.daily_reports);
   const syncStateEntries = sanitizeSyncState(payload.sync_state);
   const messageEmbeddings = asArray<MessageEmbeddingPayload>(payload.message_embeddings).filter(
     (row) => row && isValidMessageEmbedding(row),
   );
   const linkEmbeddings = asArray<LinkEmbeddingPayload>(payload.link_embeddings).filter(
-    (row) => row && isValidLinkEmbedding(row),
+    (row) => row && isValidLinkEmbedding(row) && !isMatrixProfileUrl(row.url),
   );
 
   const result = {
@@ -1604,6 +1615,8 @@ export async function backfillPostgresCoreFromEmbeddings(): Promise<{
            first_seen, last_seen, mention_count, value_score, report_date::text, authored_by,
            CASE WHEN pinned THEN 1 ELSE 0 END
     FROM ${linkTable}
+    WHERE url NOT LIKE 'https://matrix.to/#/@%'
+      AND url NOT LIKE 'http://matrix.to/#/@%'
     ON CONFLICT (url_hash) DO UPDATE SET
       url = EXCLUDED.url,
       title = EXCLUDED.title,
@@ -1630,7 +1643,7 @@ export function applyPushPayload(
   payload: PushPayload,
 ): PushResult {
   const records = asArray<RecordPayload>(payload.records);
-  const links = asArray<LinkPayload>(payload.links);
+  const links = asArray<LinkPayload>(payload.links).filter((link) => !isMatrixProfileUrl(link?.url));
   const dailyReports = asArray<DailyReportPayload>(payload.daily_reports);
   const wisdomTopics = asArray<WisdomTopicPayload>(payload.wisdom_topics);
   const wisdomItems = asArray<WisdomItemPayload>(payload.wisdom_items);
