@@ -60,10 +60,30 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Capture key for /api/ingest/beeper/batch (defaults to VIBEZ_CAPTURE_API_KEY)",
     )
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--capture-only",
         action="store_true",
         help="Push only raw Beeper capture batches to Railway ingest.",
+    )
+    mode_group.add_argument(
+        "--analysis-only",
+        action="store_true",
+        help="Push only derived analysis tables to Railway admin ingest.",
+    )
+    parser.add_argument(
+        "--analysis-section",
+        action="append",
+        choices=[
+            "links",
+            "daily_reports",
+            "wisdom_topics",
+            "wisdom_items",
+            "wisdom_recommendations",
+            "message_embeddings",
+            "link_embeddings",
+        ],
+        help="Limit --analysis-only to a specific derived table. May be repeated.",
     )
     parser.add_argument(
         "--spool-dir",
@@ -764,18 +784,19 @@ def push_analysis_tables(
     cutoff_ts: int | None = None,
     allowed_groups: set[str] | None = None,
     excluded_groups: set[str] | None = None,
+    section_names: set[str] | None = None,
 ) -> None:
     resolved_allowed = allowed_groups or set()
     resolved_excluded = excluded_groups or set()
-    sections: list[tuple[str, list[dict[str, Any]]]] = [
-        ("links", fetch_links()),
-        ("daily_reports", fetch_daily_reports()),
-        ("wisdom_topics", fetch_wisdom_topics()),
-        ("wisdom_items", fetch_wisdom_items()),
-        ("wisdom_recommendations", fetch_wisdom_recommendations()),
+    sections: list[tuple[str, Any]] = [
+        ("links", fetch_links),
+        ("daily_reports", fetch_daily_reports),
+        ("wisdom_topics", fetch_wisdom_topics),
+        ("wisdom_items", fetch_wisdom_items),
+        ("wisdom_recommendations", fetch_wisdom_recommendations),
         (
             "message_embeddings",
-            fetch_message_embeddings(
+            lambda: fetch_message_embeddings(
                 resolved_allowed,
                 resolved_excluded,
                 cutoff_ts=cutoff_ts,
@@ -783,14 +804,17 @@ def push_analysis_tables(
         ),
         (
             "link_embeddings",
-            fetch_link_embeddings(
+            lambda: fetch_link_embeddings(
                 resolved_allowed,
                 resolved_excluded,
                 cutoff_ts=cutoff_ts,
             ),
         ),
     ]
-    for section_name, rows in sections:
+    for section_name, fetch_rows in sections:
+        if section_names is not None and section_name not in section_names:
+            continue
+        rows = fetch_rows()
         if not rows:
             continue
         resolved_batch_size = (
@@ -814,7 +838,7 @@ def push_analysis_tables(
                 f"(remote {section_name}_written={result.get(f'{section_name}_written', 0)})",
                 flush=True,
             )
-    if sync_state:
+    if sync_state and section_names is None:
         push_section(remote_url, push_key, access_cookie, {"sync_state": sync_state})
         print(f"  sync_state: pushed {len(sync_state)} keys", flush=True)
 
@@ -884,6 +908,37 @@ def main() -> int:
         close_db_connection()
         return 0
 
+    selected_analysis_sections = set(args.analysis_section or []) or None
+    if args.analysis_only:
+        sync_state = (
+            fetch_sync_state(allowed_groups, excluded_groups)
+            if selected_analysis_sections is None
+            else {}
+        )
+        window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"
+        print(f"Window: {window_label}")
+        if selected_analysis_sections:
+            print(f"Analysis sections: {', '.join(sorted(selected_analysis_sections))}")
+        if args.dry_run:
+            print("Dry run only; no remote writes.")
+            close_db_connection()
+            return 0
+        access_cookie = login_access_cookie(remote_url, access_code)
+        push_analysis_tables(
+            remote_url=remote_url,
+            push_key=push_key,
+            access_cookie=access_cookie,
+            sync_state=sync_state,
+            batch_size=batch_size,
+            cutoff_ts=cutoff_ts,
+            allowed_groups=allowed_groups,
+            excluded_groups=excluded_groups,
+            section_names=selected_analysis_sections,
+        )
+        print("Analysis push complete.")
+        close_db_connection()
+        return 0
+
     records = fetch_records(cutoff_ts, allowed_groups, excluded_groups)
     sync_state = fetch_sync_state(allowed_groups, excluded_groups)
 
@@ -925,6 +980,7 @@ def main() -> int:
         cutoff_ts=cutoff_ts,
         allowed_groups=allowed_groups,
         excluded_groups=excluded_groups,
+        section_names=selected_analysis_sections,
     )
     print(
         f"Push complete: {len(records)} records over {batches} message batches "

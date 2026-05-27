@@ -200,6 +200,66 @@ describe("listAtlasEditions", () => {
       contentType: "image/png",
     });
   });
+
+  test("publishes Atlas editions to Postgres without writing local artifact files in production", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-db-first-"));
+    queryMock.mockResolvedValue({ rows: [], rowCount: 1 });
+    process.env = {
+      ...ORIGINAL_ENV,
+      NODE_ENV: "production",
+      VIBEZ_DATABASE_URL: "postgres://atlas-editions",
+      VIBEZ_ATLAS_ARTIFACT_PATH: path.join(tempDir, "atlas-48.json"),
+    };
+
+    try {
+      const { writeAtlasArtifact } = await import("./atlas-artifact");
+      await writeAtlasArtifact({
+        windowHours: 48,
+        atlas: sampleAtlas("2026-05-27"),
+        editorialReport: sampleEditorialReport("2026-05-27", "The May 27 Paper"),
+      });
+
+      const insertCall = queryMock.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO atlas_editions"));
+      expect(insertCall?.[1]?.slice(0, 4)).toEqual([
+        "2026-05-27",
+        "daily",
+        48,
+        expect.stringMatching(/^2026-/),
+      ]);
+      expect(fs.existsSync(path.join(tempDir, "atlas-48.json"))).toBe(false);
+      expect(fs.existsSync(path.join(tempDir, "editions", "2026-05-27-daily-48.json"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails publish and skips local artifact files when Postgres archive fails", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-db-fail-"));
+    queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    process.env = {
+      ...ORIGINAL_ENV,
+      NODE_ENV: "production",
+      VIBEZ_DATABASE_URL: "postgres://atlas-editions",
+      VIBEZ_ATLAS_ARTIFACT_PATH: path.join(tempDir, "atlas-48.json"),
+    };
+
+    try {
+      const { writeAtlasArtifact } = await import("./atlas-artifact");
+      await expect(writeAtlasArtifact({
+        windowHours: 48,
+        atlas: sampleAtlas("2026-05-27"),
+        editorialReport: sampleEditorialReport("2026-05-27", "The May 27 Paper"),
+      })).rejects.toThrow("database unavailable");
+
+      expect(fs.existsSync(path.join(tempDir, "atlas-48.json"))).toBe(false);
+      expect(fs.existsSync(path.join(tempDir, "editions", "2026-05-27-daily-48.json"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("file-backed Atlas edition archive", () => {

@@ -70,6 +70,15 @@ function atlasPostgresUrl(): string {
   return (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || process.env.VIBEZ_PGVECTOR_URL || "").trim();
 }
 
+function atlasDatabaseRequired(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.VIBEZ_ATLAS_REQUIRE_DATABASE === "1";
+}
+
+function atlasFileArtifactWriteEnabled(): boolean {
+  if (process.env.VIBEZ_ATLAS_FILE_ARTIFACT_WRITE === "1") return true;
+  return !atlasDatabaseRequired();
+}
+
 function getAtlasPool(): Pool | null {
   const url = atlasPostgresUrl();
   if (!url) return null;
@@ -712,7 +721,8 @@ export async function writeAtlasArtifact({
   editorialReport: AtlasEditorialReport;
 }): Promise<string> {
   const artifactPath = atlasArtifactPath(windowHours);
-  fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+  const editionType = editionTypeForWindow(windowHours);
+  const editionDate = editorialReport.issue.date || atlas.window.end.slice(0, 10);
   const payload: AtlasArtifactPayload = {
     atlas,
     editorial_report: editorialReport,
@@ -723,39 +733,37 @@ export async function writeAtlasArtifact({
       source: "configured_model_route",
     },
   };
-  fs.writeFileSync(artifactPath, `${JSON.stringify(payload, null, 2)}\n`);
-  const editionType = editionTypeForWindow(windowHours);
-  const editionPath = atlasEditionArtifactPath(
-    windowHours,
-    editorialReport.issue.date || atlas.window.end.slice(0, 10),
-    editionType,
-  );
-  fs.mkdirSync(path.dirname(editionPath), { recursive: true });
-  fs.writeFileSync(editionPath, `${JSON.stringify(payload, null, 2)}\n`);
+
   const pool = getAtlasPool();
   if (pool) {
-    try {
-      await ensureAtlasEditionSchema(pool);
-      await pool.query(
-        `INSERT INTO atlas_editions
-         (edition_date, edition_type, window_hours, publication_time, payload, updated_at)
-         VALUES ($1, $2, $3, $4, $5::jsonb, now())
-         ON CONFLICT (edition_date, edition_type) DO UPDATE SET
-           window_hours = EXCLUDED.window_hours,
-           publication_time = EXCLUDED.publication_time,
-           payload = EXCLUDED.payload,
-           updated_at = now()`,
-        [
-          editorialReport.issue.date,
-          editionType,
-          windowHours,
-          payload.artifact.generated_at,
-          JSON.stringify(payload),
-        ],
-      );
-    } catch (error) {
-      console.error("writeAtlasArtifact postgres archive failed:", error);
-    }
+    await ensureAtlasEditionSchema(pool);
+    await pool.query(
+      `INSERT INTO atlas_editions
+       (edition_date, edition_type, window_hours, publication_time, payload, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, now())
+       ON CONFLICT (edition_date, edition_type) DO UPDATE SET
+         window_hours = EXCLUDED.window_hours,
+         publication_time = EXCLUDED.publication_time,
+         payload = EXCLUDED.payload,
+         updated_at = now()`,
+      [
+        editionDate,
+        editionType,
+        windowHours,
+        payload.artifact.generated_at,
+        JSON.stringify(payload),
+      ],
+    );
+  } else if (atlasDatabaseRequired()) {
+    throw new Error("Atlas publish requires VIBEZ_DATABASE_URL/DATABASE_URL/VIBEZ_PGVECTOR_URL for durable database archive.");
+  }
+
+  if (atlasFileArtifactWriteEnabled()) {
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(artifactPath, `${JSON.stringify(payload, null, 2)}\n`);
+    const editionPath = atlasEditionArtifactPath(windowHours, editionDate, editionType);
+    fs.mkdirSync(path.dirname(editionPath), { recursive: true });
+    fs.writeFileSync(editionPath, `${JSON.stringify(payload, null, 2)}\n`);
   }
   return artifactPath;
 }
