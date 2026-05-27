@@ -55,6 +55,8 @@ def test_config_defaults(tmp_path):
     assert cfg.openai_api_key == ""
     assert cfg.anthropic_api_key == ""
     assert cfg.matrix_homeserver == "https://matrix.beeper.com"
+    assert cfg.matrix_sync_enabled is False
+    assert cfg.matrix_source_name == "matrix"
     assert cfg.sync_timeout_ms == 30000
     assert cfg.google_groups_bootstrap_days == 14
     assert cfg.google_groups_bootstrap_max_uids == 2000
@@ -132,6 +134,24 @@ def test_config_allowed_groups_are_loaded(tmp_path):
         "Security",
         "audio intelligence",
     )
+
+
+def test_config_matrix_sync_env(tmp_path):
+    env = {
+        "VIBEZ_DB_PATH": str(tmp_path / "test.db"),
+        "BEEPER_DB_PATH": str(tmp_path / "nonexistent.db"),
+        "MATRIX_SYNC_ENABLED": "true",
+        "MATRIX_SOURCE_NAME": "mautrix",
+        "MATRIX_HOMESERVER": "https://matrix-vibez.example",
+        "MATRIX_ACCESS_TOKEN": "matrix-token",
+    }
+    with patch.dict(os.environ, env, clear=False):
+        cfg = Config.from_env()
+
+    assert cfg.matrix_sync_enabled is True
+    assert cfg.matrix_source_name == "mautrix"
+    assert cfg.matrix_homeserver == "https://matrix-vibez.example"
+    assert cfg.matrix_access_token == "matrix-token"
 
 
 def test_config_public_mode_disables_contribution_intel_by_default(tmp_path):

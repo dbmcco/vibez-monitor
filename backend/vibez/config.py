@@ -47,6 +47,8 @@ class Config:
     ollama_base_url: str = "http://localhost:11434"
     matrix_homeserver: str = "https://matrix.beeper.com"
     matrix_access_token: str = ""
+    matrix_sync_enabled: bool = False
+    matrix_source_name: str = "matrix"
     beeper_db_path: Path = field(
         default_factory=lambda: Path.home()
         / "Library/Application Support/BeeperTexts/account.db"
@@ -141,6 +143,11 @@ class Config:
                 "MATRIX_HOMESERVER", "https://matrix.beeper.com"
             ),
             matrix_access_token=token,
+            matrix_sync_enabled=_parse_bool(
+                os.environ.get("MATRIX_SYNC_ENABLED"), False
+            ),
+            matrix_source_name=os.environ.get("MATRIX_SOURCE_NAME", "matrix").strip()
+            or "matrix",
             beeper_db_path=beeper_db,
             beeper_api_url=os.environ.get("BEEPER_API_URL", "http://localhost:23373"),
             beeper_api_token=os.environ.get("BEEPER_API_TOKEN", ""),

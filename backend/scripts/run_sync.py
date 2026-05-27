@@ -13,6 +13,7 @@ from vibez.google_groups_sync import (
     canonical_group_key,
     sync_loop as google_groups_sync_loop,
 )
+from vibez.matrix_sync import sync_loop as matrix_sync_loop
 
 
 def resolve_pgvector_index_url(config: Config) -> str:
@@ -46,9 +47,14 @@ async def main():
         }
     beeper_enabled = bool(config.beeper_api_token)
     google_enabled = bool(config.google_groups_enabled and google_groups)
-    if not (beeper_enabled or google_enabled):
+    matrix_enabled = bool(
+        config.matrix_sync_enabled
+        and config.matrix_homeserver
+        and config.matrix_access_token
+    )
+    if not (beeper_enabled or google_enabled or matrix_enabled):
         logger.error(
-            "No sync source configured. Set BEEPER_API_TOKEN and/or GOOGLE_GROUPS_* env vars."
+            "No sync source configured. Set BEEPER_API_TOKEN, GOOGLE_GROUPS_* env vars, or MATRIX_SYNC_ENABLED=true with MATRIX_ACCESS_TOKEN."
         )
         sys.exit(1)
 
@@ -58,6 +64,16 @@ async def main():
         logger.info("Beeper API: %s (poll=%ds)", config.beeper_api_url, config.poll_interval)
     else:
         logger.info("Beeper sync disabled (BEEPER_API_TOKEN missing)")
+    if matrix_enabled:
+        logger.info(
+            "Matrix sync: %s source=%s",
+            config.matrix_homeserver,
+            config.matrix_source_name,
+        )
+    elif config.matrix_sync_enabled:
+        logger.warning(
+            "Matrix sync requested but MATRIX_HOMESERVER or MATRIX_ACCESS_TOKEN is missing; source disabled."
+        )
     if google_enabled:
         logger.info(
             "Google Groups IMAP: %s:%s mailbox=%s (poll=%ds) groups=%s bootstrap_days=%d bootstrap_cap=%d",
@@ -168,6 +184,15 @@ async def main():
                         bootstrap_max_uids=config.google_groups_bootstrap_max_uids,
                         on_messages=on_messages,
                     ),
+                )
+            )
+        )
+    if matrix_enabled:
+        tasks.append(
+            asyncio.create_task(
+                run_source_with_restart(
+                    "Matrix",
+                    lambda: matrix_sync_loop(config, on_messages=on_messages),
                 )
             )
         )
