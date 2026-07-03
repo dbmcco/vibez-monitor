@@ -82,6 +82,20 @@ build_worktree_snapshot() {
   done < <(git -C "$ROOT_DIR" ls-files -co --exclude-standard)
 }
 
+copy_generated_artifacts() {
+  local snapshot_dir="$1"
+  if [[ "${VIBEZ_DEPLOY_COPY_GENERATED:-1}" != "1" ]]; then
+    echo "Skipping generated artifacts for Railway deploy snapshot."
+    return 0
+  fi
+  if [[ -d "$ROOT_DIR/dashboard/.generated" ]]; then
+    mkdir -p "$snapshot_dir/dashboard"
+    cp -a "$ROOT_DIR/dashboard/.generated" "$snapshot_dir/dashboard/.generated"
+    rm -rf "$snapshot_dir/dashboard/generated"
+    cp -a "$ROOT_DIR/dashboard/.generated" "$snapshot_dir/dashboard/generated"
+  fi
+}
+
 check_railway_auth() {
   local token="${RAILWAY_API_TOKEN:-${RAILWAY_TOKEN:-}}"
   if [[ -n "$token" ]]; then
@@ -292,6 +306,7 @@ main() {
       snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/vibez-deploy-XXXXXX")"
       if [[ "$resolved_source" == "worktree" ]]; then
         build_worktree_snapshot "$snapshot_dir"
+        copy_generated_artifacts "$snapshot_dir"
       else
         build_head_snapshot "$snapshot_dir"
       fi
@@ -351,4 +366,3 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi
-

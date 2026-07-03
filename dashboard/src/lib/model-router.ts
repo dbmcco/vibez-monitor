@@ -1,18 +1,35 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 export interface ModelRoute {
-  provider: "openai" | "anthropic" | "openrouter" | "ollama";
+  provider: "openai" | "anthropic" | "openrouter" | "ollama" | "xai" | "atlascloud";
   model: string;
-  mode: "text" | "json" | "embedding";
+  mode: "text" | "json" | "embedding" | "image";
   max_tokens: number;
   temperature: number;
   timeout_ms: number;
   base_url?: string;
+  api_key_env?: string;
   dimensions?: number;
+  context_window?: number;
+  aspect_ratio?: string;
+  negative_prompt?: string;
+  num_images?: number;
+  reasoning_effort?: "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
+  reasoning_exclude?: boolean;
+  reasoning_enabled?: boolean;
+  reasoning_max_tokens?: number;
+  fallback_model?: string;
+  fallback_timeout_ms?: number;
 }
+
+type ModelRouteManifestEntry =
+  Partial<ModelRoute> & {
+    registry_route?: string;
+  };
 
 interface ModelMessage {
   role: "system" | "user" | "assistant";
@@ -35,15 +52,44 @@ export interface ModelEmbeddingResult {
   provider: string;
 }
 
+export interface ModelImageResult {
+  data: Buffer;
+  contentType: string;
+  model: string;
+  provider: string;
+}
+
 const ROUTE_CACHE = new Map<string, Record<string, ModelRoute>>();
+const REGISTRY_CACHE = new Map<string, Record<string, Record<string, string | number | boolean>>>();
+const DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS = 1600;
 const PROVIDER_CREDENTIAL_ENVS = {
   openai: ["VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"],
+  anthropic: ["VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
   openrouter: ["VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+  xai: ["VIBEZ_XAI_API_KEY", "XAI_API_KEY"],
+  atlascloud: ["VIBEZ_ATLASCLOUD_API_KEY", "ATLASCLOUD_API_KEY"],
 } as const;
+const ATLASCLOUD_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 export function defaultManifestPath(): string {
   return process.env.VIBEZ_MODEL_ROUTING_PATH ||
     path.join(/* turbopackIgnore: true */ process.cwd(), "..", "config", "model-routing.json");
+}
+
+function defaultCognitionRegistryPath(): string {
+  if (process.env.VIBEZ_COGNITION_PRESETS_PATH) return process.env.VIBEZ_COGNITION_PRESETS_PATH;
+  if (process.env.PAIA_COGNITION_PRESETS_PATH) return process.env.PAIA_COGNITION_PRESETS_PATH;
+  const appConfigCandidate = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    "..",
+    "config",
+    "cognition-presets.toml",
+  );
+  if (fs.existsSync(/* turbopackIgnore: true */ appConfigCandidate)) {
+    return appConfigCandidate;
+  }
+  return "/Users/braydon/projects/experiments/paia-agent-runtime/config/cognition-presets.toml";
 }
 
 function resolveManifestPath(manifestPath = defaultManifestPath()): string {
@@ -53,19 +99,184 @@ function resolveManifestPath(manifestPath = defaultManifestPath()): string {
   return path.join(/* turbopackIgnore: true */ process.cwd(), "..", manifestPath);
 }
 
+function normalizeTomlTableName(rawName: string): string {
+  return rawName.replace(/"([^"]+)"/g, "$1");
+}
+
+function parseTomlValue(rawValue: string): string | number | boolean {
+  const withoutComment = rawValue.replace(/\s+#.*$/, "").trim();
+  if (withoutComment.startsWith('"') && withoutComment.endsWith('"')) {
+    return withoutComment.slice(1, -1);
+  }
+  if (withoutComment === "true") return true;
+  if (withoutComment === "false") return false;
+  const numeric = Number(withoutComment);
+  if (Number.isFinite(numeric)) return numeric;
+  return withoutComment;
+}
+
+function loadCognitionRegistry(
+  registryPath = defaultCognitionRegistryPath(),
+): Record<string, Record<string, string | number | boolean>> {
+  const cached = REGISTRY_CACHE.get(registryPath);
+  if (cached) return cached;
+  if (!fs.existsSync(/* turbopackIgnore: true */ registryPath)) {
+    throw new Error(`cognition registry not found: ${registryPath}`);
+  }
+  const tables: Record<string, Record<string, string | number | boolean>> = {};
+  let currentTable = "";
+  for (const line of fs.readFileSync(/* turbopackIgnore: true */ registryPath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const tableMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (tableMatch) {
+      currentTable = normalizeTomlTableName(tableMatch[1]);
+      tables[currentTable] = tables[currentTable] || {};
+      continue;
+    }
+    if (!currentTable) continue;
+    const assignment = trimmed.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!assignment) continue;
+    tables[currentTable][assignment[1]] = parseTomlValue(assignment[2]);
+  }
+  REGISTRY_CACHE.set(registryPath, tables);
+  return tables;
+}
+
+function numberFromRegistry(value: string | number | boolean | undefined): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function stringFromRegistry(value: string | number | boolean | undefined): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function routeModeFromRegistry(
+  value: string | number | boolean | undefined,
+): ModelRoute["mode"] | undefined {
+  return value === "text" || value === "json" || value === "embedding" || value === "image" ? value : undefined;
+}
+
+function reasoningEffortFromRegistry(
+  value: string | number | boolean | undefined,
+): ModelRoute["reasoning_effort"] | undefined {
+  return value === "xhigh" ||
+    value === "high" ||
+    value === "medium" ||
+    value === "low" ||
+    value === "minimal" ||
+    value === "none"
+    ? value
+    : undefined;
+}
+
+function resolveRegistryCredentialEnv({
+  provider,
+  surface,
+  registry,
+}: {
+  provider: ModelRoute["provider"];
+  surface?: Record<string, string | number | boolean>;
+  registry: Record<string, Record<string, string | number | boolean>>;
+}): string | undefined {
+  const assignment = registry['service_credential_assignments.vibez-monitor']?.[provider];
+  const credentialAlias = stringFromRegistry(assignment);
+  const credentialEnv = credentialAlias
+    ? stringFromRegistry(registry[`credentials.${credentialAlias}`]?.env_var)
+    : undefined;
+  return credentialEnv || stringFromRegistry(surface?.api_key_env);
+}
+
+function resolveRegistryRoute(registryRouteId: string): Partial<ModelRoute> {
+  const registry = loadCognitionRegistry();
+  const route = registry[`model_routes.${registryRouteId}`];
+  if (!route) {
+    throw new Error(`unknown cognition registry route: ${registryRouteId}`);
+  }
+  const provider = stringFromRegistry(route.provider) as ModelRoute["provider"] | undefined;
+  const surfaceName = stringFromRegistry(route.surface);
+  const surface = surfaceName ? registry[`provider_surfaces.${surfaceName}`] : undefined;
+  const timeoutSeconds =
+    numberFromRegistry(route.request_timeout_seconds) ??
+    numberFromRegistry(surface?.complete_timeout_seconds) ??
+    numberFromRegistry(surface?.continue_timeout_seconds);
+
+  return {
+    provider,
+    model: stringFromRegistry(route.model),
+    mode: routeModeFromRegistry(route.mode),
+    max_tokens: numberFromRegistry(route.max_tokens_default),
+    temperature: numberFromRegistry(route.temperature_default),
+    timeout_ms: timeoutSeconds ? timeoutSeconds * 1000 : undefined,
+    base_url: stringFromRegistry(surface?.base_url),
+    api_key_env: provider ? resolveRegistryCredentialEnv({ provider, surface, registry }) : undefined,
+    context_window: numberFromRegistry(route.context_window),
+    aspect_ratio: stringFromRegistry(route.aspect_ratio),
+    negative_prompt: stringFromRegistry(route.negative_prompt),
+    num_images: numberFromRegistry(route.num_images),
+    reasoning_effort: reasoningEffortFromRegistry(route.reasoning_effort),
+    reasoning_exclude: typeof route.reasoning_exclude === "boolean" ? route.reasoning_exclude : undefined,
+    reasoning_enabled: typeof route.reasoning_enabled === "boolean" ? route.reasoning_enabled : undefined,
+    reasoning_max_tokens: numberFromRegistry(route.reasoning_max_tokens),
+    fallback_model: stringFromRegistry(route.fallback_model),
+    fallback_timeout_ms: numberFromRegistry(route.fallback_timeout_ms),
+  };
+}
+
+function finalizeRoute(routeId: string, entry: ModelRouteManifestEntry): ModelRoute {
+  const registryRoute = entry.registry_route ? resolveRegistryRoute(entry.registry_route) : {};
+  const merged = {
+    ...registryRoute,
+    ...entry,
+  };
+  delete merged.registry_route;
+  if (!merged.provider || !merged.model || !merged.mode) {
+    throw new Error(`incomplete model route: ${routeId}`);
+  }
+  return {
+    provider: merged.provider,
+    model: merged.model,
+    mode: merged.mode,
+    max_tokens: merged.max_tokens ?? 0,
+    temperature: merged.temperature ?? 0,
+    timeout_ms: merged.timeout_ms ?? 60_000,
+    base_url: merged.base_url,
+    api_key_env: merged.api_key_env,
+    dimensions: merged.dimensions,
+    context_window: merged.context_window,
+    aspect_ratio: merged.aspect_ratio,
+    negative_prompt: merged.negative_prompt,
+    num_images: merged.num_images,
+    reasoning_effort: merged.reasoning_effort,
+    reasoning_exclude: merged.reasoning_exclude,
+    reasoning_enabled: merged.reasoning_enabled,
+    reasoning_max_tokens: merged.reasoning_max_tokens,
+    fallback_model: merged.fallback_model,
+    fallback_timeout_ms: merged.fallback_timeout_ms,
+  };
+}
+
 export function loadRoutes(manifestPath = defaultManifestPath()): Record<string, ModelRoute> {
   const resolvedPath = resolveManifestPath(manifestPath);
   const cached = ROUTE_CACHE.get(resolvedPath);
   if (cached) return cached;
-  const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf8")) as {
+  const payload = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ resolvedPath, "utf8")) as {
     version: number;
-    routes: Record<string, ModelRoute>;
+    routes: Record<string, ModelRouteManifestEntry>;
   };
   if (payload.version !== 1 || !payload.routes || typeof payload.routes !== "object") {
     throw new Error("invalid model routing manifest");
   }
-  ROUTE_CACHE.set(resolvedPath, payload.routes);
-  return payload.routes;
+  const routes = Object.fromEntries(
+    Object.entries(payload.routes).map(([routeId, entry]) => [routeId, finalizeRoute(routeId, entry)]),
+  );
+  ROUTE_CACHE.set(resolvedPath, routes);
+  return routes;
 }
 
 export function getRoute(
@@ -89,11 +300,21 @@ export function resolveProviderApiKey(
   return "";
 }
 
+function resolveRouteApiKey(route: ModelRoute): string {
+  if (route.api_key_env) {
+    return process.env[route.api_key_env] || "";
+  }
+  if (route.provider in PROVIDER_CREDENTIAL_ENVS) {
+    return resolveProviderApiKey(route.provider as keyof typeof PROVIDER_CREDENTIAL_ENVS);
+  }
+  return "";
+}
+
 function validateRouteRequirements(route: ModelRoute): void {
   if (route.provider in PROVIDER_CREDENTIAL_ENVS) {
     const provider = route.provider as keyof typeof PROVIDER_CREDENTIAL_ENVS;
-    if (!resolveProviderApiKey(provider)) {
-      throw new Error(`${PROVIDER_CREDENTIAL_ENVS[provider][0]} not configured`);
+    if (!resolveRouteApiKey(route)) {
+      throw new Error(`${route.api_key_env || PROVIDER_CREDENTIAL_ENVS[provider][0]} not configured`);
     }
   }
   if (route.provider === "ollama") {
@@ -121,6 +342,17 @@ function normalizeEmbeddingDimensions(
   return shortened.map((value) => value / norm);
 }
 
+function ollamaEmbeddingInputMaxChars(): number {
+  const value = Number.parseInt(process.env.VIBEZ_OLLAMA_EMBEDDING_INPUT_MAX_CHARS || "", 10);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS;
+  return Math.max(256, Math.min(value, 8000));
+}
+
+function normalizeOllamaEmbeddingInputs(inputs: string[]): string[] {
+  const maxChars = ollamaEmbeddingInputMaxChars();
+  return inputs.map((input) => String(input || "").slice(0, maxChars));
+}
+
 function buildMessages({
   prompt,
   system,
@@ -142,10 +374,31 @@ function buildMessages({
   return payload;
 }
 
+function usageFromAnthropic(usage: Anthropic.Messages.Usage | undefined) {
+  return {
+    input_tokens: usage?.input_tokens ?? 0,
+    output_tokens: usage?.output_tokens ?? 0,
+  };
+}
+
 function usageFromOpenAI(response: { usage?: { input_tokens?: number; output_tokens?: number } }) {
   return {
     input_tokens: response.usage?.input_tokens ?? 0,
     output_tokens: response.usage?.output_tokens ?? 0,
+  };
+}
+
+function usageFromOpenAIChat(response: {
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}) {
+  return {
+    input_tokens: response.usage?.prompt_tokens ?? response.usage?.input_tokens ?? 0,
+    output_tokens: response.usage?.completion_tokens ?? response.usage?.output_tokens ?? 0,
   };
 }
 
@@ -155,12 +408,44 @@ function parseJsonText(raw: string): unknown {
   return JSON.parse(fenced || trimmed);
 }
 
+async function runAnthropicRoute(
+  route: ModelRoute,
+  payload: ModelMessage[],
+): Promise<ModelTextResult> {
+  const system = payload
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
+  const messages: Array<{ role: "user" | "assistant"; content: string }> = payload
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: message.content,
+    }));
+  const client = new Anthropic({ apiKey: resolveRouteApiKey(route) });
+  const response = await client.messages.create({
+    model: route.model,
+    max_tokens: route.max_tokens,
+    system: system || undefined,
+    messages,
+  });
+  return {
+    text: response.content
+      .map((block) => ("text" in block && typeof block.text === "string" ? block.text : ""))
+      .join("\n")
+      .trim(),
+    model: route.model,
+    provider: route.provider,
+    usage: usageFromAnthropic(response.usage),
+  };
+}
+
 async function runOpenAIRoute(
   route: ModelRoute,
   payload: ModelMessage[],
 ): Promise<ModelTextResult> {
   const client = new OpenAI({
-    apiKey: resolveProviderApiKey("openai"),
+    apiKey: resolveRouteApiKey(route),
     timeout: route.timeout_ms,
   });
   const response = await client.responses.create({
@@ -177,13 +462,108 @@ async function runOpenAIRoute(
   };
 }
 
+async function runOpenRouterRoute(
+  route: ModelRoute,
+  payload: ModelMessage[],
+): Promise<ModelTextResult> {
+  try {
+    return await runSingleOpenRouterRoute(route, payload);
+  } catch (error) {
+    if (!route.fallback_model) throw error;
+    return runSingleOpenRouterRoute({
+      ...route,
+      model: route.fallback_model,
+      timeout_ms: route.fallback_timeout_ms ?? route.timeout_ms,
+      fallback_model: undefined,
+      fallback_timeout_ms: undefined,
+      reasoning_effort: undefined,
+      reasoning_exclude: undefined,
+      reasoning_enabled: undefined,
+      reasoning_max_tokens: undefined,
+    }, payload);
+  }
+}
+
+async function runSingleOpenRouterRoute(
+  route: ModelRoute,
+  payload: ModelMessage[],
+): Promise<ModelTextResult> {
+  if (!route.base_url) {
+    throw new Error("openrouter base_url not configured");
+  }
+  const reasoning = buildOpenRouterReasoning(route);
+  const requestBody = {
+    model: route.model,
+    messages: payload,
+    max_tokens: route.max_tokens,
+    temperature: route.temperature,
+    response_format: route.mode === "json" ? { type: "json_object" } : undefined,
+    ...(reasoning ? { reasoning } : {}),
+  };
+  let response: Response;
+  try {
+    response = await fetch(`${route.base_url.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${resolveRouteApiKey(route)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(route.timeout_ms),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "request timed out";
+    throw new Error(`openrouter request failed for ${route.model}: ${message}`);
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`openrouter request failed for ${route.model}: ${response.status} ${body.slice(0, 500)}`);
+  }
+  const json = await response.json() as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+    };
+  };
+  const text = json.choices?.[0]?.message?.content || "";
+  if (!text.trim()) {
+    throw new Error(`openrouter model returned empty content: ${route.model}`);
+  }
+  return {
+    text,
+    model: route.model,
+    provider: route.provider,
+    usage: usageFromOpenAIChat(json),
+  };
+}
+
+function buildOpenRouterReasoning(route: ModelRoute):
+  | {
+      effort?: NonNullable<ModelRoute["reasoning_effort"]>;
+      exclude?: boolean;
+      enabled?: boolean;
+      max_tokens?: number;
+    }
+  | undefined {
+  const reasoning = {
+    effort: route.reasoning_effort,
+    exclude: route.reasoning_exclude,
+    enabled: route.reasoning_enabled,
+    max_tokens: route.reasoning_max_tokens,
+  };
+  return Object.values(reasoning).some((value) => value !== undefined) ? reasoning : undefined;
+}
+
 async function runOpenAIEmbeddingRoute(
   route: ModelRoute,
   inputs: string[],
   dimensions?: number,
 ): Promise<ModelEmbeddingResult> {
   const client = new OpenAI({
-    apiKey: resolveProviderApiKey("openai"),
+    apiKey: resolveRouteApiKey(route),
     timeout: route.timeout_ms,
   });
   const response = await client.embeddings.create({
@@ -193,7 +573,209 @@ async function runOpenAIEmbeddingRoute(
     dimensions: dimensions ?? route.dimensions,
   });
   return {
-    vectors: response.data.map((item) => item.embedding as number[]),
+    vectors: response.data.map((item) =>
+      normalizeEmbeddingDimensions(item.embedding as number[], dimensions ?? route.dimensions),
+    ),
+    model: route.model,
+    provider: route.provider,
+  };
+}
+
+async function runOpenRouterEmbeddingRoute(
+  route: ModelRoute,
+  inputs: string[],
+  dimensions?: number,
+): Promise<ModelEmbeddingResult> {
+  if (!route.base_url) {
+    throw new Error("openrouter base_url not configured");
+  }
+  const client = new OpenAI({
+    apiKey: resolveRouteApiKey(route),
+    baseURL: route.base_url,
+    timeout: route.timeout_ms,
+  });
+  const response = await client.embeddings.create({
+    model: route.model,
+    input: inputs,
+    encoding_format: "float",
+  });
+  return {
+    vectors: response.data.map((item) =>
+      normalizeEmbeddingDimensions(item.embedding as number[], dimensions ?? route.dimensions),
+    ),
+    model: route.model,
+    provider: route.provider,
+  };
+}
+
+async function runOpenAIImageRoute(
+  route: ModelRoute,
+  prompt: string,
+): Promise<ModelImageResult> {
+  const client = new OpenAI({
+    apiKey: resolveRouteApiKey(route),
+    baseURL: route.base_url,
+    timeout: route.timeout_ms,
+  });
+  const response = await client.images.generate(
+    route.provider === "xai"
+      ? {
+        model: route.model,
+        prompt,
+        n: 1,
+      }
+      : {
+        model: route.model,
+        prompt,
+        n: 1,
+        size: "1536x1024",
+        quality: "medium",
+        output_format: "png",
+        moderation: "low",
+      },
+  );
+  const image = response.data?.[0];
+  if (image?.b64_json) {
+    return {
+      data: Buffer.from(image.b64_json, "base64"),
+      contentType: "image/png",
+      model: route.model,
+      provider: route.provider,
+    };
+  }
+  if (image?.url) {
+    const fetched = await fetch(image.url, {
+      signal: AbortSignal.timeout(route.timeout_ms),
+    });
+    if (!fetched.ok) {
+      throw new Error(`image download failed: ${fetched.status}`);
+    }
+    return {
+      data: Buffer.from(await fetched.arrayBuffer()),
+      contentType: fetched.headers.get("content-type") || "image/png",
+      model: route.model,
+      provider: route.provider,
+    };
+  }
+  throw new Error("image route returned no image data");
+}
+
+function atlasCloudBaseUrl(route: ModelRoute): string {
+  return (route.base_url || "https://api.atlascloud.ai/api/v1").replace(/\/$/, "");
+}
+
+function atlasCloudImagePrompt(prompt: string): string {
+  const configured = Number.parseInt(process.env.VIBEZ_ATLASCLOUD_IMAGE_PROMPT_CHARS || "", 10);
+  const maxChars = Number.isFinite(configured)
+    ? Math.min(Math.max(configured, 800), 4000)
+    : 1800;
+  return prompt.slice(0, maxChars);
+}
+
+function atlasCloudImagePayload(route: ModelRoute, prompt: string): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    model: route.model,
+    prompt: atlasCloudImagePrompt(prompt),
+    seed: -1,
+  };
+  if (route.aspect_ratio) payload.aspect_ratio = route.aspect_ratio;
+  if (route.negative_prompt) payload.negative_prompt = route.negative_prompt;
+  if (route.num_images && route.num_images > 0) payload.num_images = Math.trunc(route.num_images);
+  return payload;
+}
+
+function atlasCloudPollIntervalMs(): number {
+  const parsed = Number.parseInt(process.env.VIBEZ_ATLASCLOUD_POLL_INTERVAL_MS || "", 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 3000;
+  return Math.min(parsed, 30_000);
+}
+
+async function readAtlasCloudJson(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) as Record<string, unknown> : {};
+  } catch {
+    throw new Error(`atlascloud returned non-json response: ${text.slice(0, 300)}`);
+  }
+}
+
+function atlasCloudPredictionId(payload: Record<string, unknown>): string {
+  const data = payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+  const id = data.id || payload.id;
+  if (typeof id !== "string" || !id) {
+    throw new Error(`atlascloud submit returned no prediction id: ${JSON.stringify(payload).slice(0, 300)}`);
+  }
+  return id;
+}
+
+function atlasCloudPredictionData(payload: Record<string, unknown>): Record<string, unknown> {
+  return payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : payload;
+}
+
+async function runAtlasCloudImageRoute(
+  route: ModelRoute,
+  prompt: string,
+): Promise<ModelImageResult> {
+  const apiKey = resolveRouteApiKey(route);
+  const baseUrl = atlasCloudBaseUrl(route);
+  const submit = await fetch(`${baseUrl}/model/generateImage`, {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${apiKey}`,
+      "content-type": "application/json",
+      "user-agent": ATLASCLOUD_USER_AGENT,
+    },
+    signal: AbortSignal.timeout(route.timeout_ms),
+    body: JSON.stringify(atlasCloudImagePayload(route, prompt)),
+  });
+  const submitPayload = await readAtlasCloudJson(submit);
+  if (!submit.ok) {
+    throw new Error(`atlascloud submit failed ${submit.status}: ${JSON.stringify(submitPayload).slice(0, 300)}`);
+  }
+  const predictionId = atlasCloudPredictionId(submitPayload);
+  const deadline = Date.now() + Math.max(route.timeout_ms, 60_000);
+  let outputUrl = "";
+  let lastPayload: Record<string, unknown> = {};
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, atlasCloudPollIntervalMs()));
+    const poll = await fetch(`${baseUrl}/model/prediction/${encodeURIComponent(predictionId)}`, {
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "user-agent": ATLASCLOUD_USER_AGENT,
+      },
+      signal: AbortSignal.timeout(Math.min(route.timeout_ms, 60_000)),
+    });
+    const pollPayload = await readAtlasCloudJson(poll);
+    lastPayload = pollPayload;
+    if (!poll.ok && poll.status !== 400) {
+      throw new Error(`atlascloud poll failed ${poll.status}: ${JSON.stringify(pollPayload).slice(0, 300)}`);
+    }
+    const data = atlasCloudPredictionData(pollPayload);
+    const status = String(data.status || "").toLowerCase();
+    if (status === "failed" || status === "error") {
+      throw new Error(`atlascloud prediction failed: ${String(data.error || "unknown error")}`);
+    }
+    if (status === "completed" || status === "succeeded") {
+      const outputs = Array.isArray(data.outputs) ? data.outputs : [];
+      if (typeof outputs[0] !== "string" || !outputs[0]) {
+        throw new Error(`atlascloud prediction returned no output URL: ${JSON.stringify(data).slice(0, 300)}`);
+      }
+      outputUrl = outputs[0];
+      break;
+    }
+  }
+  if (!outputUrl) {
+    throw new Error(`atlascloud prediction timed out: ${JSON.stringify(lastPayload).slice(0, 300)}`);
+  }
+  const image = await fetch(outputUrl, {
+    signal: AbortSignal.timeout(route.timeout_ms),
+  });
+  if (!image.ok) {
+    throw new Error(`atlascloud image download failed: ${image.status}`);
+  }
+  return {
+    data: Buffer.from(await image.arrayBuffer()),
+    contentType: image.headers.get("content-type") || "image/png",
     model: route.model,
     provider: route.provider,
   };
@@ -205,20 +787,31 @@ async function runOllamaRoute(
 ): Promise<ModelTextResult> {
   const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   if (!baseUrl) throw new Error("OLLAMA_BASE_URL not configured");
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: route.model,
-      messages: payload,
-      stream: false,
-      options: {
-        temperature: route.temperature,
-        num_predict: route.max_tokens,
-      },
-      format: route.mode === "json" ? "json" : undefined,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(route.timeout_ms),
+      body: JSON.stringify({
+        model: route.model,
+        messages: payload,
+        stream: false,
+        options: {
+          temperature: route.temperature,
+          num_predict: route.max_tokens,
+          num_ctx: route.context_window,
+        },
+        format: route.mode === "json" ? "json" : undefined,
+      }),
+    });
+  } catch (error) {
+    throw new Error(
+      `ollama request failed for ${route.model}: ${
+        error instanceof Error ? error.message : "request timed out"
+      }`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`ollama request failed: ${response.status}`);
   }
@@ -244,14 +837,25 @@ async function runOllamaEmbeddingRoute(
   dimensions?: number,
 ): Promise<ModelEmbeddingResult> {
   const baseUrl = route.base_url || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: route.model,
-      input: inputs,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(route.timeout_ms),
+      body: JSON.stringify({
+        model: route.model,
+        input: normalizeOllamaEmbeddingInputs(inputs),
+        truncate: true,
+      }),
+    });
+  } catch (error) {
+    throw new Error(
+      `ollama embed request failed for ${route.model}: ${
+        error instanceof Error ? error.message : "request timed out"
+      }`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`ollama embed request failed: ${response.status}`);
   }
@@ -287,10 +891,13 @@ export async function generateText({
   validateRouteRequirements(route);
   const payload = buildMessages({ prompt, system, messages });
   if (route.provider === "anthropic") {
-    throw new Error("Anthropic routes are disabled for Vibez; use local Ollama routing");
+    return runAnthropicRoute(route, payload);
   }
   if (route.provider === "openai") {
     return runOpenAIRoute(route, payload);
+  }
+  if (route.provider === "openrouter") {
+    return runOpenRouterRoute(route, payload);
   }
   if (route.provider === "ollama") {
     return runOllamaRoute(route, payload);
@@ -338,6 +945,9 @@ export async function embedTexts({
   if (route.provider === "openai") {
     return runOpenAIEmbeddingRoute(route, inputs, dimensions);
   }
+  if (route.provider === "openrouter") {
+    return runOpenRouterEmbeddingRoute(route, inputs, dimensions);
+  }
   if (route.provider === "ollama") {
     return runOllamaEmbeddingRoute(route, inputs, dimensions);
   }
@@ -362,4 +972,28 @@ export async function embedText({
     manifestPath,
   });
   return result.vectors[0] || [];
+}
+
+export async function generateImage({
+  taskId,
+  prompt,
+  manifestPath,
+}: {
+  taskId: string;
+  prompt: string;
+  manifestPath?: string;
+}): Promise<ModelImageResult> {
+  const routes = loadRoutes(manifestPath);
+  const route = getRoute(taskId, routes);
+  validateRouteRequirements(route);
+  if (route.mode !== "image") {
+    throw new Error(`task ${taskId} is not an image route`);
+  }
+  if (route.provider === "openai" || route.provider === "xai") {
+    return runOpenAIImageRoute(route, prompt);
+  }
+  if (route.provider === "atlascloud") {
+    return runAtlasCloudImageRoute(route, prompt);
+  }
+  throw new Error(`unsupported image provider: ${route.provider}`);
 }

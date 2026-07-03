@@ -1,4 +1,16 @@
 import { Pool } from "pg";
+import Database from "better-sqlite3";
+import path from "path";
+import { createHash } from "crypto";
+import {
+  buildAtlasSnapshotFromRows,
+  type AtlasSnapshot,
+  type AtlasMessageRow,
+  type AtlasLinkRow,
+  type AtlasPeopleInsights,
+  type AtlasIdentitySignalReason,
+  type AtlasNewFaceReason,
+} from "./atlas";
 import { buildLinksFtsQuery, normalizeLinkSearchTerms } from "@/lib/link-search";
 import { buildSelfMentionRegex, getSubjectAliases, getSubjectName } from "@/lib/profile";
 import {
@@ -12,9 +24,22 @@ import {
 
 const pool = new Pool({
   connectionString:
+    process.env.VIBEZ_DATABASE_URL ||
     process.env.DATABASE_URL ||
+    process.env.VIBEZ_PGVECTOR_URL ||
     "postgresql://braydon@localhost:5432/vibez_monitor",
 });
+
+const SQLITE_DB_PATH = process.env.VIBEZ_DB_PATH || path.join(process.cwd(), "..", "vibez.db");
+
+function shouldUseSqliteAtlas(): boolean {
+  return Boolean(
+    process.env.VIBEZ_DB_PATH &&
+      !process.env.VIBEZ_DATABASE_URL &&
+      !process.env.DATABASE_URL &&
+      !process.env.VIBEZ_PGVECTOR_URL,
+  );
+}
 
 const DEFAULT_EXCLUDED_GROUPS = [
   "BBC News",
@@ -22,6 +47,8 @@ const DEFAULT_EXCLUDED_GROUPS = [
   "MTB Rides",
   "Plum",
 ];
+const DEFAULT_STATS_RECORD_START_DATE = "2025-03-01";
+const STATS_RECORD_START_TS = parseStatsRecordStartTs();
 
 interface RoomScope {
   mode: "active_groups" | "excluded_groups" | "all";
@@ -82,31 +109,112 @@ function isPublicModeEnabled(): boolean {
   return typeof raw === "string" && ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
 }
 
+function parseStatsRecordStartTs(): number {
+  const raw = (process.env.VIBEZ_STATS_RECORD_START_DATE || DEFAULT_STATS_RECORD_START_DATE).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00Z` : raw;
+  const parsed = Date.parse(normalized);
+  if (Number.isFinite(parsed)) return parsed;
+  return Date.parse(`${DEFAULT_STATS_RECORD_START_DATE}T00:00:00Z`);
+}
+
+function isStatsRecordTimestamp(ts: number): boolean {
+  return ts >= STATS_RECORD_START_TS;
+}
+
+function relationshipEvidenceLabel(edge: {
+  dm_signals: number;
+  mentions: number;
+  replies: number;
+  turns: number;
+}): RelationshipEdge["evidence_label"] {
+  if (edge.dm_signals > 0) return "dm/offline";
+  if (edge.mentions >= edge.replies && edge.mentions > 0) return "mention";
+  if (edge.replies > 0) return "reply";
+  return "turn";
+}
+
+function relationshipConfidence(edge: {
+  dm_signals: number;
+  mentions: number;
+  replies: number;
+  turns: number;
+}): number {
+  const raw =
+    edge.dm_signals * 0.44 +
+    edge.mentions * 0.32 +
+    edge.replies * 0.28 +
+    edge.turns * 0.08;
+  return Number(Math.min(0.99, raw).toFixed(2));
+}
+
+function identityStatusForPerson(name: string, possiblePhone: boolean): RelationshipNode["identity_status"] {
+  if (possiblePhone || PHONE_LIKE_RE.test(name)) return "phone";
+  if (!name || name.toLowerCase() === "unknown") return "unknown";
+  return "named";
+}
+
+function communityRoleForPerson(messages: number, bridgeScore: number): RelationshipNode["community_role"] {
+  if (bridgeScore >= 12 || (bridgeScore >= 8 && messages >= 30)) return "bridge";
+  if (messages >= 100 || bridgeScore >= 6) return "hub";
+  return "participant";
+}
+
 function normalizeExclusionList(values: string[]): string[] {
   return values
     .map((name) => name.trim().toLowerCase())
     .filter((name) => name.length > 0);
 }
 
+function isMissingTableError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01");
+}
+
+function buildEnvRoomScope(): RoomScope {
+  const excludedGroups = normalizeExclusionList(loadExcludedGroups());
+  const allowedGroups = loadAllowedGroups();
+  if (allowedGroups.length > 0) {
+    return {
+      mode: "active_groups",
+      activeGroupIds: [],
+      activeGroupNames: allowedGroups,
+      excludedGroups,
+    };
+  }
+  if (excludedGroups.length > 0) {
+    return { mode: "excluded_groups", activeGroupIds: [], activeGroupNames: [], excludedGroups };
+  }
+  return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
+}
+
 async function loadRoomScope(pool: Pool): Promise<RoomScope> {
-  const { rows: _beeperIds } = await pool.query(
-    "SELECT value FROM sync_state WHERE key = $1",
-    ["beeper_active_group_ids"],
-  );
-  const beeperActiveIdsRow = _beeperIds[0] as { value: string } | undefined;
-  const beeperActiveGroupIds = parseJsonStringArray(beeperActiveIdsRow?.value);
-  const { rows: _beeperNames } = await pool.query(
-    "SELECT value FROM sync_state WHERE key = $1",
-    ["beeper_active_group_names"],
-  );
-  const beeperActiveNamesRow = _beeperNames[0] as { value: string } | undefined;
-  const beeperActiveGroupNames = parseJsonStringArray(beeperActiveNamesRow?.value);
-  const { rows: _googleRows } = await pool.query(
-    "SELECT value FROM sync_state WHERE key = $1",
-    ["google_groups_active_group_keys"],
-  );
-  const googleGroupsRow = _googleRows[0] as { value: string } | undefined;
-  const googleGroupKeys = parseJsonStringArray(googleGroupsRow?.value);
+  let beeperActiveGroupIds: string[];
+  let beeperActiveGroupNames: string[];
+  let googleGroupKeys: string[];
+  try {
+    const { rows: _beeperIds } = await pool.query(
+      "SELECT value FROM sync_state WHERE key = $1",
+      ["beeper_active_group_ids"],
+    );
+    const beeperActiveIdsRow = _beeperIds[0] as { value: string } | undefined;
+    beeperActiveGroupIds = parseJsonStringArray(beeperActiveIdsRow?.value);
+    const { rows: _beeperNames } = await pool.query(
+      "SELECT value FROM sync_state WHERE key = $1",
+      ["beeper_active_group_names"],
+    );
+    const beeperActiveNamesRow = _beeperNames[0] as { value: string } | undefined;
+    beeperActiveGroupNames = parseJsonStringArray(beeperActiveNamesRow?.value);
+    const { rows: _googleRows } = await pool.query(
+      "SELECT value FROM sync_state WHERE key = $1",
+      ["google_groups_active_group_keys"],
+    );
+    const googleGroupsRow = _googleRows[0] as { value: string } | undefined;
+    googleGroupKeys = parseJsonStringArray(googleGroupsRow?.value);
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return buildEnvRoomScope();
+    }
+    throw error;
+  }
   const googleGroupIds = googleGroupKeys.map((key) => `googlegroup:${key}`);
 
   const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));
@@ -182,6 +290,104 @@ function buildRoomScopeWhere(
   return { clause: "", params: [], nextIndex: idx };
 }
 
+function readSqliteSyncState(db: Database.Database, key: string): string | undefined {
+  const row = db.prepare("SELECT value FROM sync_state WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+}
+
+function loadSqliteRoomScope(db: Database.Database): RoomScope {
+  const beeperActiveGroupIds = parseJsonStringArray(
+    readSqliteSyncState(db, "beeper_active_group_ids"),
+  );
+  const beeperActiveGroupNames = parseJsonStringArray(
+    readSqliteSyncState(db, "beeper_active_group_names"),
+  );
+  const googleGroupKeys = parseJsonStringArray(
+    readSqliteSyncState(db, "google_groups_active_group_keys"),
+  );
+  const googleGroupIds = googleGroupKeys.map((key) => `googlegroup:${key}`);
+  const activeGroupIds = Array.from(new Set([...beeperActiveGroupIds, ...googleGroupIds]));
+  const activeGroupNames = Array.from(new Set([...beeperActiveGroupNames, ...googleGroupKeys]));
+  const excludedGroups = normalizeExclusionList(loadExcludedGroups());
+  const allowedGroups = loadAllowedGroups();
+
+  if (allowedGroups.length > 0) {
+    const allowedGroupSet = new Set(allowedGroups.map((name) => name.toLowerCase()));
+    const allowedBeeperGroupIds =
+      beeperActiveGroupIds.length === beeperActiveGroupNames.length
+        ? beeperActiveGroupIds.filter((_, index) =>
+            allowedGroupSet.has((beeperActiveGroupNames[index] || "").toLowerCase()),
+          )
+        : [];
+    const allowedGoogleGroupIds = googleGroupKeys
+      .filter((groupKey) => allowedGroupSet.has(groupKey.toLowerCase()))
+      .map((groupKey) => `googlegroup:${groupKey}`);
+    return {
+      mode: "active_groups",
+      activeGroupIds: Array.from(new Set([...allowedBeeperGroupIds, ...allowedGoogleGroupIds])),
+      activeGroupNames: Array.from(new Set(allowedGroups)),
+      excludedGroups,
+    };
+  }
+
+  if (activeGroupIds.length > 0 || activeGroupNames.length > 0) {
+    return { mode: "active_groups", activeGroupIds, activeGroupNames, excludedGroups };
+  }
+  if (excludedGroups.length > 0) {
+    return { mode: "excluded_groups", activeGroupIds: [], activeGroupNames: [], excludedGroups };
+  }
+  return { mode: "all", activeGroupIds: [], activeGroupNames: [], excludedGroups: [] };
+}
+
+function buildSqliteRoomScopeWhere(alias: string, scope: RoomScope): {
+  clause: string;
+  params: unknown[];
+} {
+  if (scope.activeGroupIds.length > 0 || scope.activeGroupNames.length > 0) {
+    const parts: string[] = [];
+    const params: unknown[] = [];
+    if (scope.activeGroupIds.length > 0) {
+      parts.push(`${alias}.room_id IN (${scope.activeGroupIds.map(() => "?").join(", ")})`);
+      params.push(...scope.activeGroupIds);
+    }
+    if (scope.activeGroupNames.length > 0) {
+      parts.push(
+        `LOWER(${alias}.room_name) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`,
+      );
+      params.push(...scope.activeGroupNames.map((name) => name.toLowerCase()));
+    }
+    return { clause: `(${parts.join(" OR ")})`, params };
+  }
+  if (scope.excludedGroups.length > 0) {
+    return {
+      clause: `LOWER(${alias}.room_name) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      params: scope.excludedGroups,
+    };
+  }
+  return { clause: "", params: [] };
+}
+
+function buildSqliteLinkScopeWhere(scope: RoomScope): {
+  clause: string;
+  params: unknown[];
+} {
+  if (scope.activeGroupNames.length > 0) {
+    return {
+      clause: `LOWER(source_group) IN (${scope.activeGroupNames.map(() => "?").join(", ")})`,
+      params: scope.activeGroupNames.map((name) => name.toLowerCase()),
+    };
+  }
+  if (scope.excludedGroups.length > 0) {
+    return {
+      clause: `LOWER(source_group) NOT IN (${scope.excludedGroups.map(() => "?").join(", ")})`,
+      params: scope.excludedGroups,
+    };
+  }
+  return { clause: "", params: [] };
+}
+
 function loadUserAliases(): UserAliasMap {
   const subjectName = getSubjectName();
   const aliases: UserAliasMap = {};
@@ -211,12 +417,14 @@ function buildLinkTermMatchScore(
   alias: string,
   terms: string[],
   startIndex: number,
+  extraSearchSql = "",
 ): {
   sql: string;
   params: unknown[];
   nextIndex: number;
 } {
-  const searchable = `lower(coalesce(${alias}.title,'') || ' ' || coalesce(${alias}.relevance,'') || ' ' || coalesce(${alias}.category,'') || ' ' || coalesce(${alias}.url,''))`;
+  const extra = extraSearchSql ? ` || ' ' || ${extraSearchSql}` : "";
+  const searchable = `lower(coalesce(${alias}.title,'') || ' ' || coalesce(${alias}.relevance,'') || ' ' || coalesce(${alias}.category,'') || ' ' || coalesce(${alias}.url,'')${extra})`;
   if (!terms.length) {
     return { sql: "0", params: [], nextIndex: startIndex };
   }
@@ -1307,6 +1515,443 @@ export async function getRecentUpdateSnapshot(): Promise<RecentUpdateSnapshot> {
   };
 }
 
+interface AtlasPeopleWindowRow {
+  id: string;
+  room_id: string | null;
+  room_name: string | null;
+  sender_id: string | null;
+  sender_name: string | null;
+  body: string | null;
+  timestamp: number;
+  raw_event: string | null;
+}
+
+interface AtlasPersonFirstSeenRow {
+  person_key: string | null;
+  first_ts: number | string | null;
+}
+
+const PHONE_LIKE_RE = /(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/;
+
+function pushLimitedUnique<T>(items: T[], item: T, limit: number): void {
+  if (items.includes(item)) return;
+  if (items.length >= limit) return;
+  items.push(item);
+}
+
+function atlasPersonKeys(row: AtlasPeopleWindowRow, aliases: UserAliasMap): string[] {
+  const keys = new Set<string>();
+  const senderId = String(row.sender_id || "").trim();
+  const rawName = String(row.sender_name || "").trim();
+  const normalizedName = normalizeSenderName(rawName || "Unknown", aliases);
+  if (senderId) keys.add(senderId);
+  if (rawName) keys.add(rawName.toLowerCase());
+  if (normalizedName) keys.add(normalizedName.toLowerCase());
+  return Array.from(keys);
+}
+
+function atlasPrimaryPersonKey(row: AtlasPeopleWindowRow, aliases: UserAliasMap): string {
+  const senderId = String(row.sender_id || "").trim();
+  if (senderId) return senderId;
+  return normalizeSenderName(String(row.sender_name || "Unknown"), aliases).toLowerCase();
+}
+
+function rawEventHasMemberSignal(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as {
+      type?: unknown;
+      content?: { membership?: unknown; displayname?: unknown };
+      unsigned?: { prev_content?: { displayname?: unknown; membership?: unknown } };
+    };
+    if (parsed.type === "m.room.member") return true;
+    const membership = String(parsed.content?.membership || "");
+    if (["join", "invite"].includes(membership)) return true;
+    if (parsed.content?.displayname || parsed.unsigned?.prev_content?.displayname) return true;
+  } catch {
+    return /\bm\.room\.member\b|\b(joined|invited|added)\b/i.test(raw);
+  }
+  return false;
+}
+
+function detectAtlasPersonReasons(row: AtlasPeopleWindowRow): AtlasNewFaceReason[] {
+  const reasons: AtlasNewFaceReason[] = [];
+  const room = String(row.room_name || "");
+  const senderId = String(row.sender_id || "");
+  const senderName = String(row.sender_name || "");
+  if (/\bintro(s|ductions)?\b/i.test(room)) reasons.push("intros_channel");
+  if (rawEventHasMemberSignal(row.raw_event)) reasons.push("member_event");
+  if (PHONE_LIKE_RE.test(senderId) || PHONE_LIKE_RE.test(senderName)) {
+    reasons.push("phone_or_name_addition");
+  }
+  return reasons;
+}
+
+function buildAtlasPeopleInsightsFromRows(input: {
+  generatedAt: string;
+  rows: AtlasPeopleWindowRow[];
+  firstSeenRows: AtlasPersonFirstSeenRow[];
+  aliases: UserAliasMap;
+}): AtlasPeopleInsights {
+  const recentStartTs = Date.parse(input.generatedAt) - 7 * 24 * 60 * 60 * 1000;
+  const firstSeenByKey = new Map<string, number>();
+  for (const row of input.firstSeenRows) {
+    const key = String(row.person_key || "").trim();
+    const firstTs = Number(row.first_ts);
+    if (!key || !Number.isFinite(firstTs)) continue;
+    firstSeenByKey.set(key, firstTs);
+  }
+
+  const people = new Map<string, {
+    name: string;
+    senderId: string | null;
+    count: number;
+    activeDays: Set<string>;
+    channels: Set<string>;
+    firstRecentTs: number;
+    firstRecentChannel: string;
+    latestTs: number;
+    citationRefs: string[];
+    introRefs: string[];
+    reasons: Set<AtlasNewFaceReason>;
+    firstEverTs: number;
+  }>();
+
+  for (const row of input.rows) {
+    const ts = Number(row.timestamp);
+    if (!Number.isFinite(ts)) continue;
+    const key = atlasPrimaryPersonKey(row, input.aliases);
+    const name = normalizeSenderName(String(row.sender_name || "Unknown"), input.aliases);
+    const channel = String(row.room_name || "Unknown");
+    const personKeys = atlasPersonKeys(row, input.aliases);
+    const knownFirstTimes = personKeys
+      .map((personKey) => firstSeenByKey.get(personKey))
+      .filter((value): value is number => value !== undefined);
+    const firstEverTs = Math.min(...knownFirstTimes, ts);
+    const entry = people.get(key) || {
+      name,
+      senderId: row.sender_id || null,
+      count: 0,
+      activeDays: new Set<string>(),
+      channels: new Set<string>(),
+      firstRecentTs: ts,
+      firstRecentChannel: channel,
+      latestTs: ts,
+      citationRefs: [],
+      introRefs: [],
+      reasons: new Set<AtlasNewFaceReason>(),
+      firstEverTs,
+    };
+    entry.count += 1;
+    entry.activeDays.add(dateKeyFromTs(ts));
+    entry.channels.add(channel);
+    if (ts < entry.firstRecentTs) {
+      entry.firstRecentTs = ts;
+      entry.firstRecentChannel = channel;
+    }
+    entry.latestTs = Math.max(entry.latestTs, ts);
+    entry.firstEverTs = Math.min(entry.firstEverTs, firstEverTs);
+    pushLimitedUnique(entry.citationRefs, `vibez:message:${row.id}`, 4);
+    const reasons = detectAtlasPersonReasons(row);
+    for (const reason of reasons) entry.reasons.add(reason);
+    if (reasons.includes("intros_channel")) {
+      pushLimitedUnique(entry.introRefs, `vibez:message:${row.id}`, 3);
+    }
+    people.set(key, entry);
+  }
+
+  const topContributors = Array.from(people.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10)
+    .map((entry) => ({
+      name: entry.name,
+      sender_id: entry.senderId,
+      message_count_7d: entry.count,
+      active_days_7d: entry.activeDays.size,
+      channels: Array.from(entry.channels).sort(),
+      latest_seen: new Date(entry.latestTs).toISOString(),
+      latest_seen_ts: entry.latestTs,
+      citation_refs: entry.citationRefs,
+    }));
+
+  const personSignals = Array.from(people.values()).map((entry) => {
+    const signalReasons = Array.from(entry.reasons).filter(
+      (reason): reason is AtlasIdentitySignalReason => reason !== "first_seen",
+    );
+    const isFirstSeenRecently = entry.firstEverTs >= recentStartTs;
+    return { entry, signalReasons, isFirstSeenRecently };
+  });
+
+  const newFaces = personSignals
+    .filter(({ isFirstSeenRecently }) => isFirstSeenRecently)
+    .map((entry) => {
+      const reasons = new Set<AtlasNewFaceReason>(entry.signalReasons);
+      reasons.add("first_seen");
+      return { entry: entry.entry, reasons: Array.from(reasons) };
+    })
+    .sort((a, b) => b.entry.firstEverTs - a.entry.firstEverTs)
+    .slice(0, 12)
+    .map(({ entry, reasons }) => ({
+      name: entry.name,
+      sender_id: entry.senderId,
+      first_seen: new Date(entry.firstEverTs).toISOString(),
+      first_seen_ts: entry.firstEverTs,
+      first_channel: entry.firstRecentChannel,
+      message_count_7d: entry.count,
+      channels: Array.from(entry.channels).sort(),
+      intro_refs: entry.introRefs,
+      detection_reasons: reasons.sort(),
+    }));
+
+  const identitySignals = personSignals
+    .filter(({ isFirstSeenRecently, signalReasons }) => !isFirstSeenRecently && signalReasons.length > 0)
+    .sort((a, b) => b.entry.firstRecentTs - a.entry.firstRecentTs)
+    .slice(0, 12)
+    .map(({ entry, signalReasons }) => ({
+      name: entry.name,
+      sender_id: entry.senderId,
+      first_seen: new Date(entry.firstEverTs).toISOString(),
+      first_seen_ts: entry.firstEverTs,
+      signal_seen: new Date(entry.firstRecentTs).toISOString(),
+      signal_seen_ts: entry.firstRecentTs,
+      signal_channel: entry.firstRecentChannel,
+      message_count_7d: entry.count,
+      channels: Array.from(entry.channels).sort(),
+      intro_refs: entry.introRefs,
+      signal_reasons: signalReasons.sort(),
+    }));
+
+  return {
+    window_days: 7,
+    generated_at: input.generatedAt,
+    new_faces: newFaces,
+    identity_signals: identitySignals,
+    top_contributors: topContributors,
+  };
+}
+
+function getAtlasPeopleInsightsFromSqlite(
+  db: Database.Database,
+  scope: RoomScope,
+  aliases: UserAliasMap,
+  now: Date,
+): AtlasPeopleInsights {
+  const cutoffTs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const roomScope = buildSqliteRoomScopeWhere("m", scope);
+  const whereParts = ["m.timestamp >= ?"];
+  const params: unknown[] = [cutoffTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+              m.timestamp, m.raw_event
+       FROM messages m
+       WHERE ${whereParts.join(" AND ")}
+       ORDER BY m.timestamp ASC`,
+    )
+    .all(...params) as AtlasPeopleWindowRow[];
+
+  const firstScope = buildSqliteRoomScopeWhere("m", scope);
+  const firstWhere = firstScope.clause ? `WHERE ${firstScope.clause}` : "";
+  const firstRows = db
+    .prepare(
+      `SELECT person_key, MIN(first_ts) AS first_ts
+       FROM (
+         SELECT NULLIF(m.sender_id, '') AS person_key, MIN(m.timestamp) AS first_ts
+         FROM messages m
+         ${firstWhere}
+         GROUP BY person_key
+         UNION ALL
+         SELECT LOWER(COALESCE(m.sender_name, '')) AS person_key, MIN(m.timestamp) AS first_ts
+         FROM messages m
+         ${firstWhere}
+         GROUP BY person_key
+       ) first_seen_keys
+       WHERE person_key IS NOT NULL AND person_key != ''
+       GROUP BY person_key`,
+    )
+    .all(...firstScope.params, ...firstScope.params) as AtlasPersonFirstSeenRow[];
+
+  return buildAtlasPeopleInsightsFromRows({
+    generatedAt: now.toISOString(),
+    rows,
+    firstSeenRows: firstRows,
+    aliases,
+  });
+}
+
+async function getAtlasPeopleInsights(
+  scope: RoomScope,
+  aliases: UserAliasMap,
+  now: Date,
+): Promise<AtlasPeopleInsights> {
+  const cutoffTs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const roomScope = buildRoomScopeWhere("m", scope, 2);
+  const whereParts = ["m.timestamp >= $1"];
+  const params: unknown[] = [cutoffTs];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+  const { rows } = await pool.query(
+    `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+            m.timestamp, m.raw_event
+     FROM messages m
+     WHERE ${whereParts.join(" AND ")}
+     ORDER BY m.timestamp ASC`,
+    params,
+  );
+
+  const firstScope = buildRoomScopeWhere("m", scope, 1);
+  const firstWhere = firstScope.clause ? `WHERE ${firstScope.clause}` : "";
+  const { rows: firstRows } = await pool.query(
+    `SELECT person_key, MIN(first_ts) AS first_ts
+     FROM (
+       SELECT NULLIF(m.sender_id, '') AS person_key, MIN(m.timestamp) AS first_ts
+       FROM messages m
+       ${firstWhere}
+       GROUP BY person_key
+       UNION ALL
+       SELECT LOWER(COALESCE(m.sender_name, '')) AS person_key, MIN(m.timestamp) AS first_ts
+       FROM messages m
+       ${firstWhere}
+       GROUP BY person_key
+     ) first_seen_keys
+     WHERE person_key IS NOT NULL AND person_key != ''
+     GROUP BY person_key`,
+    firstScope.params,
+  );
+
+  return buildAtlasPeopleInsightsFromRows({
+    generatedAt: now.toISOString(),
+    rows: rows as AtlasPeopleWindowRow[],
+    firstSeenRows: firstRows as AtlasPersonFirstSeenRow[],
+    aliases,
+  });
+}
+
+function getAtlasSnapshotFromSqlite(windowHours: number): AtlasSnapshot {
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  const userAliases = loadUserAliases();
+
+  try {
+    const scope = loadSqliteRoomScope(db);
+    const roomScope = buildSqliteRoomScopeWhere("m", scope);
+    const whereParts = ["m.timestamp >= ?"];
+    const params: unknown[] = [windowStart.getTime()];
+    if (roomScope.clause) {
+      whereParts.push(roomScope.clause);
+      params.push(...roomScope.params);
+    }
+
+    const messageRows = db
+      .prepare(
+        `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+                m.timestamp, m.raw_event,
+                c.relevance_score, c.topics, c.alert_level
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         WHERE ${whereParts.join(" AND ")}
+         ORDER BY m.timestamp DESC
+         LIMIT 3000`,
+      )
+      .all(...params) as AtlasMessageRow[];
+
+    const linkScope = buildSqliteLinkScopeWhere(scope);
+    const linkWhereParts = ["last_seen >= ?"];
+    const linkParams: unknown[] = [windowStart.toISOString()];
+    if (linkScope.clause) {
+      linkWhereParts.push(linkScope.clause);
+      linkParams.push(...linkScope.params);
+    }
+    const linkRows = db
+      .prepare(
+        `SELECT id, url, title, category, relevance, shared_by,
+                source_group, last_seen, value_score
+         FROM links
+         WHERE ${linkWhereParts.join(" AND ")}
+         ORDER BY value_score DESC, last_seen DESC
+         LIMIT 80`,
+      )
+      .all(...linkParams) as AtlasLinkRow[];
+    const people = getAtlasPeopleInsightsFromSqlite(db, scope, userAliases, now);
+
+    return buildAtlasSnapshotFromRows({
+      generatedAt: now.toISOString(),
+      windowStart: windowStart.toISOString(),
+      windowEnd: now.toISOString(),
+      messages: messageRows.map((row) => ({
+        ...row,
+        sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+      })),
+      links: linkRows,
+      people,
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function getAtlasSnapshot(opts: { windowHours?: number } = {}): Promise<AtlasSnapshot> {
+  const windowHours = Math.min(Math.max(opts.windowHours || 48, 6), 168);
+  if (shouldUseSqliteAtlas()) {
+    return getAtlasSnapshotFromSqlite(windowHours);
+  }
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  const scope = await loadRoomScope(pool);
+  const roomScope = buildRoomScopeWhere("m", scope, 2);
+  const userAliases = loadUserAliases();
+
+  const whereParts = ["m.timestamp >= $1"];
+  const params: unknown[] = [windowStart.getTime()];
+  if (roomScope.clause) {
+    whereParts.push(roomScope.clause);
+    params.push(...roomScope.params);
+  }
+
+  const { rows: messageRows } = await pool.query(
+    `SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name, m.body,
+            m.timestamp, m.raw_event,
+            c.relevance_score, c.topics, c.alert_level
+     FROM messages m
+     LEFT JOIN classifications c ON m.id = c.message_id
+     WHERE ${whereParts.join(" AND ")}
+     ORDER BY m.timestamp DESC
+     LIMIT 3000`,
+    params,
+  );
+
+  const linkCutoff = windowStart.toISOString();
+  const { rows: linkRows } = await pool.query(
+    `SELECT id, url, title, category, relevance, shared_by,
+            source_group, last_seen, value_score
+     FROM links
+     WHERE last_seen >= $1
+     ORDER BY value_score DESC, last_seen DESC
+     LIMIT 80`,
+    [linkCutoff],
+  );
+  const people = await getAtlasPeopleInsights(scope, userAliases, now);
+
+  return buildAtlasSnapshotFromRows({
+    generatedAt: now.toISOString(),
+    windowStart: windowStart.toISOString(),
+    windowEnd: now.toISOString(),
+    messages: (messageRows as AtlasMessageRow[]).map((row) => ({
+      ...row,
+      sender_name: normalizeSenderName(row.sender_name || "Unknown", userAliases),
+    })),
+    links: linkRows as AtlasLinkRow[],
+    people,
+  });
+}
+
 export async function getRooms(): Promise<string[]> {
   const scope = await loadRoomScope(pool);
   const roomScope = buildRoomScopeWhere("m", scope, 1);
@@ -1402,6 +2047,7 @@ export async function searchMessages(opts: {
   query: string;
   lookbackDays?: number;
   limit?: number;
+  semanticOnly?: boolean;
 }): Promise<Message[]> {
   const scope = await loadRoomScope(pool);
   const userAliases = loadUserAliases();
@@ -1417,6 +2063,12 @@ export async function searchMessages(opts: {
       ...row,
       sender_name: normalizeSenderName(row.sender_name, userAliases),
     }));
+  }
+  if (opts.semanticOnly) {
+    if (semanticRows === null) {
+      throw new Error("semantic message retrieval is unavailable");
+    }
+    return [];
   }
 
   return searchMessagesKeyword(opts);
@@ -1466,6 +2118,25 @@ export interface RankedStat {
   avg_relevance: number | null;
 }
 
+export interface PersonChannelMembership {
+  name: string;
+  messages: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface PersonDirectoryEntry {
+  name: string;
+  sender_id: string | null;
+  messages: number;
+  active_days: number;
+  first_seen: string;
+  last_seen: string;
+  channels: PersonChannelMembership[];
+  top_topics: string[];
+  possible_phone: boolean;
+}
+
 export interface TopicStat {
   topic: string;
   started_on: string;
@@ -1512,6 +2183,9 @@ export interface RelationshipNode {
   replies_out: number;
   replies_in: number;
   dm_signals: number;
+  identity_status: "named" | "phone" | "unknown";
+  bridge_score: number;
+  community_role: "hub" | "bridge" | "participant";
   top_topics: string[];
 }
 
@@ -1523,6 +2197,8 @@ export interface RelationshipEdge {
   mentions: number;
   dm_signals: number;
   turns: number;
+  evidence_label: "dm/offline" | "mention" | "reply" | "turn";
+  confidence: number;
 }
 
 export interface TopicAlignmentEdge {
@@ -1570,6 +2246,12 @@ export interface StatsDashboard {
     topics: number;
     avg_relevance: number | null;
   };
+  history: {
+    first_seen: string | null;
+    last_seen: string | null;
+    messages: number;
+    members_observed: number;
+  };
   timeline: DailyCount[];
   coverage: {
     classified: DailyCount[];
@@ -1578,6 +2260,7 @@ export interface StatsDashboard {
   };
   users: RankedStat[];
   channels: RankedStat[];
+  people_directory: PersonDirectoryEntry[];
   topics: TopicStat[];
   cooccurrence: TopicCooccurrence[];
   seasonality: SeasonalityStats;
@@ -1625,12 +2308,50 @@ export interface TopicDrilldown {
   recent_messages: TopicDrilldownMessage[];
 }
 
-function dateKeyFromTs(ts: number): string {
-  const d = new Date(ts);
+function coerceTimestampMs(value: unknown): number | null {
+  if (value instanceof Date) return value.getTime();
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.abs(numeric) < 100_000_000_000 ? numeric * 1000 : numeric;
+}
+
+function dateKeyFromTs(ts: number | string): string {
+  const timestamp = coerceTimestampMs(ts);
+  if (timestamp === null) return "";
+  const d = new Date(timestamp);
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function summarizeStatsHistoryRows(
+  rows: Array<{ timestamp: unknown; sender_id?: unknown; sender_name?: unknown }>,
+  userAliases: UserAliasMap,
+): StatsDashboard["history"] {
+  const members = new Set<string>();
+  let firstTs: number | null = null;
+  let lastTs: number | null = null;
+  let messageCount = 0;
+
+  for (const row of rows) {
+    const ts = coerceTimestampMs(row.timestamp);
+    if (ts === null) continue;
+    if (!isStatsRecordTimestamp(ts)) continue;
+    messageCount += 1;
+    firstTs = firstTs === null ? ts : Math.min(firstTs, ts);
+    lastTs = lastTs === null ? ts : Math.max(lastTs, ts);
+    const rawName = String(row.sender_name || "").trim();
+    const rawId = String(row.sender_id || "").trim();
+    members.add(rawName ? normalizeSenderName(rawName, userAliases) : rawId || "Unknown");
+  }
+
+  return {
+    first_seen: firstTs === null ? null : dateKeyFromTs(firstTs),
+    last_seen: lastTs === null ? null : dateKeyFromTs(lastTs),
+    messages: messageCount,
+    members_observed: members.size,
+  };
 }
 
 function parseTopics(raw: string | null): string[] {
@@ -2332,9 +3053,366 @@ export async function getVibezRadarSnapshot(
   };
 }
 
+function disabledSemanticAnalytics(): SemanticAnalytics {
+  return {
+    enabled: false,
+    coverage_pct: 0,
+    orphan_pct: 0,
+    avg_coherence: 0,
+    drift_risk: "low",
+    checks: ["semantic analytics require Postgres/pgvector; SQLite stats use tabular aggregates."],
+    arcs: [],
+    trends: [],
+  };
+}
+
+function getStatsDashboardFromSqlite(windowDays: number | null = 90): StatsDashboard {
+  const resolvedWindow = resolveWindowDays(windowDays);
+  const cutoffTs =
+    resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  const userAliases = loadUserAliases();
+
+  try {
+    const scope = loadSqliteRoomScope(db);
+    const roomScope = buildSqliteRoomScopeWhere("m", scope);
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
+    if (roomScope.clause) {
+      whereParts.push(roomScope.clause);
+      params.push(...roomScope.params);
+    }
+    whereParts.push("m.timestamp >= ?");
+    params.push(STATS_RECORD_START_TS);
+    if (cutoffTs !== null) {
+      whereParts.push("m.timestamp >= ?");
+      params.push(cutoffTs);
+    }
+    const where = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+    const rowsData = db
+      .prepare(
+        `SELECT m.timestamp, m.sender_id, m.sender_name, m.room_name, m.body,
+                c.topics, c.relevance_score
+         FROM messages m
+         LEFT JOIN classifications c ON m.id = c.message_id
+         ${where}
+         ORDER BY m.timestamp ASC`,
+      )
+      .all(...params) as Array<{
+        timestamp: number;
+        sender_id: string | null;
+        sender_name: string;
+        room_name: string;
+        body: string;
+        topics: string | null;
+        relevance_score: number | null;
+      }>;
+
+    const historyWhereParts: string[] = ["m.timestamp >= ?"];
+    const historyParams: unknown[] = [STATS_RECORD_START_TS];
+    if (roomScope.clause) {
+      historyWhereParts.unshift(roomScope.clause);
+      historyParams.unshift(...roomScope.params);
+    }
+    const historyWhere = `WHERE ${historyWhereParts.join(" AND ")}`;
+    const historyRows = db
+      .prepare(
+        `SELECT m.timestamp, m.sender_id, m.sender_name
+         FROM messages m
+         ${historyWhere}`,
+      )
+      .all(...historyParams) as Array<{
+        timestamp: unknown;
+        sender_id: string | null;
+        sender_name: string | null;
+      }>;
+    const history = summarizeStatsHistoryRows(historyRows, userAliases);
+
+    const timelineDays =
+      resolvedWindow === null
+        ? rowsData.length > 0
+          ? enumerateDaysFromTs(rowsData[0].timestamp, Date.now())
+          : enumerateDays(30)
+        : enumerateDays(resolvedWindow);
+    const windowDaysValue = timelineDays.length;
+    const timelineMap = new Map<string, number>(timelineDays.map((day) => [day, 0]));
+    const classifiedMap = new Map<string, number>(timelineDays.map((day) => [day, 0]));
+    const withTopicsMap = new Map<string, number>(timelineDays.map((day) => [day, 0]));
+    const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const weekdayCounts = Array.from({ length: 7 }, () => 0);
+    const hourCounts = Array.from({ length: 24 }, () => 0);
+
+    const users = new Map<string, StatBaseAccumulator>();
+    const channels = new Map<string, StatBaseAccumulator>();
+    const topics = new Map<string, TopicAccumulator>();
+    const userIds = new Map<string, Set<string>>();
+    const userTopicCounts = new Map<string, Map<string, number>>();
+    const userChannels = new Map<string, Set<string>>();
+    const userChannelStats = new Map<string, Map<string, StatBaseAccumulator>>();
+    const userPossiblePhone = new Map<string, boolean>();
+    let relevanceTotal = 0;
+    let relevanceCount = 0;
+
+    for (const row of rowsData) {
+      const ts = Number(row.timestamp);
+      if (!Number.isFinite(ts)) continue;
+      const dateKey = dateKeyFromTs(ts);
+      timelineMap.set(dateKey, (timelineMap.get(dateKey) || 0) + 1);
+      const parsedTopics = parseTopics(row.topics);
+      if (row.topics !== null) classifiedMap.set(dateKey, (classifiedMap.get(dateKey) || 0) + 1);
+      if (parsedTopics.length > 0) withTopicsMap.set(dateKey, (withTopicsMap.get(dateKey) || 0) + 1);
+      const d = new Date(ts);
+      weekdayCounts[d.getDay()] += 1;
+      hourCounts[d.getHours()] += 1;
+
+      if (row.relevance_score !== null && row.relevance_score !== undefined) {
+        relevanceTotal += row.relevance_score;
+        relevanceCount += 1;
+      }
+
+      const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+      const senderId = String(row.sender_id || "").trim();
+      const userAcc = users.get(sender) || {
+        messages: 0,
+        activeDays: new Set<string>(),
+        firstTs: ts,
+        lastTs: ts,
+        relevanceTotal: 0,
+        relevanceCount: 0,
+      };
+      userAcc.messages += 1;
+      userAcc.activeDays.add(dateKey);
+      userAcc.firstTs = Math.min(userAcc.firstTs, ts);
+      userAcc.lastTs = Math.max(userAcc.lastTs, ts);
+      if (row.relevance_score !== null && row.relevance_score !== undefined) {
+        userAcc.relevanceTotal += row.relevance_score;
+        userAcc.relevanceCount += 1;
+      }
+      users.set(sender, userAcc);
+
+      if (senderId) {
+        const ids = userIds.get(sender) || new Set<string>();
+        ids.add(senderId);
+        userIds.set(sender, ids);
+      }
+      if (PHONE_LIKE_RE.test(row.sender_name || "") || PHONE_LIKE_RE.test(sender)) {
+        userPossiblePhone.set(sender, true);
+      }
+
+      const channel = row.room_name || "Unknown";
+      const channelAcc = channels.get(channel) || {
+        messages: 0,
+        activeDays: new Set<string>(),
+        firstTs: ts,
+        lastTs: ts,
+        relevanceTotal: 0,
+        relevanceCount: 0,
+      };
+      channelAcc.messages += 1;
+      channelAcc.activeDays.add(dateKey);
+      channelAcc.firstTs = Math.min(channelAcc.firstTs, ts);
+      channelAcc.lastTs = Math.max(channelAcc.lastTs, ts);
+      if (row.relevance_score !== null && row.relevance_score !== undefined) {
+        channelAcc.relevanceTotal += row.relevance_score;
+        channelAcc.relevanceCount += 1;
+      }
+      channels.set(channel, channelAcc);
+
+      const userTopicMap = userTopicCounts.get(sender) || new Map<string, number>();
+      const userChannelSet = userChannels.get(sender) || new Set<string>();
+      userChannelSet.add(channel);
+      userChannels.set(sender, userChannelSet);
+      const channelMap = userChannelStats.get(sender) || new Map<string, StatBaseAccumulator>();
+      const personChannelAcc = channelMap.get(channel) || {
+        messages: 0,
+        activeDays: new Set<string>(),
+        firstTs: ts,
+        lastTs: ts,
+        relevanceTotal: 0,
+        relevanceCount: 0,
+      };
+      personChannelAcc.messages += 1;
+      personChannelAcc.activeDays.add(dateKey);
+      personChannelAcc.firstTs = Math.min(personChannelAcc.firstTs, ts);
+      personChannelAcc.lastTs = Math.max(personChannelAcc.lastTs, ts);
+      channelMap.set(channel, personChannelAcc);
+      userChannelStats.set(sender, channelMap);
+
+      for (const topic of parsedTopics) {
+        userTopicMap.set(topic, (userTopicMap.get(topic) || 0) + 1);
+        const topicAcc = topics.get(topic) || {
+          messages: 0,
+          activeDays: new Set<string>(),
+          firstTs: ts,
+          lastTs: ts,
+          relevanceTotal: 0,
+          relevanceCount: 0,
+          daily: new Map<string, number>(),
+          weekdayCounts: Array.from({ length: 7 }, () => 0),
+          hourCounts: Array.from({ length: 24 }, () => 0),
+        };
+        topicAcc.messages += 1;
+        topicAcc.activeDays.add(dateKey);
+        topicAcc.firstTs = Math.min(topicAcc.firstTs, ts);
+        topicAcc.lastTs = Math.max(topicAcc.lastTs, ts);
+        topicAcc.daily.set(dateKey, (topicAcc.daily.get(dateKey) || 0) + 1);
+        topicAcc.weekdayCounts[d.getDay()] += 1;
+        topicAcc.hourCounts[d.getHours()] += 1;
+        if (row.relevance_score !== null && row.relevance_score !== undefined) {
+          topicAcc.relevanceTotal += row.relevance_score;
+          topicAcc.relevanceCount += 1;
+        }
+        topics.set(topic, topicAcc);
+      }
+      userTopicCounts.set(sender, userTopicMap);
+    }
+
+    const timeline = timelineDays.map((date) => ({ date, count: timelineMap.get(date) || 0 }));
+    const classified = timelineDays.map((date) => ({ date, count: classifiedMap.get(date) || 0 }));
+    const with_topics = timelineDays.map((date) => ({ date, count: withTopicsMap.get(date) || 0 }));
+    const avgTopicCoverage =
+      rowsData.length > 0
+        ? Number((with_topics.reduce((sum, day) => sum + day.count, 0) / rowsData.length).toFixed(3))
+        : 0;
+
+    const peopleDirectory: PersonDirectoryEntry[] = Array.from(users.entries())
+      .map(([name, acc]) => {
+        const ranked = finalizeRanked(name, acc);
+        const ids = Array.from(userIds.get(name) || []);
+        const channelMap = userChannelStats.get(name) || new Map<string, StatBaseAccumulator>();
+        return {
+          ...ranked,
+          sender_id: ids[0] || null,
+          channels: Array.from(channelMap.entries())
+            .map(([channelName, channelAcc]) => ({
+              name: channelName,
+              messages: channelAcc.messages,
+              first_seen: dateKeyFromTs(channelAcc.firstTs),
+              last_seen: dateKeyFromTs(channelAcc.lastTs),
+            }))
+            .sort((a, b) => b.messages - a.messages || a.name.localeCompare(b.name)),
+          top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 6),
+          possible_phone: userPossiblePhone.get(name) || false,
+        };
+      })
+      .sort((a, b) => b.messages - a.messages || a.name.localeCompare(b.name));
+
+    const topicStats: TopicStat[] = Array.from(topics.entries())
+      .map(([topic, acc]) => {
+        const spanDays = Math.max(1, Math.floor((acc.lastTs - acc.firstTs) / (24 * 60 * 60 * 1000)) + 1);
+        const activeDays = acc.activeDays.size;
+        const ratio = activeDays / spanDays;
+        return {
+          topic,
+          started_on: dateKeyFromTs(acc.firstTs),
+          started_in_window: dateKeyFromTs(acc.firstTs),
+          last_seen: dateKeyFromTs(acc.lastTs),
+          message_count: acc.messages,
+          active_days: activeDays,
+          span_days: spanDays,
+          recurrence_ratio: Number(ratio.toFixed(3)),
+          recurrence_label: recurrenceLabel(ratio, activeDays),
+          last_7d: 0,
+          prev_7d: 0,
+          trend: "flat" as const,
+          peak_weekday: weekdayLabels[peakIndex(acc.weekdayCounts)],
+          peak_hour: peakIndex(acc.hourCounts),
+          daily: timelineDays.map((date) => ({ date, count: acc.daily.get(date) || 0 })),
+        };
+      })
+      .sort((a, b) => b.message_count - a.message_count)
+      .slice(0, 40);
+
+    const relationshipNodes: RelationshipNode[] = Array.from(users.entries())
+      .map(([name, acc]) => ({
+        id: name,
+        messages: acc.messages,
+        channels: userChannels.get(name)?.size || 0,
+        replies_out: 0,
+        replies_in: 0,
+        dm_signals: 0,
+        identity_status: identityStatusForPerson(name, userPossiblePhone.get(name) || false),
+        bridge_score: 0,
+        community_role: "participant" as const,
+        top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
+      }))
+      .sort((a, b) => b.messages - a.messages)
+      .slice(0, 220);
+
+    return {
+      window_days: windowDaysValue,
+      generated_at: new Date().toISOString(),
+      scope: {
+        mode: scope.mode,
+        active_group_count: Math.max(scope.activeGroupIds.length, scope.activeGroupNames.length),
+        excluded_groups: scope.excludedGroups,
+      },
+      totals: {
+        messages: rowsData.length,
+        users: users.size,
+        channels: channels.size,
+        topics: topics.size,
+        avg_relevance: relevanceCount > 0 ? Number((relevanceTotal / relevanceCount).toFixed(2)) : null,
+      },
+      history,
+      timeline,
+      coverage: { classified, with_topics, avg_topic_coverage: avgTopicCoverage },
+      users: Array.from(users.entries())
+        .map(([name, acc]) => finalizeRanked(name, acc))
+        .sort((a, b) => b.messages - a.messages)
+        .slice(0, 25),
+      channels: Array.from(channels.entries())
+        .map(([name, acc]) => finalizeRanked(name, acc))
+        .sort((a, b) => b.messages - a.messages)
+        .slice(0, 25),
+      people_directory: peopleDirectory,
+      topics: topicStats,
+      cooccurrence: [],
+      seasonality: {
+        by_weekday: weekdayLabels.map((weekday, i) => ({ weekday, count: weekdayCounts[i] })),
+        by_hour: Array.from({ length: 24 }, (_, hour) => ({ hour, count: hourCounts[hour] })),
+        topic_peaks: topicStats.slice(0, 20).map((topic) => ({
+          topic: topic.topic,
+          messages: topic.message_count,
+          peak_weekday: topic.peak_weekday,
+          peak_hour: topic.peak_hour,
+        })),
+      },
+      network: {
+        relationships: {
+          nodes: relationshipNodes,
+          edges: [],
+          summaries: {
+            included_nodes: relationshipNodes.length,
+            total_users_in_window: users.size,
+            total_messages: rowsData.length,
+            directed_edges: 0,
+            dm_signal_messages: 0,
+          },
+        },
+        topic_alignment: {
+          nodes: relationshipNodes.slice(0, 120),
+          edges: [],
+          summaries: {
+            included_nodes: Math.min(relationshipNodes.length, 120),
+            compared_nodes: Math.min(relationshipNodes.length, 120),
+            alignment_edges: 0,
+          },
+        },
+      },
+      semantic: disabledSemanticAnalytics(),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export async function getStatsDashboard(
   windowDays: number | null = 90,
 ): Promise<StatsDashboard> {
+  if (shouldUseSqliteAtlas()) {
+    return getStatsDashboardFromSqlite(windowDays);
+  }
   const resolvedWindow = resolveWindowDays(windowDays);
   const cutoffTs =
     resolvedWindow === null ? null : Date.now() - resolvedWindow * 24 * 60 * 60 * 1000;
@@ -2356,6 +3434,8 @@ export async function getStatsDashboard(
     windowWhereParts.push(roomScope.clause);
     windowParams.push(...roomScope.params);
   }
+  windowWhereParts.push(`m.timestamp >= $${pi++}`);
+  windowParams.push(STATS_RECORD_START_TS);
   if (cutoffTs !== null) {
     windowWhereParts.push(`m.timestamp >= $${pi++}`);
     windowParams.push(cutoffTs);
@@ -2363,21 +3443,35 @@ export async function getStatsDashboard(
   const windowWhere = windowWhereParts.length > 0 ? `WHERE ${windowWhereParts.join(" AND ")}` : "";
 
   const { rows } = await pool.query(
-    `SELECT m.timestamp, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
+    `SELECT m.timestamp, m.sender_id, m.sender_name, m.room_name, m.body, c.topics, c.relevance_score
      FROM messages m
      LEFT JOIN classifications c ON m.id = c.message_id
      ${windowWhere}
      ORDER BY m.timestamp ASC`,
     windowParams,
   );
-  const rowsData = rows as {
-    timestamp: number;
+  const rowsData = (rows as {
+    timestamp: unknown;
+    sender_id: string | null;
     sender_name: string;
     room_name: string;
     body: string;
     topics: string | null;
     relevance_score: number | null;
-  }[];
+  }[])
+    .map((row) => ({
+      ...row,
+      timestamp: coerceTimestampMs(row.timestamp),
+    }))
+    .filter((row): row is {
+      timestamp: number;
+      sender_id: string | null;
+      sender_name: string;
+      room_name: string;
+      body: string;
+      topics: string | null;
+      relevance_score: number | null;
+    } => row.timestamp !== null && isStatsRecordTimestamp(row.timestamp));
 
   const allTopicQuery = scopedWhere
     ? `SELECT m.timestamp, c.topics
@@ -2389,11 +3483,21 @@ export async function getStatsDashboard(
        LEFT JOIN classifications c ON m.id = c.message_id
        WHERE c.topics IS NOT NULL`;
   const { rows: allTopicRows } = await pool.query(allTopicQuery, scopedParams);
+  const { rows: historyRows } = await pool.query(
+    `SELECT m.timestamp, m.sender_id, m.sender_name
+     FROM messages m
+     ${scopedWhere}`,
+    scopedParams,
+  );
+  const history = summarizeStatsHistoryRows(
+    historyRows as Array<{ timestamp: unknown; sender_id?: unknown; sender_name?: unknown }>,
+    userAliases,
+  );
 
   const timelineDays =
     resolvedWindow === null
-      ? rows.length > 0
-        ? enumerateDaysFromTs(rows[0].timestamp, Date.now())
+      ? rowsData.length > 0
+        ? enumerateDaysFromTs(rowsData[0].timestamp, Date.now())
         : enumerateDays(30)
       : enumerateDays(resolvedWindow);
   const windowDaysValue = timelineDays.length;
@@ -2411,6 +3515,9 @@ export async function getStatsDashboard(
   const cooccurrence = new Map<string, PairAccumulator>();
   const userTopicCounts = new Map<string, Map<string, number>>();
   const userChannels = new Map<string, Set<string>>();
+  const userIds = new Map<string, Set<string>>();
+  const userChannelStats = new Map<string, Map<string, StatBaseAccumulator>>();
+  const userPossiblePhone = new Map<string, boolean>();
   const relationshipEdges = new Map<string, RelationshipEdge>();
   const relationshipInbound = new Map<string, number>();
   const relationshipOutbound = new Map<string, number>();
@@ -2437,6 +3544,8 @@ export async function getStatsDashboard(
       mentions: 0,
       dm_signals: 0,
       turns: 0,
+      evidence_label: "turn",
+      confidence: 0,
     };
     existing.replies += delta.replies ?? 0;
     existing.mentions += delta.mentions ?? 0;
@@ -2450,13 +3559,17 @@ export async function getStatsDashboard(
         existing.turns * 0.8
       ).toFixed(3),
     );
+    existing.evidence_label = relationshipEvidenceLabel(existing);
+    existing.confidence = relationshipConfidence(existing);
     relationshipEdges.set(key, existing);
     relationshipOutbound.set(source, (relationshipOutbound.get(source) || 0) + 1);
     relationshipInbound.set(target, (relationshipInbound.get(target) || 0) + 1);
   }
 
   for (const row of allTopicRows) {
-    const ts = row.timestamp;
+    const ts = coerceTimestampMs(row.timestamp);
+    if (ts === null) continue;
+    if (!isStatsRecordTimestamp(ts)) continue;
     for (const topic of new Set(parseTopics(row.topics))) {
       const prev = topicFirstSeenEver.get(topic);
       if (prev === undefined || ts < prev) {
@@ -2486,6 +3599,7 @@ export async function getStatsDashboard(
     }
 
     const sender = normalizeSenderName(row.sender_name || "Unknown", userAliases);
+    const senderId = String(row.sender_id || "").trim();
     const userAcc = users.get(sender) || {
       messages: 0,
       activeDays: new Set<string>(),
@@ -2503,6 +3617,14 @@ export async function getStatsDashboard(
       userAcc.relevanceCount += 1;
     }
     users.set(sender, userAcc);
+    if (senderId) {
+      const ids = userIds.get(sender) || new Set<string>();
+      ids.add(senderId);
+      userIds.set(sender, ids);
+    }
+    if (PHONE_LIKE_RE.test(row.sender_name || "") || PHONE_LIKE_RE.test(sender)) {
+      userPossiblePhone.set(sender, true);
+    }
 
     const channel = row.room_name || "Unknown";
     const channelAcc = channels.get(channel) || {
@@ -2527,6 +3649,21 @@ export async function getStatsDashboard(
     const userChannelSet = userChannels.get(sender) || new Set<string>();
     userChannelSet.add(channel);
     userChannels.set(sender, userChannelSet);
+    const channelMap = userChannelStats.get(sender) || new Map<string, StatBaseAccumulator>();
+    const personChannelAcc = channelMap.get(channel) || {
+      messages: 0,
+      activeDays: new Set<string>(),
+      firstTs: ts,
+      lastTs: ts,
+      relevanceTotal: 0,
+      relevanceCount: 0,
+    };
+    personChannelAcc.messages += 1;
+    personChannelAcc.activeDays.add(dateKey);
+    personChannelAcc.firstTs = Math.min(personChannelAcc.firstTs, ts);
+    personChannelAcc.lastTs = Math.max(personChannelAcc.lastTs, ts);
+    channelMap.set(channel, personChannelAcc);
+    userChannelStats.set(sender, channelMap);
 
     const body = String(row.body || "");
     const bodyLower = body.toLowerCase();
@@ -2660,6 +3797,34 @@ export async function getStatsDashboard(
     .sort((a, b) => b.messages - a.messages)
     .slice(0, 25);
 
+  const peopleDirectory: PersonDirectoryEntry[] = Array.from(users.entries())
+    .map(([name, acc]) => {
+      const ranked = finalizeRanked(name, acc);
+      const ids = Array.from(userIds.get(name) || []);
+      const channelMap = userChannelStats.get(name) || new Map<string, StatBaseAccumulator>();
+      return {
+        ...ranked,
+        sender_id: ids[0] || null,
+        channels: Array.from(channelMap.entries())
+          .map(([channelName, channelAcc]) => ({
+            name: channelName,
+            messages: channelAcc.messages,
+            first_seen: dateKeyFromTs(channelAcc.firstTs),
+            last_seen: dateKeyFromTs(channelAcc.lastTs),
+          }))
+          .sort((a, b) => {
+            if (b.messages !== a.messages) return b.messages - a.messages;
+            return a.name.localeCompare(b.name);
+          }),
+        top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 6),
+        possible_phone: userPossiblePhone.get(name) || false,
+      };
+    })
+    .sort((a, b) => {
+      if (b.messages !== a.messages) return b.messages - a.messages;
+      return a.name.localeCompare(b.name);
+    });
+
   const channelStats = Array.from(channels.entries())
     .map(([name, acc]) => finalizeRanked(name, acc))
     .sort((a, b) => b.messages - a.messages)
@@ -2779,15 +3944,32 @@ export async function getStatsDashboard(
   };
 
   const relationshipNodes: RelationshipNode[] = Array.from(users.entries())
-    .map(([name, acc]) => ({
-      id: name,
-      messages: acc.messages,
-      channels: userChannels.get(name)?.size || 0,
-      replies_out: relationshipOutbound.get(name) || 0,
-      replies_in: relationshipInbound.get(name) || 0,
-      dm_signals: dmSignalsByUser.get(name) || 0,
-      top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
-    }))
+    .map(([name, acc]) => {
+      const channelsForUser = userChannels.get(name)?.size || 0;
+      const repliesOut = relationshipOutbound.get(name) || 0;
+      const repliesIn = relationshipInbound.get(name) || 0;
+      const dmSignals = dmSignalsByUser.get(name) || 0;
+      const bridgeScore = Number(
+        (
+          Math.log1p(repliesOut) * 1.2 +
+          Math.log1p(repliesIn) * 1.4 +
+          Math.log1p(dmSignals) * 1.1 +
+          Math.max(0, channelsForUser - 1) * 0.45
+        ).toFixed(2),
+      );
+      return {
+        id: name,
+        messages: acc.messages,
+        channels: channelsForUser,
+        replies_out: repliesOut,
+        replies_in: repliesIn,
+        dm_signals: dmSignals,
+        identity_status: identityStatusForPerson(name, userPossiblePhone.get(name) || false),
+        bridge_score: bridgeScore,
+        community_role: communityRoleForPerson(acc.messages, bridgeScore),
+        top_topics: topTopicsForUser(userTopicCounts.get(name) || new Map<string, number>(), 4),
+      };
+    })
     .sort((a, b) => b.messages - a.messages)
     .slice(0, 220);
 
@@ -2803,13 +3985,31 @@ export async function getStatsDashboard(
     .slice(0, 1800);
 
   const alignmentNodes = relationshipNodes.slice(0, 120);
+  const topicUserFrequency = new Map<string, number>();
+  for (const topicMap of userTopicCounts.values()) {
+    for (const topic of topicMap.keys()) {
+      topicUserFrequency.set(topic, (topicUserFrequency.get(topic) || 0) + 1);
+    }
+  }
+  const comparedUsers = Math.max(1, userTopicCounts.size);
+  const weightedTopicCounts = new Map<string, Map<string, number>>();
+  for (const [name, topicMap] of userTopicCounts.entries()) {
+    const weighted = new Map<string, number>();
+    for (const [topic, count] of topicMap.entries()) {
+      const frequency = topicUserFrequency.get(topic) || 1;
+      const idf = Math.log((comparedUsers + 1) / (frequency + 1)) + 1;
+      const broadTopicPenalty = frequency / comparedUsers > 0.5 ? 0.45 : 1;
+      weighted.set(topic, Number((Math.sqrt(count) * idf * broadTopicPenalty).toFixed(4)));
+    }
+    weightedTopicCounts.set(name, weighted);
+  }
   const alignmentEdges: TopicAlignmentEdge[] = [];
   for (let i = 0; i < alignmentNodes.length; i += 1) {
     for (let j = i + 1; j < alignmentNodes.length; j += 1) {
       const left = alignmentNodes[i];
       const right = alignmentNodes[j];
-      const leftTopics = userTopicCounts.get(left.id) || new Map<string, number>();
-      const rightTopics = userTopicCounts.get(right.id) || new Map<string, number>();
+      const leftTopics = weightedTopicCounts.get(left.id) || new Map<string, number>();
+      const rightTopics = weightedTopicCounts.get(right.id) || new Map<string, number>();
       if (leftTopics.size === 0 || rightTopics.size === 0) continue;
 
       const similarity = cosineSimilarity(leftTopics, rightTopics);
@@ -2879,6 +4079,7 @@ export async function getStatsDashboard(
           ? Number((relevanceTotal / relevanceCount).toFixed(2))
           : null,
     },
+    history,
     timeline,
     coverage: {
       classified,
@@ -2887,6 +4088,7 @@ export async function getStatsDashboard(
     },
     users: userStats,
     channels: channelStats,
+    people_directory: peopleDirectory,
     topics: topicStats,
     cooccurrence: cooccurrenceStats,
     seasonality,
@@ -2957,15 +4159,28 @@ export async function getTopicDrilldown(
      ORDER BY m.timestamp ASC`,
     windowParams,
   );
-  const rowsData = rows as {
+  const rowsData = (rows as {
     id: string;
-    timestamp: number;
+    timestamp: unknown;
     room_name: string;
     sender_name: string;
     body: string;
     relevance_score: number | null;
     topics: string | null;
-  }[];
+  }[])
+    .map((row) => ({
+      ...row,
+      timestamp: coerceTimestampMs(row.timestamp),
+    }))
+    .filter((row): row is {
+      id: string;
+      timestamp: number;
+      room_name: string;
+      sender_name: string;
+      body: string;
+      relevance_score: number | null;
+      topics: string | null;
+    } => row.timestamp !== null);
 
   const { rows: allScopedRows } = await pool.query(
     `SELECT m.timestamp, c.topics
@@ -3015,9 +4230,11 @@ export async function getTopicDrilldown(
   const lastSeenWindowTs = topicRows[topicRows.length - 1].timestamp;
   let firstSeenEverTs = firstSeenWindowTs;
   for (const row of allScopedRows) {
+    const ts = coerceTimestampMs(row.timestamp);
+    if (ts === null) continue;
     for (const topic of parseTopics(row.topics)) {
       if (topic.toLowerCase() === needle) {
-        if (row.timestamp < firstSeenEverTs) firstSeenEverTs = row.timestamp;
+        if (ts < firstSeenEverTs) firstSeenEverTs = ts;
         break;
       }
     }
@@ -3617,10 +4834,108 @@ export interface LinkRow {
 
 export interface LinkStats {
   total: number;
+  total_mentions: number;
+  first_seen: string | null;
+  last_seen: string | null;
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
   categories: { name: string; count: number }[];
   authors: { name: string; count: number }[];
+}
+
+export interface LinkStarState {
+  count: number;
+  starred: boolean;
+}
+
+const MATRIX_PROFILE_LINK_SQLITE_FILTER =
+  "url NOT LIKE 'https://matrix.to/#/@%' AND url NOT LIKE 'http://matrix.to/#/@%'";
+const MATRIX_PROFILE_LINK_POSTGRES_FILTER =
+  "l.url NOT LIKE 'https://matrix.to/#/@%' AND l.url NOT LIKE 'http://matrix.to/#/@%'";
+
+function linkUrlHash(url: string): string {
+  return createHash("sha256").update(url.trim()).digest("hex");
+}
+
+function normalizeLinkUrls(urls: string[]): string[] {
+  return Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean)));
+}
+
+function sqliteHasTable(db: Database.Database, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
+  return Boolean(row?.name);
+}
+
+function sqliteFirstSharerExpr(db: Database.Database): string {
+  if (!sqliteHasTable(db, "raw_events") || !sqliteHasTable(db, "raw_event_links")) {
+    return "shared_by";
+  }
+  return `COALESCE((
+    SELECT re.sender_display_name
+    FROM raw_event_links rel
+    JOIN raw_events re ON re.id = rel.raw_event_id
+    WHERE rel.normalized_url = links.url
+      AND rel.url NOT LIKE 'https://matrix.to/#/@%'
+      AND rel.url NOT LIKE 'http://matrix.to/#/@%'
+    ORDER BY re.source_timestamp ASC, rel.position ASC, re.id ASC
+    LIMIT 1
+  ), shared_by)`;
+}
+
+function ensureSqliteLinkStars(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS link_stars (
+      url_hash TEXT NOT NULL,
+      url TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (url_hash, client_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_stars_url_hash ON link_stars (url_hash);
+  `);
+}
+
+async function ensurePostgresLinkStars() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS link_stars (
+      url_hash TEXT NOT NULL,
+      url TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (url_hash, client_id)
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_link_stars_url_hash ON link_stars (url_hash)");
+}
+
+async function postgresRawLinksAvailable(): Promise<boolean> {
+  const { rows } = await pool.query(
+    "SELECT to_regclass('public.raw_events') AS raw_events, to_regclass('public.raw_event_links') AS raw_event_links",
+  );
+  return Boolean(rows[0]?.raw_events && rows[0]?.raw_event_links);
+}
+
+function postgresFirstShareJoin(rawLinksAvailable: boolean): { joinSql: string; sharedByExpr: string } {
+  if (!rawLinksAvailable) {
+    return { joinSql: "", sharedByExpr: "l.shared_by" };
+  }
+  return {
+    sharedByExpr: "COALESCE(fs.first_shared_by, l.shared_by)",
+    joinSql: `
+      LEFT JOIN (
+        SELECT DISTINCT ON (rel.normalized_url)
+          rel.normalized_url,
+          re.sender_display_name AS first_shared_by
+        FROM raw_event_links rel
+        JOIN raw_events re ON re.id = rel.raw_event_id
+        WHERE rel.url NOT LIKE 'https://matrix.to/#/@%'
+          AND rel.url NOT LIKE 'http://matrix.to/#/@%'
+        ORDER BY rel.normalized_url, re.source_timestamp ASC, rel.position ASC, re.id ASC
+      ) fs ON fs.normalized_url = l.url
+    `,
+  };
 }
 
 function sourceFromUrl(url: string): string {
@@ -3649,75 +4964,31 @@ const SORT_MAP: Record<string, string> = {
   oldest: "first_seen ASC NULLS LAST",
 };
 
-export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> {
-  let pi = 1;
-  const where: string[] = [];
-  const params: unknown[] = [];
-  if (opts.days) {
-    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push(`last_seen >= $${pi++}`);
-    params.push(cutoff);
-  }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+const SQLITE_LINK_SORT_MAP: Record<string, string> = {
+  trending: "CAST(mention_count AS REAL) / MAX(1.0, (julianday('now') - julianday(last_seen)) + 1.0) DESC, last_seen DESC",
+  value: "value_score DESC, last_seen DESC",
+  recent: "last_seen DESC",
+  shared: "mention_count DESC, value_score DESC",
+  oldest: "first_seen ASC",
+};
 
-  const { rows: totalRows } = await pool.query(`SELECT COUNT(*) as c FROM links ${whereSql}`, params);
-  const total = (totalRows[0] as { c: number }).c;
-
-  const { rows: catRows } = await pool.query(
-    `SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`,
-    params,
-  );
-
-  const sharerSql = `SELECT shared_by, COUNT(*) as cnt FROM links ${whereSql}${where.length ? " AND" : " WHERE"} shared_by <> '' GROUP BY shared_by ORDER BY cnt DESC LIMIT 20`;
-  const { rows: sharerRows } = await pool.query(sharerSql, params);
-
-  // For sources, we need to compute from URLs — do it in JS
-  const { rows: urlRows } = await pool.query(
-    `SELECT url FROM links ${whereSql}`,
-    params,
-  );
-
-  const sourceCounts: Record<string, number> = {};
-  for (const r of urlRows as { url: string }[]) {
-    const s = sourceFromUrl(r.url);
-    sourceCounts[s] = (sourceCounts[s] || 0) + 1;
-  }
-  const sources = Object.entries(sourceCounts)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
-
-  const authorSql = `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql}${where.length ? " AND" : " WHERE"} authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`;
-  const { rows: authorRows } = await pool.query(authorSql, params);
-
-  return {
-    total,
-    sources,
-    sharers: (sharerRows as { shared_by: string; cnt: number }[]).map((r: { shared_by: string; cnt: number }) => ({ name: r.shared_by, count: r.cnt })),
-    categories: (catRows as { category: string; cnt: number }[]).map((r: { category: string; cnt: number }) => ({ name: r.category || "uncategorized", count: r.cnt })),
-    authors: (authorRows as { authored_by: string; cnt: number }[]).map((r: { authored_by: string; cnt: number }) => ({ name: r.authored_by, count: r.cnt })),
-  };
-}
-
-export async function getLinks(opts: {
+function sqliteLinkWhere(opts: {
   category?: string;
   days?: number;
-  limit?: number;
-  sort?: string;
   source?: string;
   sharedBy?: string;
   authoredBy?: string;
   pinned?: boolean;
-}): Promise<LinkRow[]> {
-  let pi = 1;
-  const where: string[] = [];
+}, sharedByExpr = "shared_by"): { whereSql: string; params: unknown[] } {
+  const where: string[] = [MATRIX_PROFILE_LINK_SQLITE_FILTER];
   const params: unknown[] = [];
   if (opts.category) {
-    where.push(`category = $${pi++}`);
+    where.push("category = ?");
     params.push(opts.category);
   }
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push(`last_seen >= $${pi++}`);
+    where.push("last_seen >= ?");
     params.push(cutoff);
   }
   if (opts.source && opts.source !== "all") {
@@ -3736,32 +5007,258 @@ export async function getLinks(opts: {
     };
     const pat = patterns[opts.source];
     if (pat) {
-      where.push(`url LIKE $${pi++}`);
+      where.push("url LIKE ?");
       params.push(pat);
     }
   }
   if (opts.sharedBy) {
-    where.push(`shared_by LIKE $${pi++}`);
+    where.push(`${sharedByExpr} LIKE ?`);
     params.push(`%${opts.sharedBy}%`);
   }
   if (opts.authoredBy === "any") {
     where.push("authored_by IS NOT NULL AND authored_by <> ''");
   } else if (opts.authoredBy) {
-    where.push(`authored_by LIKE $${pi++}`);
+    where.push("authored_by LIKE ?");
     params.push(`%${opts.authoredBy}%`);
   }
   if (opts.pinned) {
     where.push("pinned = 1");
   }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  return {
+    whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "",
+    params,
+  };
+}
+
+function getLinkStatsFromSqlite(opts: { days?: number }): LinkStats {
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  try {
+    const firstSharerExpr = sqliteFirstSharerExpr(db);
+    const { whereSql, params } = sqliteLinkWhere({ days: opts.days }, firstSharerExpr);
+    const totalRow = db.prepare(
+      `SELECT COUNT(*) as c, COALESCE(SUM(mention_count), 0) as mentions, MIN(first_seen) as first_seen, MAX(last_seen) as last_seen
+       FROM links ${whereSql}`,
+    ).get(...params) as { c: number; mentions: number; first_seen: string | null; last_seen: string | null };
+    const catRows = db
+      .prepare(`SELECT category, COUNT(*) as cnt FROM links ${whereSql} GROUP BY category ORDER BY cnt DESC`)
+      .all(...params) as { category: string | null; cnt: number }[];
+    const sharerRows = db
+      .prepare(
+        `SELECT ${firstSharerExpr} AS shared_by, COUNT(*) as cnt
+         FROM links ${whereSql} AND ${firstSharerExpr} <> ''
+         GROUP BY ${firstSharerExpr}
+         ORDER BY cnt DESC LIMIT 20`,
+      )
+      .all(...params) as { shared_by: string; cnt: number }[];
+    const urlRows = db.prepare(`SELECT url FROM links ${whereSql}`).all(...params) as { url: string }[];
+    const authorRows = db
+      .prepare(
+        `SELECT authored_by, COUNT(*) as cnt FROM links ${whereSql}${whereSql ? " AND" : " WHERE"} authored_by <> '' AND authored_by IS NOT NULL GROUP BY authored_by ORDER BY cnt DESC`,
+      )
+      .all(...params) as { authored_by: string; cnt: number }[];
+
+    const sourceCounts: Record<string, number> = {};
+    for (const row of urlRows) {
+      const source = sourceFromUrl(row.url);
+      sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+    }
+
+    return {
+      total: Number(totalRow.c || 0),
+      total_mentions: Number(totalRow.mentions || 0),
+      first_seen: totalRow.first_seen,
+      last_seen: totalRow.last_seen,
+      sources: Object.entries(sourceCounts)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count),
+      sharers: sharerRows.map((row) => ({ name: row.shared_by, count: Number(row.cnt || 0) })),
+      categories: catRows.map((row) => ({ name: row.category || "uncategorized", count: Number(row.cnt || 0) })),
+      authors: authorRows.map((row) => ({ name: row.authored_by, count: Number(row.cnt || 0) })),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function getLinksFromSqlite(opts: {
+  category?: string;
+  days?: number;
+  limit?: number;
+  sort?: string;
+  source?: string;
+  sharedBy?: string;
+  authoredBy?: string;
+  pinned?: boolean;
+}): LinkRow[] {
+  const db = new Database(SQLITE_DB_PATH, { readonly: true });
+  try {
+    const firstSharerExpr = sqliteFirstSharerExpr(db);
+    const { whereSql, params } = sqliteLinkWhere(opts, firstSharerExpr);
+    const orderBy = SQLITE_LINK_SORT_MAP[opts.sort || "value"] || SQLITE_LINK_SORT_MAP.value;
+    const limit = Math.min(Math.max(1, opts.limit || 50), 200);
+    return db
+      .prepare(
+        `SELECT id, url, url_hash, title, category, relevance, ${firstSharerExpr} AS shared_by,
+                source_group, first_seen, last_seen, mention_count, value_score,
+                report_date, authored_by, pinned
+         FROM links ${whereSql}
+         ORDER BY ${orderBy}
+         LIMIT ?`,
+      )
+      .all(...params, limit) as LinkRow[];
+  } finally {
+    db.close();
+  }
+}
+
+export async function getLinkStats(opts: { days?: number }): Promise<LinkStats> {
+  if (shouldUseSqliteAtlas()) {
+    return getLinkStatsFromSqlite(opts);
+  }
+  const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
+  let pi = 1;
+  const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
+  const params: unknown[] = [];
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    where.push(`l.last_seen >= $${pi++}`);
+    params.push(cutoff);
+  }
+  const whereSql = `WHERE ${where.join(" AND ")}`;
+
+  const { rows: totalRows } = await pool.query(
+    `SELECT COUNT(*) as c, COALESCE(SUM(l.mention_count), 0) as mentions, MIN(l.first_seen) as first_seen, MAX(l.last_seen) as last_seen
+     FROM links l
+     ${joinSql}
+     ${whereSql}`,
+    params,
+  );
+  const totalRow = totalRows[0] as { c: unknown; mentions: unknown; first_seen: string | null; last_seen: string | null };
+  const total = Number(totalRow.c || 0);
+
+  const { rows: catRows } = await pool.query(
+    `SELECT l.category AS category, COUNT(*) as cnt
+     FROM links l
+     ${joinSql}
+     ${whereSql}
+     GROUP BY l.category ORDER BY cnt DESC`,
+    params,
+  );
+
+  const sharerSql = `SELECT ${sharedByExpr} AS shared_by, COUNT(*) as cnt
+    FROM links l
+    ${joinSql}
+    ${whereSql} AND ${sharedByExpr} <> ''
+    GROUP BY ${sharedByExpr}
+    ORDER BY cnt DESC LIMIT 20`;
+  const { rows: sharerRows } = await pool.query(sharerSql, params);
+
+  // For sources, we need to compute from URLs — do it in JS
+  const { rows: urlRows } = await pool.query(
+    `SELECT l.url FROM links l
+     ${joinSql}
+     ${whereSql}`,
+    params,
+  );
+
+  const sourceCounts: Record<string, number> = {};
+  for (const r of urlRows as { url: string }[]) {
+    const s = sourceFromUrl(r.url);
+    sourceCounts[s] = (sourceCounts[s] || 0) + 1;
+  }
+  const sources = Object.entries(sourceCounts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const authorSql = `SELECT l.authored_by AS authored_by, COUNT(*) as cnt
+    FROM links l
+    ${joinSql}
+    ${whereSql} AND l.authored_by <> '' AND l.authored_by IS NOT NULL
+    GROUP BY l.authored_by ORDER BY cnt DESC`;
+  const { rows: authorRows } = await pool.query(authorSql, params);
+
+  return {
+    total,
+    total_mentions: Number(totalRow.mentions || 0),
+    first_seen: totalRow.first_seen,
+    last_seen: totalRow.last_seen,
+    sources,
+    sharers: (sharerRows as { shared_by: string; cnt: unknown }[]).map((r) => ({ name: r.shared_by, count: Number(r.cnt || 0) })),
+    categories: (catRows as { category: string; cnt: unknown }[]).map((r) => ({ name: r.category || "uncategorized", count: Number(r.cnt || 0) })),
+    authors: (authorRows as { authored_by: string; cnt: unknown }[]).map((r) => ({ name: r.authored_by, count: Number(r.cnt || 0) })),
+  };
+}
+
+export async function getLinks(opts: {
+  category?: string;
+  days?: number;
+  limit?: number;
+  sort?: string;
+  source?: string;
+  sharedBy?: string;
+  authoredBy?: string;
+  pinned?: boolean;
+}): Promise<LinkRow[]> {
+  if (shouldUseSqliteAtlas()) {
+    return getLinksFromSqlite(opts);
+  }
+  const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
+  let pi = 1;
+  const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
+  const params: unknown[] = [];
+  if (opts.category) {
+    where.push(`l.category = $${pi++}`);
+    params.push(opts.category);
+  }
+  if (opts.days) {
+    const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
+    where.push(`l.last_seen >= $${pi++}`);
+    params.push(cutoff);
+  }
+  if (opts.source && opts.source !== "all") {
+    const patterns: Record<string, string> = {
+      github: "%github.com%",
+      x: "%x.com%",
+      youtube: "%youtu%",
+      substack: "%substack.com%",
+      medium: "%medium.com%",
+      arxiv: "%arxiv.org%",
+      reddit: "%reddit.com%",
+      hackernews: "%news.ycombinator.com%",
+      linkedin: "%linkedin.com%",
+      notion: "%notion.so%",
+      gdocs: "%docs.google.com%",
+    };
+    const pat = patterns[opts.source];
+    if (pat) {
+      where.push(`l.url LIKE $${pi++}`);
+      params.push(pat);
+    }
+  }
+  if (opts.sharedBy) {
+    where.push(`${sharedByExpr} LIKE $${pi++}`);
+    params.push(`%${opts.sharedBy}%`);
+  }
+  if (opts.authoredBy === "any") {
+    where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
+  } else if (opts.authoredBy) {
+    where.push(`l.authored_by LIKE $${pi++}`);
+    params.push(`%${opts.authoredBy}%`);
+  }
+  if (opts.pinned) {
+    where.push("l.pinned = 1");
+  }
+  const whereSql = `WHERE ${where.join(" AND ")}`;
   const orderBy = SORT_MAP[opts.sort || "value"] || SORT_MAP.value;
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
   const { rows } = await pool.query(
-    `SELECT id, url, url_hash, title, category, relevance, shared_by,
-            source_group, first_seen, last_seen, mention_count, value_score,
-            report_date, authored_by, pinned
-     FROM links ${whereSql}
+    `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance, ${sharedByExpr} AS shared_by,
+            l.source_group, l.first_seen, l.last_seen, l.mention_count, l.value_score,
+            l.report_date, l.authored_by, l.pinned
+     FROM links l
+     ${joinSql}
+     ${whereSql}
      ORDER BY ${orderBy}
      LIMIT $${pi++}`,
     params,
@@ -3769,112 +5266,200 @@ export async function getLinks(opts: {
   return rows as LinkRow[];
 }
 
+export async function getLinkStars(opts: { urls: string[]; clientId?: string }): Promise<Record<string, LinkStarState>> {
+  const urls = normalizeLinkUrls(opts.urls);
+  const empty = Object.fromEntries(urls.map((url) => [url, { count: 0, starred: false }]));
+  if (!urls.length) return empty;
+  const hashes = urls.map(linkUrlHash);
+  const urlByHash = new Map(hashes.map((hash, index) => [hash, urls[index]]));
+  const clientId = opts.clientId?.trim() || "";
+
+  if (shouldUseSqliteAtlas()) {
+    const db = new Database(SQLITE_DB_PATH);
+    try {
+      ensureSqliteLinkStars(db);
+      const placeholders = hashes.map(() => "?").join(", ");
+      const countRows = db
+        .prepare(`SELECT url_hash, COUNT(*) AS cnt FROM link_stars WHERE url_hash IN (${placeholders}) GROUP BY url_hash`)
+        .all(...hashes) as { url_hash: string; cnt: number }[];
+      const result: Record<string, LinkStarState> = { ...empty };
+      for (const row of countRows) {
+        const url = urlByHash.get(row.url_hash);
+        if (url) result[url] = { ...result[url], count: Number(row.cnt || 0) };
+      }
+      if (clientId) {
+        const starredRows = db
+          .prepare(`SELECT url_hash FROM link_stars WHERE client_id = ? AND url_hash IN (${placeholders})`)
+          .all(clientId, ...hashes) as { url_hash: string }[];
+        for (const row of starredRows) {
+          const url = urlByHash.get(row.url_hash);
+          if (url) result[url] = { ...result[url], starred: true };
+        }
+      }
+      return result;
+    } finally {
+      db.close();
+    }
+  }
+
+  await ensurePostgresLinkStars();
+  const { rows: countRows } = await pool.query(
+    "SELECT url_hash, COUNT(*) AS cnt FROM link_stars WHERE url_hash = ANY($1::text[]) GROUP BY url_hash",
+    [hashes],
+  );
+  const result: Record<string, LinkStarState> = { ...empty };
+  for (const row of countRows as { url_hash: string; cnt: unknown }[]) {
+    const url = urlByHash.get(row.url_hash);
+    if (url) result[url] = { ...result[url], count: Number(row.cnt || 0) };
+  }
+  if (clientId) {
+    const { rows: starredRows } = await pool.query(
+      "SELECT url_hash FROM link_stars WHERE client_id = $1 AND url_hash = ANY($2::text[])",
+      [clientId, hashes],
+    );
+    for (const row of starredRows as { url_hash: string }[]) {
+      const url = urlByHash.get(row.url_hash);
+      if (url) result[url] = { ...result[url], starred: true };
+    }
+  }
+  return result;
+}
+
+export async function setLinkStar(opts: { url: string; clientId: string; starred: boolean }): Promise<LinkStarState> {
+  const url = opts.url.trim();
+  const clientId = opts.clientId.trim();
+  if (!url || !clientId) {
+    throw new Error("Link stars require url and clientId.");
+  }
+  const urlHash = linkUrlHash(url);
+
+  if (shouldUseSqliteAtlas()) {
+    const db = new Database(SQLITE_DB_PATH);
+    try {
+      ensureSqliteLinkStars(db);
+      if (opts.starred) {
+        db.prepare(
+          `INSERT INTO link_stars (url_hash, url, client_id)
+           VALUES (?, ?, ?)
+           ON CONFLICT(url_hash, client_id) DO UPDATE SET url = excluded.url`,
+        ).run(urlHash, url, clientId);
+      } else {
+        db.prepare("DELETE FROM link_stars WHERE url_hash = ? AND client_id = ?").run(urlHash, clientId);
+      }
+    } finally {
+      db.close();
+    }
+    return (await getLinkStars({ urls: [url], clientId }))[url];
+  }
+
+  await ensurePostgresLinkStars();
+  if (opts.starred) {
+    await pool.query(
+      `INSERT INTO link_stars (url_hash, url, client_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (url_hash, client_id) DO UPDATE SET url = EXCLUDED.url`,
+      [urlHash, url, clientId],
+    );
+  } else {
+    await pool.query("DELETE FROM link_stars WHERE url_hash = $1 AND client_id = $2", [urlHash, clientId]);
+  }
+  return (await getLinkStars({ urls: [url], clientId }))[url];
+}
+
 export async function searchLinksFts(
   query: string,
-  opts: { category?: string; days?: number; limit?: number; sort?: string; source?: string; sharedBy?: string; authoredBy?: string }
+  opts: {
+    category?: string;
+    days?: number;
+    limit?: number;
+    sort?: string;
+    source?: string;
+    sharedBy?: string;
+    authoredBy?: string;
+    pinned?: boolean;
+  }
 ): Promise<LinkRow[]> {
   const ftsQuery = buildLinksFtsQuery(query);
   const terms = normalizeLinkSearchTerms(query);
   if (!ftsQuery || !terms.length) return getLinks(opts);
 
-  // Check if FTS table exists
-  const { rows: ftsCheck } = await pool.query(
-    "SELECT table_name FROM information_schema.tables WHERE table_name = $1",
-    ["links_fts"],
-  );
-  const ftsExists = ftsCheck.length > 0;
+  const { joinSql, sharedByExpr } = postgresFirstShareJoin(await postgresRawLinksAvailable());
 
-  if (ftsExists) {
-    const matchScore = buildLinkTermMatchScore("l", terms, 1);
-    let pi = matchScore.nextIndex;
-    const where: string[] = [];
-    const params: unknown[] = [...matchScore.params];
-    const ftsTsvector = "to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,''))";
-    const ftsQueryParam = `plainto_tsquery('english', $${pi++})`;
-    params.push(ftsQuery);
-    if (opts.category) {
-      where.push(`l.category = $${pi++}`);
-      params.push(opts.category);
-    }
-    if (opts.days) {
-      const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-      where.push(`l.last_seen >= $${pi++}`);
-      params.push(cutoff);
-    }
-    if (opts.source && opts.source !== "all") {
-      const patterns: Record<string, string> = {
-        github: "%github.com%", x: "%x.com%", youtube: "%youtu%",
-        substack: "%substack.com%", medium: "%medium.com%", arxiv: "%arxiv.org%",
-        reddit: "%reddit.com%", hackernews: "%news.ycombinator.com%",
-        linkedin: "%linkedin.com%", notion: "%notion.so%", gdocs: "%docs.google.com%",
-      };
-      if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
-    }
-    if (opts.sharedBy) { where.push(`l.shared_by LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
-    if (opts.authoredBy === "any") {
-      where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
-    } else if (opts.authoredBy) {
-      where.push(`l.authored_by LIKE $${pi++}`); params.push(`%${opts.authoredBy}%`);
-    }
-    const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
-    const limit = Math.min(Math.max(1, opts.limit || 50), 200);
-    params.push(limit);
-
-    const { rows } = await pool.query(
-      `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
-              l.shared_by, l.source_group, l.first_seen, l.last_seen,
-              l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
-              (${matchScore.sql}) AS term_match_score,
-              ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
-       FROM links l
-       WHERE ${ftsTsvector} @@ ${ftsQueryParam}
-       ${extraWhere}
-       ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
-       LIMIT $${pi++}`,
-      params,
-    );
-    return rows as LinkRow[];
-  }
-
-  // Fallback: LIKE-based search when FTS table hasn't been built yet
-  let pi = 1;
-  const where: string[] = [];
-  const params: unknown[] = [];
-  const likeClauses = terms.map(() => {
-    const clause = `(title LIKE $${pi} OR relevance LIKE $${pi + 2} OR category LIKE $${pi + 1} OR url LIKE $${pi + 3})`;
-    pi += 4;
-    return clause;
-  });
-  pi = 1;
-  where.push(`(${likeClauses.join(" OR ")})`);
-  for (const t of terms) {
-    const p = `%${t}%`;
-    params.push(p, p, p, p);
-    pi += 4;
-  }
+  const extraSearchSql = `coalesce(${sharedByExpr}, '') || ' ' || coalesce(l.source_group, '') || ' ' || coalesce(l.authored_by, '')`;
+  const matchScore = buildLinkTermMatchScore("l", terms, 1, extraSearchSql);
+  let pi = matchScore.nextIndex;
+  const where: string[] = [MATRIX_PROFILE_LINK_POSTGRES_FILTER];
+  const params: unknown[] = [...matchScore.params];
+  const ftsTsvector = `to_tsvector('english', coalesce(l.title,'') || ' ' || coalesce(l.relevance,'') || ' ' || coalesce(l.category,'') || ' ' || coalesce(l.url,'') || ' ' || ${extraSearchSql})`;
+  const ftsQueryParam = `websearch_to_tsquery('english', $${pi++})`;
+  params.push(ftsQuery);
   if (opts.category) {
-    where.push(`category = $${pi++}`);
+    where.push(`l.category = $${pi++}`);
     params.push(opts.category);
   }
   if (opts.days) {
     const cutoff = new Date(Date.now() - opts.days * 86400000).toISOString();
-    where.push(`last_seen >= $${pi++}`);
+    where.push(`l.last_seen >= $${pi++}`);
     params.push(cutoff);
   }
-  const whereSql = `WHERE ${where.join(" AND ")}`;
+  if (opts.source && opts.source !== "all") {
+    const patterns: Record<string, string> = {
+      github: "%github.com%", x: "%x.com%", youtube: "%youtu%",
+      substack: "%substack.com%", medium: "%medium.com%", arxiv: "%arxiv.org%",
+      reddit: "%reddit.com%", hackernews: "%news.ycombinator.com%",
+      linkedin: "%linkedin.com%", notion: "%notion.so%", gdocs: "%docs.google.com%",
+    };
+    if (patterns[opts.source]) { where.push(`l.url LIKE $${pi++}`); params.push(patterns[opts.source]); }
+  }
+  if (opts.sharedBy) { where.push(`${sharedByExpr} LIKE $${pi++}`); params.push(`%${opts.sharedBy}%`); }
+  if (opts.authoredBy === "any") {
+    where.push("l.authored_by IS NOT NULL AND l.authored_by <> ''");
+  } else if (opts.authoredBy) {
+    where.push(`l.authored_by LIKE $${pi++}`); params.push(`%${opts.authoredBy}%`);
+  }
+  if (opts.pinned) {
+    where.push("l.pinned = 1");
+  }
+  const extraWhere = where.length ? `AND ${where.join(" AND ")}` : "";
   const limit = Math.min(Math.max(1, opts.limit || 50), 200);
   params.push(limit);
 
   const { rows } = await pool.query(
-    `SELECT id, url, url_hash, title, category, relevance, shared_by,
-            source_group, first_seen, last_seen, mention_count, value_score,
-            report_date, authored_by, pinned
-     FROM links ${whereSql}
-     ORDER BY value_score DESC, last_seen DESC
+    `SELECT l.id, l.url, l.url_hash, l.title, l.category, l.relevance,
+            ${sharedByExpr} AS shared_by, l.source_group, l.first_seen, l.last_seen,
+            l.mention_count, l.value_score, l.report_date, l.authored_by, l.pinned,
+            (${matchScore.sql}) AS term_match_score,
+            ts_rank(${ftsTsvector}, ${ftsQueryParam}) AS rank
+     FROM links l
+     ${joinSql}
+     WHERE (${ftsTsvector} @@ ${ftsQueryParam} OR (${matchScore.sql}) > 0)
+     ${extraWhere}
+     ORDER BY term_match_score DESC, rank DESC, l.value_score DESC
      LIMIT $${pi++}`,
     params,
   );
   return rows as LinkRow[];
+}
+
+function mergeLinkRows(primary: LinkRow[], secondary: LinkRow[], limit: number): LinkRow[] {
+  const merged: LinkRow[] = [];
+  const seen = new Set<string>();
+  const blended = primary.length > 0 ? [primary[0]] : [];
+  const remainingPrimary = primary.slice(1);
+  const maxLength = Math.max(remainingPrimary.length, secondary.length);
+  for (let i = 0; i < maxLength; i += 1) {
+    if (secondary[i]) blended.push(secondary[i]);
+    if (remainingPrimary[i]) blended.push(remainingPrimary[i]);
+  }
+
+  for (const row of blended) {
+    const key = row.url_hash || row.url;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+    if (merged.length >= limit) break;
+  }
+  return merged;
 }
 
 export async function searchLinks(opts: {
@@ -3887,7 +5472,31 @@ export async function searchLinks(opts: {
   sharedBy?: string;
   authoredBy?: string;
   pinned?: boolean;
+  semanticOnly?: boolean;
 }): Promise<LinkRow[]> {
+  if (opts.sharedBy) {
+    return searchLinksFts(opts.query, opts);
+  }
+  if (!opts.semanticOnly) {
+    const ftsRows = await searchLinksFts(opts.query, opts);
+    const semanticRows = await searchHybridLinks({
+      query: opts.query,
+      category: opts.category,
+      days: opts.days,
+      limit: opts.limit,
+      source: opts.source,
+      sharedBy: opts.sharedBy,
+      authoredBy: opts.authoredBy,
+      pinned: opts.pinned,
+    });
+    if (ftsRows.length > 0) {
+      return mergeLinkRows(ftsRows, semanticRows || [], Math.min(Math.max(1, opts.limit || 50), 200));
+    }
+    if (semanticRows && semanticRows.length > 0) {
+      return semanticRows;
+    }
+    return [];
+  }
   const semanticRows = await searchHybridLinks({
     query: opts.query,
     category: opts.category,
@@ -3900,6 +5509,12 @@ export async function searchLinks(opts: {
   });
   if (semanticRows && semanticRows.length > 0) {
     return semanticRows;
+  }
+  if (opts.semanticOnly) {
+    if (semanticRows === null) {
+      throw new Error("semantic link retrieval is unavailable");
+    }
+    return [];
   }
   return searchLinksFts(opts.query, opts);
 }

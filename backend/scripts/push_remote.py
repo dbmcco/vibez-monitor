@@ -15,7 +15,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,41 @@ def parse_args() -> argparse.Namespace:
         "--push-key",
         default="",
         help="Push key for /api/admin/push (defaults to VIBEZ_PUSH_API_KEY)",
+    )
+    parser.add_argument(
+        "--capture-key",
+        default="",
+        help="Capture key for /api/ingest/beeper/batch (defaults to VIBEZ_CAPTURE_API_KEY)",
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--capture-only",
+        action="store_true",
+        help="Push only raw Beeper capture batches to Railway ingest.",
+    )
+    mode_group.add_argument(
+        "--analysis-only",
+        action="store_true",
+        help="Push only derived analysis tables to Railway admin ingest.",
+    )
+    parser.add_argument(
+        "--analysis-section",
+        action="append",
+        choices=[
+            "links",
+            "daily_reports",
+            "wisdom_topics",
+            "wisdom_items",
+            "wisdom_recommendations",
+            "message_embeddings",
+            "link_embeddings",
+        ],
+        help="Limit --analysis-only to a specific derived table. May be repeated.",
+    )
+    parser.add_argument(
+        "--spool-dir",
+        default="",
+        help="Local capture spool directory (defaults to VIBEZ_CAPTURE_SPOOL_DIR).",
     )
     parser.add_argument(
         "--lookback-days",
@@ -128,8 +164,10 @@ def fetch_records(
         return []
     conn = get_connection()
     cur = conn.cursor()
+    where_sql = "WHERE m.timestamp >= %s" if cutoff_ts is not None else ""
+    query_params: tuple[Any, ...] = (cutoff_ts,) if cutoff_ts is not None else ()
     cur.execute(
-        """
+        f"""
         SELECT
             m.id,
             m.room_id,
@@ -148,10 +186,10 @@ def fetch_records(
             c.alert_level
         FROM messages m
         LEFT JOIN classifications c ON c.message_id = m.id
-        WHERE (%s IS NULL OR m.timestamp >= %s)
+        {where_sql}
         ORDER BY m.timestamp ASC
         """,
-        (cutoff_ts, cutoff_ts),
+        query_params,
     )
     columns = [desc.name for desc in cur.description]
     rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
@@ -249,9 +287,95 @@ def _fetch_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]
     cur = conn.cursor()
     cur.execute(query, params)
     columns = [desc.name for desc in cur.description]
-    rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+    rows = [dict_from_row(columns, row) for row in cur.fetchall()]
     conn.close()
     return rows
+
+
+def to_jsonable(value: Any) -> Any:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: to_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def dict_from_row(columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        key: to_jsonable(value)
+        for key, value in zip(columns, row, strict=True)
+    }
+
+
+def raw_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return {"raw": str(raw)}
+    return parsed if isinstance(parsed, dict) else {"raw": parsed}
+
+
+def message_row_to_capture_event(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_event_key": str(row["id"]),
+        "source_room_id": str(row["room_id"]),
+        "room_name": str(row["room_name"] or ""),
+        "sender_key": str(row["sender_id"]),
+        "sender_display_name": str(row["sender_name"]),
+        "source_timestamp": datetime.fromtimestamp(
+            int(row["timestamp"] or 0) / 1000,
+            tz=timezone.utc,
+        ).isoformat(),
+        "body": str(row["body"] or ""),
+        "attachments_json": [],
+        "raw_payload_json": raw_json_object(row.get("raw_event")),
+    }
+
+
+def fetch_raw_beeper_events(
+    cutoff_ts: int | None,
+    allowed_groups: set[str],
+    excluded_groups: set[str],
+) -> list[dict[str, Any]]:
+    allowed_groups_normalized = {item.strip().casefold() for item in allowed_groups}
+    if not allowed_groups_normalized:
+        return []
+    where_parts = ["m.id LIKE %s"]
+    params: list[Any] = ["beeper-%"]
+    if cutoff_ts is not None:
+        where_parts.append("m.timestamp >= %s")
+        params.append(cutoff_ts)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT m.id, m.room_id, m.room_name, m.sender_id, m.sender_name,
+               m.body, m.timestamp, m.raw_event
+        FROM messages m
+        WHERE {" AND ".join(where_parts)}
+        ORDER BY m.timestamp ASC, m.id ASC
+        """,
+        tuple(params),
+    )
+    columns = [desc.name for desc in cur.description]
+    rows = [dict_from_row(columns, row) for row in cur.fetchall()]
+    conn.close()
+
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        room_name = str(row["room_name"] or "")
+        if allowed_groups_normalized and room_name.strip().casefold() not in allowed_groups_normalized:
+            continue
+        if room_name.strip().lower() in excluded_groups:
+            continue
+        events.append(message_row_to_capture_event(row))
+    return events
 
 
 def _validate_ident(raw: str, label: str) -> str:
@@ -312,7 +436,7 @@ def fetch_message_embeddings(
         with conn.cursor() as cur:
             cur.execute(sql, params)
             columns = [desc.name for desc in cur.description]
-            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+            return [dict_from_row(columns, row) for row in cur.fetchall()]
 
 
 def fetch_link_embeddings(
@@ -356,7 +480,7 @@ def fetch_link_embeddings(
         with conn.cursor() as cur:
             cur.execute(sql, params)
             columns = [desc.name for desc in cur.description]
-            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+            return [dict_from_row(columns, row) for row in cur.fetchall()]
 
 
 def fetch_links() -> list[dict[str, Any]]:
@@ -425,23 +549,45 @@ def request_json(
     headers: dict[str, str],
     timeout: int = 120,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Content-Type", "application/json")
-    for key, value in headers.items():
-        if value:
-            req.add_header(key, value)
+    data = json.dumps(to_jsonable(payload)).encode("utf-8")
+    max_attempts = max(1, int(os.environ.get("VIBEZ_REMOTE_PUSH_RETRIES", "4")))
+    retry_statuses = {408, 425, 429, 500, 502, 503, 504}
+    last_error: Exception | None = None
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            header_map = {k.lower(): v for k, v in resp.headers.items()}
-            if not raw:
-                return {}, header_map
-            return json.loads(raw), header_map
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{method} {url} failed ({exc.code}): {detail}") from exc
+    for attempt in range(1, max_attempts + 1):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        for key, value in headers.items():
+            if value:
+                req.add_header(key, value)
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                header_map = {k.lower(): v for k, v in resp.headers.items()}
+                if not raw:
+                    return {}, header_map
+                return json.loads(raw), header_map
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            last_error = RuntimeError(f"{method} {url} failed ({exc.code}): {detail}")
+            if exc.code not in retry_statuses or attempt >= max_attempts:
+                raise last_error from exc
+        except (TimeoutError, urllib.error.URLError) as exc:
+            last_error = RuntimeError(f"{method} {url} failed: {exc}")
+            if attempt >= max_attempts:
+                raise last_error from exc
+
+        sleep_seconds = min(60, 2 ** (attempt - 1) * 5)
+        print(
+            f"  transient remote error on {method} {url}; retrying in {sleep_seconds}s "
+            f"(attempt {attempt + 1}/{max_attempts})",
+            file=sys.stderr,
+            flush=True,
+        )
+        time.sleep(sleep_seconds)
+
+    raise last_error or RuntimeError(f"{method} {url} failed")
 
 
 def login_access_cookie(remote_url: str, access_code: str) -> str:
@@ -479,6 +625,122 @@ def push_section(
     )
     if not result.get("ok"):
         raise RuntimeError(f"Remote push rejected payload: {result}")
+    return result
+
+
+def capture_spool_dir(raw: str = "") -> Path:
+    configured = raw or os.environ.get("VIBEZ_CAPTURE_SPOOL_DIR", "")
+    return Path(configured or ".vibez-spool/beeper").expanduser()
+
+
+def sanitize_batch_key(batch_key: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "-", batch_key.strip())
+    return value.strip("-")[:180] or "batch"
+
+
+def capture_batch_key(events: list[dict[str, Any]]) -> str:
+    first = str(events[0]["source_event_key"])
+    last = str(events[-1]["source_event_key"])
+    return sanitize_batch_key(f"beeper-{len(events)}-{first}-{last}")
+
+
+def write_capture_spool_batch(
+    spool_dir: Path,
+    batch_key: str,
+    events: list[dict[str, Any]],
+) -> Path:
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    path = spool_dir / f"{sanitize_batch_key(batch_key)}.json"
+    if path.exists():
+        return path
+    payload = {
+        "source": "beeper",
+        "batch_key": batch_key,
+        "events": events,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "delivered_at": None,
+        "delivery_result": None,
+    }
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True))
+    tmp_path.replace(path)
+    return path
+
+
+def load_capture_spool_batch(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text())
+
+
+def mark_capture_spool_delivered(path: Path, result: dict[str, Any]) -> None:
+    payload = load_capture_spool_batch(path)
+    payload["delivered_at"] = datetime.now(timezone.utc).isoformat()
+    payload["delivery_result"] = result
+    path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True))
+
+
+def iter_undelivered_capture_batches(spool_dir: Path) -> list[Path]:
+    if not spool_dir.exists():
+        return []
+    paths = sorted(spool_dir.glob("*.json"))
+    undelivered: list[Path] = []
+    for path in paths:
+        payload = load_capture_spool_batch(path)
+        if not payload.get("delivered_at"):
+            undelivered.append(path)
+    return undelivered
+
+
+def push_capture_section(
+    remote_url: str,
+    capture_key: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    endpoint = urllib.parse.urljoin(
+        remote_url.rstrip("/") + "/",
+        "api/ingest/beeper/batch",
+    )
+    result, _ = request_json(
+        "POST",
+        endpoint,
+        payload,
+        headers={"x-vibez-capture-key": capture_key},
+    )
+    if not result.get("ok"):
+        raise RuntimeError(f"Remote capture ingest rejected payload: {result}")
+    return result
+
+
+def push_capture_batches(
+    remote_url: str,
+    capture_key: str,
+    events: list[dict[str, Any]],
+    spool_dir: Path,
+    batch_size: int,
+) -> dict[str, int]:
+    for i in range(0, len(events), batch_size):
+        batch = events[i : i + batch_size]
+        if not batch:
+            continue
+        write_capture_spool_batch(spool_dir, capture_batch_key(batch), batch)
+
+    result = {"batches": 0, "events": 0, "inserted": 0, "deduped": 0}
+    for path in iter_undelivered_capture_batches(spool_dir):
+        payload = load_capture_spool_batch(path)
+        remote_result = push_capture_section(remote_url, capture_key, {
+            "source": "beeper",
+            "batch_key": payload["batch_key"],
+            "events": payload["events"],
+        })
+        mark_capture_spool_delivered(path, remote_result)
+        result["batches"] += 1
+        result["events"] += len(payload.get("events", []))
+        result["inserted"] += int(remote_result.get("inserted_count", 0))
+        result["deduped"] += int(remote_result.get("deduped_count", 0))
+        print(
+            f"  capture batch {result['batches']}: pushed {len(payload.get('events', []))} events "
+            f"(inserted={remote_result.get('inserted_count', 0)}, deduped={remote_result.get('deduped_count', 0)})",
+            flush=True,
+        )
     return result
 
 
@@ -522,18 +784,19 @@ def push_analysis_tables(
     cutoff_ts: int | None = None,
     allowed_groups: set[str] | None = None,
     excluded_groups: set[str] | None = None,
+    section_names: set[str] | None = None,
 ) -> None:
     resolved_allowed = allowed_groups or set()
     resolved_excluded = excluded_groups or set()
-    sections: list[tuple[str, list[dict[str, Any]]]] = [
-        ("links", fetch_links()),
-        ("daily_reports", fetch_daily_reports()),
-        ("wisdom_topics", fetch_wisdom_topics()),
-        ("wisdom_items", fetch_wisdom_items()),
-        ("wisdom_recommendations", fetch_wisdom_recommendations()),
+    sections: list[tuple[str, Any]] = [
+        ("links", fetch_links),
+        ("daily_reports", fetch_daily_reports),
+        ("wisdom_topics", fetch_wisdom_topics),
+        ("wisdom_items", fetch_wisdom_items),
+        ("wisdom_recommendations", fetch_wisdom_recommendations),
         (
             "message_embeddings",
-            fetch_message_embeddings(
+            lambda: fetch_message_embeddings(
                 resolved_allowed,
                 resolved_excluded,
                 cutoff_ts=cutoff_ts,
@@ -541,14 +804,17 @@ def push_analysis_tables(
         ),
         (
             "link_embeddings",
-            fetch_link_embeddings(
+            lambda: fetch_link_embeddings(
                 resolved_allowed,
                 resolved_excluded,
                 cutoff_ts=cutoff_ts,
             ),
         ),
     ]
-    for section_name, rows in sections:
+    for section_name, fetch_rows in sections:
+        if section_names is not None and section_name not in section_names:
+            continue
+        rows = fetch_rows()
         if not rows:
             continue
         resolved_batch_size = (
@@ -558,18 +824,21 @@ def push_analysis_tables(
         )
         for i in range(0, len(rows), resolved_batch_size):
             batch = rows[i : i + resolved_batch_size]
+            payload: dict[str, Any] = {section_name: batch}
+            if section_name == "links" and i == 0:
+                payload["replace_links"] = True
             result = push_section(
                 remote_url,
                 push_key,
                 access_cookie,
-                {section_name: batch},
+                payload,
             )
             print(
                 f"  {section_name} batch {(i // batch_size) + 1}: pushed {len(batch)} rows "
                 f"(remote {section_name}_written={result.get(f'{section_name}_written', 0)})",
                 flush=True,
             )
-    if sync_state:
+    if sync_state and section_names is None:
         push_section(remote_url, push_key, access_cookie, {"sync_state": sync_state})
         print(f"  sync_state: pushed {len(sync_state)} keys", flush=True)
 
@@ -581,16 +850,23 @@ def main() -> int:
     remote_url = (args.remote_url or os.environ.get("VIBEZ_REMOTE_URL", "")).strip()
     access_code = (args.access_code or os.environ.get("VIBEZ_ACCESS_CODE", "")).strip()
     push_key = (args.push_key or os.environ.get("VIBEZ_PUSH_API_KEY", "")).strip()
+    capture_key = (args.capture_key or os.environ.get("VIBEZ_CAPTURE_API_KEY", "")).strip()
     if not remote_url:
         print("Missing remote URL. Set VIBEZ_REMOTE_URL or pass --remote-url.", file=sys.stderr)
         return 2
-    if not access_code:
+    if args.capture_only and not capture_key:
+        print(
+            "Missing capture key. Set VIBEZ_CAPTURE_API_KEY or pass --capture-key.",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.capture_only and not access_code:
         print(
             "Missing access code. Set VIBEZ_ACCESS_CODE or pass --access-code.",
             file=sys.stderr,
         )
         return 2
-    if not push_key:
+    if not args.capture_only and not push_key:
         print(
             "Missing push key. Set VIBEZ_PUSH_API_KEY or pass --push-key.",
             file=sys.stderr,
@@ -608,6 +884,61 @@ def main() -> int:
         )
         close_db_connection()
         return 2
+    if args.capture_only:
+        events = fetch_raw_beeper_events(cutoff_ts, allowed_groups, excluded_groups)
+        window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"
+        print(f"Window: {window_label}")
+        print(f"Raw Beeper events to capture: {len(events)}")
+        if args.dry_run:
+            print("Dry run only; no spool or remote writes.")
+            close_db_connection()
+            return 0
+        capture_result = push_capture_batches(
+            remote_url=remote_url,
+            capture_key=capture_key,
+            events=events,
+            spool_dir=capture_spool_dir(args.spool_dir),
+            batch_size=batch_size,
+        )
+        print(
+            f"Capture push complete: {capture_result['events']} events over "
+            f"{capture_result['batches']} batches "
+            f"(inserted={capture_result['inserted']}, deduped={capture_result['deduped']})."
+        )
+        close_db_connection()
+        return 0
+
+    selected_analysis_sections = set(args.analysis_section or []) or None
+    if args.analysis_only:
+        sync_state = (
+            fetch_sync_state(allowed_groups, excluded_groups)
+            if selected_analysis_sections is None
+            else {}
+        )
+        window_label = "all-time" if cutoff_ts is None else f"last {args.lookback_days}d"
+        print(f"Window: {window_label}")
+        if selected_analysis_sections:
+            print(f"Analysis sections: {', '.join(sorted(selected_analysis_sections))}")
+        if args.dry_run:
+            print("Dry run only; no remote writes.")
+            close_db_connection()
+            return 0
+        access_cookie = login_access_cookie(remote_url, access_code)
+        push_analysis_tables(
+            remote_url=remote_url,
+            push_key=push_key,
+            access_cookie=access_cookie,
+            sync_state=sync_state,
+            batch_size=batch_size,
+            cutoff_ts=cutoff_ts,
+            allowed_groups=allowed_groups,
+            excluded_groups=excluded_groups,
+            section_names=selected_analysis_sections,
+        )
+        print("Analysis push complete.")
+        close_db_connection()
+        return 0
+
     records = fetch_records(cutoff_ts, allowed_groups, excluded_groups)
     sync_state = fetch_sync_state(allowed_groups, excluded_groups)
 
@@ -649,6 +980,7 @@ def main() -> int:
         cutoff_ts=cutoff_ts,
         allowed_groups=allowed_groups,
         excluded_groups=excluded_groups,
+        section_names=selected_analysis_sections,
     )
     print(
         f"Push complete: {len(records)} records over {batches} message batches "

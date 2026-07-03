@@ -17,6 +17,23 @@ interface RankedStat {
   avg_relevance: number | null;
 }
 
+interface PersonDirectoryEntry {
+  name: string;
+  sender_id: string | null;
+  messages: number;
+  active_days: number;
+  first_seen: string;
+  last_seen: string;
+  channels: Array<{
+    name: string;
+    messages: number;
+    first_seen: string;
+    last_seen: string;
+  }>;
+  top_topics: string[];
+  possible_phone: boolean;
+}
+
 interface TopicStat {
   topic: string;
   started_on: string;
@@ -63,6 +80,9 @@ interface RelationshipNode {
   replies_out: number;
   replies_in: number;
   dm_signals: number;
+  identity_status: "named" | "phone" | "unknown";
+  bridge_score: number;
+  community_role: "hub" | "bridge" | "participant";
   top_topics: string[];
 }
 
@@ -74,6 +94,8 @@ interface RelationshipEdge {
   mentions: number;
   dm_signals: number;
   turns: number;
+  evidence_label: "dm/offline" | "mention" | "reply" | "turn";
+  confidence: number;
 }
 
 interface TopicAlignmentEdge {
@@ -140,6 +162,12 @@ interface StatsDashboard {
     topics: number;
     avg_relevance: number | null;
   };
+  history: {
+    first_seen: string | null;
+    last_seen: string | null;
+    messages: number;
+    members_observed: number;
+  };
   timeline: DailyCount[];
   coverage: {
     classified: DailyCount[];
@@ -148,6 +176,7 @@ interface StatsDashboard {
   };
   users: RankedStat[];
   channels: RankedStat[];
+  people_directory: PersonDirectoryEntry[];
   topics: TopicStat[];
   cooccurrence: TopicCooccurrence[];
   seasonality: SeasonalityStats;
@@ -987,7 +1016,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
   const [focusedNode, setFocusedNode] = useState<string | null>(null);
   const [personInput, setPersonInput] = useState("");
   const [minRelationshipWeight, setMinRelationshipWeight] = useState(2.8);
-  const [minAlignmentSimilarity, setMinAlignmentSimilarity] = useState(0.56);
+  const [minAlignmentSimilarity, setMinAlignmentSimilarity] = useState(0.68);
   const [neighborLimit, setNeighborLimit] = useState(60);
   const [showNeighborEdges, setShowNeighborEdges] = useState(false);
   const [hideIsolated, setHideIsolated] = useState(true);
@@ -1033,6 +1062,25 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
     () => [...baseNodes].sort((a, b) => b.messages - a.messages),
     [baseNodes],
   );
+  const unresolvedIdentityCount = useMemo(
+    () => sortedNodes.filter((node) => node.identity_status !== "named").length,
+    [sortedNodes],
+  );
+  const bridgePeople = useMemo(
+    () =>
+      [...sortedNodes]
+        .filter((node) => node.bridge_score > 0)
+        .sort((a, b) => {
+          if (b.bridge_score !== a.bridge_score) return b.bridge_score - a.bridge_score;
+          return b.messages - a.messages;
+        })
+        .slice(0, 8),
+    [sortedNodes],
+  );
+  const modeLabel = isRelationship ? "Conversation Map" : "Theme Map";
+  const modeDescription = isRelationship
+    ? "Edges are inferred from mentions, replies, nearby turns, and DM/offline intent signals."
+    : "Edges compare each person's weighted topic profile, with broad topics down-weighted.";
   const nodeById = useMemo(
     () => new Map(sortedNodes.map((node) => [node.id, node])),
     [sortedNodes],
@@ -1938,7 +1986,16 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
   }, [hoveredNode, displayedEdges]);
 
   const labelNodeSet = useMemo(
-    () => new Set(displayedNodes.slice(0, 24).map((node) => node.id)),
+    () =>
+      new Set(
+        [...displayedNodes]
+          .sort((a, b) => {
+            if (b.bridge_score !== a.bridge_score) return b.bridge_score - a.bridge_score;
+            return b.messages - a.messages;
+          })
+          .slice(0, 12)
+          .map((node) => node.id),
+      ),
     [displayedNodes],
   );
 
@@ -2114,7 +2171,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
           }}
           className={`rounded px-3 py-1 text-sm ${isRelationship ? "vibe-button" : "vibe-chip"}`}
         >
-          Relationships
+          Conversation Map
         </button>
         <button
           onClick={() => {
@@ -2127,7 +2184,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
           }}
           className={`rounded px-3 py-1 text-sm ${!isRelationship ? "vibe-button" : "vibe-chip"}`}
         >
-          Topic Alignment
+          Theme Map
         </button>
         <span className="text-xs text-slate-400">
           {isRelationship
@@ -2135,13 +2192,37 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
             : `${network.topic_alignment.summaries.included_nodes} people compared`}
         </span>
         <span className="text-xs text-slate-500">
-          communities {community.clusters.length} · visible {clusterSummaries.length}
+          communities {community.clusters.length} · clusters shown {clusterSummaries.length}
+        </span>
+        <span className="text-xs text-amber-300/80">
+          identity cleanup {unresolvedIdentityCount}
         </span>
         {personQuery ? (
           <span className="text-xs text-cyan-300/85">
             search filter active · {displayedNodes.length} people in graph
           </span>
         ) : null}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] p-3 text-xs text-[#5b4f3b] md:col-span-2">
+          <div className="font-semibold uppercase tracking-wide text-[#7b2f20]">{modeLabel}</div>
+          <p className="mt-1 leading-relaxed">{modeDescription}</p>
+        </div>
+        <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] p-3 text-xs text-[#5b4f3b]">
+          <div className="font-semibold uppercase tracking-wide text-[#7b2f20]">Map Health</div>
+          <p className="mt-1">
+            {displayedNodes.length} people · {displayedEdges.length} visible edges · {unresolvedIdentityCount} unresolved identities.
+          </p>
+        </div>
+        <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] p-3 text-xs text-[#5b4f3b]">
+          <div className="font-semibold uppercase tracking-wide text-[#7b2f20]">Bridge People</div>
+          <p className="mt-1 line-clamp-2">
+            {bridgePeople.length > 0
+              ? bridgePeople.slice(0, 4).map((node) => node.id).join(", ")
+              : "No bridge signals at this threshold."}
+          </p>
+        </div>
       </div>
 
       <div className="grid gap-3 rounded-lg border border-slate-700/70 bg-slate-900/45 p-3 lg:grid-cols-6">
@@ -2478,6 +2559,7 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
           const isFocused = resolvedFocus === node.id;
           const isNeighbor = hoveredNode !== null && hoveredNeighbors.has(node.id);
           const muted = hoveredNode !== null && !isHovered && !isNeighbor;
+          const identityNeedsCleanup = node.identity_status !== "named";
           const radius =
             5.4 +
             Math.sqrt(node.messages / maxMessages) * 11 +
@@ -2501,8 +2583,15 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                 fillOpacity={
                   isHovered ? 0.96 : isNeighbor || isFocused ? 0.8 : muted ? 0.2 : 0.58
                 }
-                stroke={isHovered || isFocused ? "#e2e8f0" : "#0f172a"}
-                strokeWidth={isHovered || isFocused ? 1.8 : 1}
+                stroke={
+                  identityNeedsCleanup
+                    ? "#b45309"
+                    : isHovered || isFocused
+                      ? "#e2e8f0"
+                      : "#0f172a"
+                }
+                strokeWidth={identityNeedsCleanup ? 2 : isHovered || isFocused ? 1.8 : 1}
+                strokeDasharray={identityNeedsCleanup ? "3 2" : undefined}
               />
               {shouldLabel ? (
                 <text
@@ -2547,6 +2636,19 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                 {activeNode.replies_in}
                 {isRelationship ? ` · dm/offline ${activeNode.dm_signals}` : ""}
               </div>
+              <div className="flex flex-wrap gap-2 text-[11px]">
+                <span className="rounded border border-slate-700/70 px-2 py-0.5 text-slate-300">
+                  role: {activeNode.community_role}
+                </span>
+                <span className="rounded border border-slate-700/70 px-2 py-0.5 text-slate-300">
+                  bridge {activeNode.bridge_score.toFixed(1)}
+                </span>
+                {activeNode.identity_status !== "named" ? (
+                  <span className="rounded border border-amber-700/60 bg-amber-950/30 px-2 py-0.5 text-amber-200">
+                    identity needs cleanup: {activeNode.identity_status}
+                  </span>
+                ) : null}
+              </div>
               <div className="text-slate-400">
                 Connections at threshold: {activeVisibleConnectionCount} visible / {activeConnectionCount} total
               </div>
@@ -2562,8 +2664,9 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                       const edge = item.edge.detail as RelationshipEdge;
                       return (
                         <div key={`${item.other}-${index}`}>
-                          {item.other} · w={item.edge.metric.toFixed(1)} · r{edge.replies} · m
-                          {edge.mentions} · dm{edge.dm_signals}
+                          {item.other} · {edge.evidence_label} · w={item.edge.metric.toFixed(1)} · conf{" "}
+                          {(edge.confidence * 100).toFixed(0)}% · r{edge.replies} · m{edge.mentions} · dm
+                          {edge.dm_signals}
                         </div>
                       );
                     }
@@ -2593,7 +2696,8 @@ function PeopleNetworkGraph({ network }: { network: StatsDashboard["network"] })
                 const targetCluster = community.clusterByNode.get(edge.target) || "c0";
                 return isRelationship ? (
                   <div key={`${edge.source}-${edge.target}-${index}`}>
-                    {edge.source} → {edge.target} · w={edge.metric.toFixed(1)} ·{" "}
+                    {edge.source} → {edge.target} · {(edge.detail as RelationshipEdge).evidence_label} · w=
+                    {edge.metric.toFixed(1)} · conf {((edge.detail as RelationshipEdge).confidence * 100).toFixed(0)}% ·{" "}
                     {sourceCluster.toUpperCase()}
                     {sourceCluster === targetCluster ? "" : ` to ${targetCluster.toUpperCase()}`}
                   </div>
@@ -2643,9 +2747,10 @@ const SECTION_LINKS = [
   { id: "coverage-trend", label: "Coverage" },
   { id: "semantic-arcs", label: "Semantic Arcs" },
   { id: "topic-explorer", label: "Topics" },
-  { id: "people-network", label: "People Network" },
+  { id: "people-network", label: "Community Map" },
   { id: "topic-graph", label: "Graph" },
   { id: "contributors", label: "Users + Channels" },
+  { id: "people-directory", label: "Directory" },
   { id: "topic-lifecycle", label: "Lifecycle" },
   { id: "topic-drilldown", label: "Drilldown" },
   { id: "cooccurrence", label: "Co-Occurrence" },
@@ -2653,7 +2758,7 @@ const SECTION_LINKS = [
 ];
 
 export default function StatsPage() {
-  const [days, setDays] = useState<DayRange>(90);
+  const [days, setDays] = useState<DayRange>("all");
   const [stats, setStats] = useState<StatsDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
@@ -2663,6 +2768,7 @@ export default function StatsPage() {
   });
   const [topicDrilldown, setTopicDrilldown] = useState<TopicDrilldown | null>(null);
   const [topicInsights, setTopicInsights] = useState<TopicInsights | null>(null);
+  const [peopleQuery, setPeopleQuery] = useState("");
   const drilldownRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -2716,6 +2822,22 @@ export default function StatsPage() {
     if (!stats) return "";
     return new Date(stats.generated_at).toLocaleString();
   }, [stats]);
+  const filteredPeople = useMemo(() => {
+    if (!stats) return [];
+    const query = peopleQuery.trim().toLowerCase();
+    if (!query) return stats.people_directory;
+    return stats.people_directory.filter((person) => {
+      const haystack = [
+        person.name,
+        person.sender_id || "",
+        ...person.channels.map((channel) => channel.name),
+        ...person.top_topics,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [stats, peopleQuery]);
 
   const activeDrilldown =
     topicDrilldown && topicDrilldown.topic === effectiveSelectedTopic
@@ -2775,13 +2897,14 @@ export default function StatsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <header className="fade-up space-y-2">
-          <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-            Stats & Trends
+      <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+        <header className="newspaper-section-header space-y-2">
+          <p className="newspaper-kicker">Data Bureau</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">
+            Stats Desk
           </h1>
-          <p className="vibe-subtitle">
-            Activity by user, channel, and topic with lifecycle and recurrence over time.
+          <p className="vibe-subtitle max-w-2xl">
+            Activity by community member, channel, and topic with lifecycle and recurrence over time.
           </p>
         </header>
         <StatusPanel
@@ -2800,10 +2923,16 @@ export default function StatsPage() {
 
   if (!stats) {
     return (
-      <StatusPanel
-        title="Stats unavailable"
-        detail="Could not load analytics right now. Try refreshing in a moment."
-      />
+      <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+        <header className="newspaper-section-header space-y-2">
+          <p className="newspaper-kicker">Data Bureau</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">Stats Desk</h1>
+        </header>
+        <StatusPanel
+          title="Stats unavailable"
+          detail="Could not load analytics right now. Try refreshing in a moment."
+        />
+      </div>
     );
   }
 
@@ -2813,6 +2942,10 @@ export default function StatsPage() {
       : stats.scope.mode === "excluded_groups"
         ? `Scoped by exclusions (${stats.scope.excluded_groups.length} filtered names)`
         : "Using all channels in DB";
+  const historyLabel =
+    stats.history.first_seen && stats.history.last_seen
+      ? `Record: ${stats.history.first_seen} to ${stats.history.last_seen}`
+      : "Record range unavailable";
   const coveragePercent = Math.round(stats.coverage.avg_topic_coverage * 100);
   const recentWindow = Math.min(21, stats.timeline.length);
   const recentMessages = sumCounts(stats.timeline.slice(-recentWindow));
@@ -2843,13 +2976,16 @@ export default function StatsPage() {
         : "text-emerald-200 border-emerald-400/35 bg-emerald-400/10";
 
   return (
-    <div className="space-y-6">
-      <header className="fade-up space-y-2">
-        <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-          Stats & Trends
+    <div className="newspaper-section atlas-newspaper fade-up space-y-6">
+      <header className="newspaper-section-header space-y-2">
+        <p className="newspaper-kicker">Data Bureau</p>
+        <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">
+          Stats Desk
         </h1>
-        <p className="vibe-subtitle">
-          Activity by user, channel, and topic with lifecycle and recurrence over time.
+        <p className="vibe-subtitle max-w-2xl">
+          Activity by community member, channel, and topic with lifecycle and recurrence over time.
+          This is the back page of the paper: counts, arcs, recurrence, directories, and the
+          signals behind the reporting.
         </p>
       </header>
 
@@ -2873,7 +3009,7 @@ export default function StatsPage() {
       </div>
 
       <div className="rounded-lg border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-xs text-cyan-100">
-        {scopeLabel}
+        {scopeLabel} · {historyLabel}
       </div>
 
       <section className="vibe-panel rounded-xl p-4">
@@ -2891,14 +3027,18 @@ export default function StatsPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
         <div className="vibe-panel rounded-xl p-4">
-          <div className="text-xs text-slate-400">Messages</div>
+          <div className="text-xs text-slate-400">Window messages</div>
           <div className="vibe-title mt-1 text-2xl">{stats.totals.messages}</div>
         </div>
         <div className="vibe-panel rounded-xl p-4">
-          <div className="text-xs text-slate-400">Users</div>
+          <div className="text-xs text-slate-400">Active people</div>
           <div className="vibe-title mt-1 text-2xl">{stats.totals.users}</div>
+        </div>
+        <div className="vibe-panel rounded-xl p-4">
+          <div className="text-xs text-slate-400">Members observed</div>
+          <div className="vibe-title mt-1 text-2xl">{stats.history.members_observed}</div>
         </div>
         <div className="vibe-panel rounded-xl p-4">
           <div className="text-xs text-slate-400">Channels</div>
@@ -3082,11 +3222,9 @@ export default function StatsPage() {
       </section>
 
       <section id="people-network" className="vibe-panel scroll-mt-28 rounded-xl p-5">
-        <h2 className="vibe-title mb-3 text-lg">People Relationship Network</h2>
-        <p className="mb-3 text-sm text-slate-300">
-          Nodes represent participants. Relationship edges are inferred from explicit mentions,
-          conversational replies/turns, and DM-offline signals. Topic Alignment edges show who has
-          similar interest distributions.
+        <h2 className="vibe-title mb-3 text-lg">Community Map</h2>
+        <p className="mb-3 max-w-3xl text-sm text-[#5f5544]">
+          A working map of conversation ties, shared themes, bridge people, and identity cleanup spots across the archive.
         </p>
         <PeopleNetworkGraph network={stats.network} />
       </section>
@@ -3148,6 +3286,87 @@ export default function StatsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <section id="people-directory" className="vibe-panel scroll-mt-28 rounded-xl p-5">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="vibe-title text-lg">People Directory</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              Everyone observed in the selected window, with channel membership inferred from posting activity.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={peopleQuery}
+              onChange={(event) => setPeopleQuery(event.target.value)}
+              placeholder="Search people, channels, topics"
+              className="w-64 max-w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/60"
+            />
+            <span className="text-xs text-slate-400">
+              {filteredPeople.length} / {stats.people_directory.length}
+            </span>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-slate-400">
+              <tr>
+                <th className="pb-2 pr-3">Person</th>
+                <th className="pb-2 pr-3">Msgs</th>
+                <th className="pb-2 pr-3">Active</th>
+                <th className="pb-2 pr-3">Observed Channels</th>
+                <th className="pb-2 pr-3">Top Topics</th>
+                <th className="pb-2">Window</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPeople.slice(0, 200).map((person) => (
+                <tr key={`${person.name}-${person.sender_id || "name"}`} className="border-t border-slate-700/60 align-top">
+                  <td className="py-3 pr-3 text-slate-200">
+                    <div className="font-semibold">{person.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {person.sender_id ? person.sender_id : "no sender id"}
+                      {person.possible_phone ? " · phone-like id" : ""}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-3">{person.messages}</td>
+                  <td className="py-3 pr-3">{person.active_days}d</td>
+                  <td className="py-3 pr-3">
+                    <div className="flex max-w-xl flex-wrap gap-1.5">
+                      {person.channels.slice(0, 8).map((channel) => (
+                        <span
+                          key={`${person.name}-${channel.name}`}
+                          className="rounded border border-slate-700/70 bg-slate-900/60 px-2 py-1 text-xs text-slate-200"
+                          title={`${channel.messages} messages, ${channel.first_seen} to ${channel.last_seen}`}
+                        >
+                          {channel.name} · {channel.messages}
+                        </span>
+                      ))}
+                      {person.channels.length > 8 && (
+                        <span className="rounded border border-slate-700/70 px-2 py-1 text-xs text-slate-400">
+                          +{person.channels.length - 8}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-3 text-xs text-slate-300">
+                    {person.top_topics.length > 0 ? person.top_topics.join(", ") : "n/a"}
+                  </td>
+                  <td className="py-3 text-xs text-slate-400">
+                    {person.first_seen} to {person.last_seen}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filteredPeople.length > 200 && (
+            <p className="mt-3 text-xs text-slate-400">
+              Showing the first 200 matches. Use search to narrow the directory.
+            </p>
+          )}
         </div>
       </section>
 

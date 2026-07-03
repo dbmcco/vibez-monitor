@@ -1,0 +1,1733 @@
+"use client";
+
+import Link from "next/link";
+import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { atlasArticleHref, isRenderableArticleImageUrl } from "@/lib/atlas-ui";
+import { splitFrontPageArticles } from "@/lib/atlas-layout";
+
+interface AtlasCitation {
+  ref: string;
+  type: "message" | "link";
+  id: string;
+  label: string;
+  channel?: string;
+  sender?: string;
+  timestamp?: number;
+  body?: string;
+  topics?: string[];
+  relevance_score?: number | null;
+  url?: string;
+  title?: string;
+}
+
+interface AtlasMatrixCell {
+  channel: string;
+  topic: string;
+  message_count: number;
+  people: string[];
+  latest_timestamp: number;
+  avg_relevance: number | null;
+  citation_refs: string[];
+}
+
+interface AtlasNarrative {
+  title: string;
+  summary: string;
+  report: {
+    headline: string;
+    kicker: string;
+    lead: string;
+    what_matters: string[];
+    what_to_watch: string[];
+    evidence_refs: string[];
+  };
+  paragraphs: string[];
+  main_topic: {
+    title: string;
+    topic: string | null;
+    paragraphs: string[];
+    citation_refs: string[];
+  };
+  week_in_review: {
+    title: string;
+    bullets: string[];
+  };
+}
+
+interface AtlasPeopleInsights {
+  window_days: 7;
+  generated_at: string;
+  new_faces: Array<{
+    name: string;
+    sender_id: string | null;
+    first_seen: string;
+    first_seen_ts: number;
+    first_channel: string;
+    message_count_7d: number;
+    channels: string[];
+    intro_refs: string[];
+    detection_reasons: Array<"first_seen" | "intros_channel" | "member_event" | "phone_or_name_addition">;
+  }>;
+  identity_signals: Array<{
+    name: string;
+    sender_id: string | null;
+    first_seen: string;
+    first_seen_ts: number;
+    signal_seen: string;
+    signal_seen_ts: number;
+    signal_channel: string;
+    message_count_7d: number;
+    channels: string[];
+    intro_refs: string[];
+    signal_reasons: Array<"intros_channel" | "member_event" | "phone_or_name_addition">;
+  }>;
+  top_contributors: Array<{
+    name: string;
+    sender_id: string | null;
+    message_count_7d: number;
+    active_days_7d: number;
+    channels: string[];
+    latest_seen: string;
+    latest_seen_ts: number;
+    citation_refs: string[];
+  }>;
+}
+
+interface AtlasSnapshot {
+  generated_at: string;
+  window: { start: string; end: string; hours: number };
+  overview: {
+    messages: number;
+    people: number;
+    channels: number;
+    topics: number;
+    links: number;
+  };
+  channels: Array<{
+    name: string;
+    message_count: number;
+    people: string[];
+    top_topics: Array<{ name: string; count: number }>;
+    citation_refs: string[];
+  }>;
+  topics: Array<{
+    name: string;
+    message_count: number;
+    channels: string[];
+    people: string[];
+    citation_refs: string[];
+  }>;
+  matrix: AtlasMatrixCell[];
+  concerns: Array<{
+    kind: "hot_alert" | "unresolved_question" | "under_covered";
+    title: string;
+    detail: string;
+    citation_refs: string[];
+  }>;
+  links: Array<{
+    ref: string;
+    url: string;
+    title: string;
+    category: string;
+    shared_by: string;
+    source_group: string;
+    last_seen: string | null;
+  }>;
+  citations: Record<string, AtlasCitation>;
+  people: AtlasPeopleInsights;
+  narrative: AtlasNarrative;
+}
+
+interface AtlasEditorialReport {
+  issue: {
+    date: string;
+    title: string;
+    subtitle: string;
+    edition_label: string;
+  };
+  headline: string;
+  dek: string;
+  what_happened: string[];
+  what_it_means: string[];
+  why_care: string[];
+  valuable: string[];
+  actions: string[];
+  main_topic: {
+    title: string;
+    paragraphs: string[];
+    evidence_refs: string[];
+  };
+  articles: AtlasEditorialArticle[];
+  briefs: Array<{
+    title: string;
+    text: string;
+    evidence_refs: string[];
+  }>;
+  crosscurrents: Array<{
+    title: string;
+    text: string;
+    channels: string[];
+    evidence_refs: string[];
+  }>;
+  channel_reports: Array<{
+    channel: string;
+    headline: string;
+    summary: string;
+    why_it_matters: string;
+    action: string;
+    evidence_refs: string[];
+  }>;
+  themes: Array<{
+    title: string;
+    analysis: string;
+    evidence_refs: string[];
+  }>;
+  evidence: Array<{
+    ref: string;
+    label: string;
+    why_it_matters: string;
+  }>;
+  generated_at: string;
+}
+
+interface AtlasEditorialArticle {
+  role: "lead" | "secondary";
+  section: string;
+  title: string;
+  slug: string;
+  dek: string;
+  summary: string;
+  body: string[];
+  actions: string[];
+  evidence_refs: string[];
+  link_refs: string[];
+  channels: string[];
+  image: {
+    kind: "generated" | "link" | "chat" | "none";
+    prompt?: string;
+    url?: string;
+    alt?: string;
+    status?: "pending" | "ready" | "failed" | "skipped";
+    error?: string;
+    asset_key?: string;
+  };
+  related_article_slugs: string[];
+}
+
+interface AtlasEditionSummary {
+  date: string;
+  type: "daily" | "sunday_review";
+  window_hours: number;
+  publication_time: string;
+  title: string;
+  subtitle: string;
+  edition_label: string;
+  href: string;
+}
+
+type Lens = "value" | "rooms" | "evidence" | "diagnostics";
+
+const LENSES: Array<{ key: Lens; label: string }> = [
+  { key: "value", label: "Reader Value" },
+  { key: "rooms", label: "Channels" },
+  { key: "evidence", label: "Evidence" },
+  { key: "diagnostics", label: "Diagnostics" },
+];
+
+export default function AtlasPage({
+  initialAtlas = null,
+  initialEditorialReport = null,
+  initialWindowHours = 48,
+  hideArticleImages = false,
+}: {
+  initialAtlas?: AtlasSnapshot | null;
+  initialEditorialReport?: AtlasEditorialReport | null;
+  initialWindowHours?: number;
+  hideArticleImages?: boolean;
+}) {
+  const [atlas, setAtlas] = useState<AtlasSnapshot | null>(initialAtlas);
+  const [editorialReport, setEditorialReport] = useState<AtlasEditorialReport | null>(initialEditorialReport);
+  const [editions, setEditions] = useState<AtlasEditionSummary[]>([]);
+  const [loading, setLoading] = useState(!initialAtlas);
+  const [error, setError] = useState<string | null>(null);
+  const [windowHours, setWindowHours] = useState(initialWindowHours);
+  const [lens, setLens] = useState<Lens>("value");
+  const [selectedCellKey, setSelectedCellKey] = useState<string | null>(
+    initialAtlas?.matrix[0] ? cellKey(initialAtlas.matrix[0]) : null,
+  );
+  const [selectedCitationRef, setSelectedCitationRef] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialAtlas && windowHours === initialAtlas.window.hours) {
+      return;
+    }
+    let active = true;
+    fetch(`/api/atlas?hours=${windowHours}`)
+      .then((response) => response.json())
+      .then((payload: {
+        atlas: AtlasSnapshot | null;
+        editorial_report: AtlasEditorialReport | null;
+        editorial_error?: string | null;
+      }) => {
+        if (!active) return;
+        setAtlas(payload.atlas);
+        setEditorialReport(payload.editorial_report);
+        setSelectedCellKey(payload.atlas?.matrix[0] ? cellKey(payload.atlas.matrix[0]) : null);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setError("Atlas data is unavailable right now.");
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [initialAtlas, initialEditorialReport, windowHours]);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/atlas/editions?hours=${windowHours}&limit=14`)
+      .then((response) => response.json())
+      .then((data: { editions?: AtlasEditionSummary[] }) => {
+        if (!active) return;
+        setEditions(Array.isArray(data.editions) ? data.editions : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setEditions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [windowHours]);
+
+  const selectedCell = useMemo(() => {
+    if (!atlas || !selectedCellKey) return atlas?.matrix[0] || null;
+    return atlas.matrix.find((cell) => cellKey(cell) === selectedCellKey) || atlas.matrix[0] || null;
+  }, [atlas, selectedCellKey]);
+
+  const selectedCitation =
+    atlas && selectedCitationRef ? atlas.citations[selectedCitationRef] || null : null;
+
+  function handleWindowHoursChange(hours: number) {
+    if (hours === windowHours) return;
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams({ hours: String(hours) });
+      if (hideArticleImages) params.set("images", "off");
+      window.history.replaceState(null, "", `/atlas?${params.toString()}`);
+    }
+    setLoading(true);
+    setError(null);
+    setEditorialReport(null);
+    setSelectedCitationRef(null);
+    setWindowHours(hours);
+  }
+
+  if (loading) {
+    return (
+      <div>
+        <div className="rounded-xl border border-[#cbbf9d] bg-[#f4ead7] p-6 text-[#1f1a12] shadow-[0_18px_60px_rgba(32,24,12,0.22)]">
+          <div className="border-b-4 border-double border-[#1f1a12] pb-4 text-center">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#786846]">
+              Daily Edition | Last 48 Hours
+            </p>
+            <h2 className="mt-2 font-serif text-4xl font-black text-[#1f1a12] sm:text-6xl">
+              THE VIBEZ ATLAS
+            </h2>
+            <p className="mt-3 text-sm text-[#5e5238]">
+              Setting type, checking citations, and sending the newsroom back for one more pass...
+            </p>
+          </div>
+          <div className="mt-6 grid gap-5 lg:grid-cols-[0.9fr_1.35fr_0.9fr]">
+            <div className="h-52 border border-[#cbbf9d] bg-[#fffaf0]/55" />
+            <div className="h-72 border border-[#cbbf9d] bg-[#fffaf0]/65" />
+            <div className="h-52 border border-[#cbbf9d] bg-[#fffaf0]/55" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !atlas) {
+    return (
+      <div>
+        <div className="rounded-xl border border-[#cbbf9d] bg-[#f4ead7] p-5 text-sm text-[#342a1b]">
+          {error || "Atlas data is unavailable right now."}
+        </div>
+      </div>
+    );
+  }
+
+  const matrixTopics = atlas.topics.slice(0, 8).map((topic) => topic.name);
+  const matrixChannels = atlas.channels.slice(0, 12).map((channel) => channel.name);
+
+  return (
+    <div className="atlas-newspaper fade-up -m-2 space-y-6 rounded-xl border border-[#cbbf9d] bg-[#efe3cc] p-3 text-[#1f1a12] shadow-[0_22px_80px_rgba(18,14,8,0.26)] sm:-m-4 sm:p-5">
+      <NarrativeReport
+        atlas={atlas}
+        editorialReport={editorialReport}
+        editions={editions}
+        windowHours={windowHours}
+        hideArticleImages={hideArticleImages}
+        onWindowHoursChange={handleWindowHoursChange}
+        onOpenCitation={setSelectedCitationRef}
+      />
+
+      <PeopleDesk atlas={atlas} onOpenCitation={setSelectedCitationRef} />
+      <RoomsDesk atlas={atlas} report={editorialReport} onOpenCitation={setSelectedCitationRef} />
+
+      <section className="rounded border border-[#cbbf9d] bg-[#f7edd9] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-serif text-xl font-bold text-[#1f1a12]">Below the Fold</h2>
+            <p className="mt-1 text-sm text-[#5e5238]">
+              The front page explains the story. This section turns the record into signals,
+              unresolved questions, evidence, and links worth opening.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {LENSES.map((item) => (
+              <button
+                key={item.key}
+                onClick={() => setLens(item.key)}
+                className={`rounded border px-3 py-1.5 text-sm font-semibold ${
+                  lens === item.key
+                    ? "border-[#1f1a12] bg-[#1f1a12] text-[#f8f4ea]"
+                    : "border-[#b9aa86] bg-[#fffaf0]/45 text-[#342a1b] hover:border-[#1f1a12]"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className={lens === "diagnostics" ? "grid gap-4 xl:grid-cols-[1.4fr_0.8fr]" : "space-y-4"}>
+        <div className="space-y-4">
+          {lens === "value" && (
+            <BelowFoldValueDesk
+              report={editorialReport}
+              atlas={atlas}
+              onOpenCitation={setSelectedCitationRef}
+            />
+          )}
+          {lens === "rooms" && <ChannelLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
+          {lens === "evidence" && <EvidenceLens atlas={atlas} onOpenCitation={setSelectedCitationRef} />}
+          {lens === "diagnostics" && (
+            <Matrix
+              atlas={atlas}
+              channels={matrixChannels}
+              topics={matrixTopics}
+              selectedCellKey={selectedCell ? cellKey(selectedCell) : null}
+              onSelectCell={(cell) => setSelectedCellKey(cellKey(cell))}
+            />
+          )}
+        </div>
+
+        {lens === "diagnostics" && (
+          <DetailRail
+            atlas={atlas}
+            cell={selectedCell}
+            onOpenCitation={setSelectedCitationRef}
+          />
+        )}
+      </section>
+
+      {selectedCitation && (
+        <EvidenceDrawer
+          citation={selectedCitation}
+          onClose={() => setSelectedCitationRef(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 p-3">
+      <div className="text-xs text-[#786846]">{label}</div>
+      <div className="mt-1 font-serif text-2xl font-bold text-[#1f1a12]">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+function NarrativeReport({
+  atlas,
+  editorialReport,
+  editions,
+  windowHours,
+  hideArticleImages,
+  onWindowHoursChange,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  editorialReport: AtlasEditorialReport | null;
+  editions: AtlasEditionSummary[];
+  windowHours: number;
+  hideArticleImages: boolean;
+  onWindowHoursChange: (hours: number) => void;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const report = editorialReport;
+  const frontPage = splitFrontPageArticles(report?.articles || []);
+  const leadArticle = frontPage.lead;
+  const editionLabel = windowHours >= 120
+    ? "Sunday Edition"
+    : report?.issue.edition_label || atlas.narrative.title;
+  return (
+    <section className="border border-[#b9aa86] bg-[#f8f4ea] p-4 text-[#1f1a12] shadow-[0_12px_40px_rgba(32,24,12,0.12)] sm:p-6">
+      <div className="border-b border-[#1f1a12] pb-5 text-center">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#786846]">
+          <span>{editionLabel}</span>
+          <span>|</span>
+          <span>{report?.issue.date || atlas.window.end.slice(0, 10)}</span>
+        </div>
+        <h2 className="mt-2 font-serif text-4xl font-black tracking-normal text-[#1f1a12] sm:text-5xl">
+          {report?.issue.title || "The Vibez Atlas"}
+        </h2>
+        <p className="mx-auto mt-2 max-w-3xl text-sm leading-6 text-[#5e5238] sm:text-base">
+          {report?.issue.subtitle ||
+            report?.dek ||
+            wireSubtitle(atlas)}
+        </p>
+        <EditionArchive
+          editions={editions}
+          currentDate={report?.issue.date || atlas.window.end.slice(0, 10)}
+          windowHours={windowHours}
+          onWindowHoursChange={onWindowHoursChange}
+        />
+      </div>
+
+      {report && leadArticle ? (
+        <>
+          <div className="mt-6 grid gap-5 xl:grid-cols-[0.92fr_1.35fr_0.92fr]">
+            <div className="order-2 space-y-5 xl:order-none xl:col-start-1 xl:row-start-1 xl:border-r xl:border-[#cbbf9d] xl:pr-5">
+              {frontPage.left.map((article) => (
+                <NewspaperArticleCard
+                  key={article.slug}
+                  article={article}
+                  issueDate={report.issue.date}
+                  windowHours={windowHours}
+                  hideImage={hideArticleImages}
+                  compact
+                />
+              ))}
+            </div>
+            <div className="order-1 border-y-2 border-[#1f1a12] py-4 xl:order-none xl:col-start-2 xl:row-start-1 xl:border-y-0 xl:py-0">
+              <NewspaperArticleCard
+                article={leadArticle}
+                issueDate={report.issue.date}
+                windowHours={windowHours}
+                hideImage={hideArticleImages}
+                lead
+              />
+            </div>
+            <div className="order-3 space-y-5 xl:order-none xl:col-start-3 xl:row-start-1 xl:border-l xl:border-[#cbbf9d] xl:pl-5">
+              {frontPage.right.map((article) => (
+                <NewspaperArticleCard
+                  key={article.slug}
+                  article={article}
+                  issueDate={report.issue.date}
+                  windowHours={windowHours}
+                  hideImage={hideArticleImages}
+                  compact
+                />
+              ))}
+            </div>
+          </div>
+
+          {frontPage.overflow.length > 0 && (
+            <div className="mt-6 grid gap-4 border-t border-[#cbbf9d] pt-4 min-[1500px]:grid-cols-2">
+              {frontPage.overflow.map((article) => (
+                <NewspaperArticleCard
+                  key={article.slug}
+                  article={article}
+                  issueDate={report.issue.date}
+                  windowHours={windowHours}
+                  hideImage={hideArticleImages}
+                  compact
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="mt-6 border-t-2 border-[#1f1a12] pt-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <NewspaperList title="Briefs" items={report.briefs.map((brief) => brief.text)} />
+              <NewspaperList
+                title="Crosscurrents"
+                items={report.crosscurrents.map((item) => `${item.title}: ${item.text}`)}
+              />
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <NewspaperList title="What to do next" items={report.actions} />
+            <NewspaperList title="Why it matters" items={report.why_care} />
+          </div>
+        </>
+      ) : (
+        <WireDeskFrontPage atlas={atlas} onOpenCitation={onOpenCitation} />
+      )}
+    </section>
+  );
+}
+
+function WireDeskFrontPage({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const topTopic = atlas.topics[0] || null;
+  const topChannel = atlas.channels[0] || null;
+  const topCell = atlas.matrix[0] || null;
+  const primaryRefs =
+    topCell?.citation_refs.length
+      ? topCell.citation_refs
+      : topTopic?.citation_refs.length
+      ? topTopic.citation_refs
+      : topChannel?.citation_refs || [];
+  const stories = buildWireStories(atlas, primaryRefs);
+  const leftStory = stories.secondary[0] || null;
+  const rightStory = stories.secondary[1] || null;
+  const belowStories = stories.secondary.slice(2);
+
+  return (
+    <div className="mt-6 space-y-5">
+      <div className="grid gap-5 xl:grid-cols-[0.92fr_1.35fr_0.92fr]">
+        <div className="order-2 space-y-4 xl:order-none xl:col-start-1 xl:row-start-1 xl:border-r xl:border-[#cbbf9d] xl:pr-5">
+          {leftStory ? (
+            <WireStoryCard story={leftStory} atlas={atlas} onOpenCitation={onOpenCitation} compact />
+          ) : (
+            <WireList
+              title="Leading Themes"
+              items={atlas.topics.slice(0, 4).map((topic) =>
+                `${topic.name}: ${topic.message_count.toLocaleString()} messages across ${topic.channels.length.toLocaleString()} rooms`,
+              )}
+            />
+          )}
+        </div>
+
+        <article className="order-1 border-y-2 border-[#1f1a12] py-4 xl:order-none xl:col-start-2 xl:row-start-1 xl:border-y-0 xl:py-0">
+          <WireStoryCard story={stories.lead} atlas={atlas} onOpenCitation={onOpenCitation} lead />
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <Metric label="Themes" value={atlas.overview.topics} />
+            <Metric label="Links" value={atlas.overview.links} />
+            <Metric label="Intersections" value={atlas.matrix.length} />
+          </div>
+          <div className="mt-5 border-t border-[#cbbf9d] pt-4">
+            <h4 className="font-serif text-2xl font-bold text-[#1f1a12]">Start Here</h4>
+            <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+              {topTopic ? `Top theme: ${topTopic.name}. ` : "No top theme is available. "}
+              {topChannel ? `Busiest room: ${topChannel.name}. ` : "No busiest room is available. "}
+              {topCell
+                ? `Strongest intersection: ${topCell.channel} / ${topCell.topic}.`
+                : "No channel-theme intersection is available."}
+            </p>
+            <CitationList
+              atlas={atlas}
+              refs={primaryRefs.slice(0, 3)}
+              onOpenCitation={onOpenCitation}
+            />
+          </div>
+        </article>
+
+        <div className="order-3 space-y-4 xl:order-none xl:col-start-3 xl:row-start-1 xl:border-l xl:border-[#cbbf9d] xl:pl-5">
+          {rightStory ? (
+            <WireStoryCard story={rightStory} atlas={atlas} onOpenCitation={onOpenCitation} compact />
+          ) : (
+            <p className="text-sm leading-6 text-[#5e5238]">
+              No open-question signals stand out in this window.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {belowStories.length > 0 && (
+        <div className="grid gap-4 border-t border-[#cbbf9d] pt-4 min-[1500px]:grid-cols-2">
+          {belowStories.map((story) => (
+            <WireStoryCard
+              key={`${story.section}-${story.title}`}
+              story={story}
+              atlas={atlas}
+              onOpenCitation={onOpenCitation}
+              compact
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="grid gap-4 border-t-2 border-[#1f1a12] pt-4 lg:grid-cols-2">
+        <WireList
+          title="Most Active Rooms"
+          items={atlas.channels.slice(0, 5).map((channel) =>
+            `${channel.name}: ${channel.message_count.toLocaleString()} messages, ${channel.people.length.toLocaleString()} community members`,
+          )}
+        />
+        <WireList
+          title="Shared Links"
+          items={atlas.links.slice(0, 5).map((link) =>
+            `${link.title} | ${link.source_group || "source room unavailable"}`,
+          )}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface WireStory {
+  section: string;
+  title: string;
+  dek: string;
+  paragraphs: string[];
+  citation_refs: string[];
+}
+
+function buildWireStories(atlas: AtlasSnapshot, primaryRefs: string[]): {
+  lead: WireStory;
+  secondary: WireStory[];
+} {
+  const lead: WireStory = {
+    section: "Lead Story",
+    title: atlas.narrative.main_topic.title || atlas.narrative.report.headline,
+    dek: atlas.narrative.report.lead || atlas.narrative.summary,
+    paragraphs: atlas.narrative.main_topic.paragraphs.length
+      ? atlas.narrative.main_topic.paragraphs
+      : atlas.narrative.paragraphs,
+    citation_refs: atlas.narrative.main_topic.citation_refs.length
+      ? atlas.narrative.main_topic.citation_refs
+      : primaryRefs,
+  };
+
+  const topicStories = atlas.topics.slice(1, 4).map((topic): WireStory => ({
+    section: "Theme Watch",
+    title: topic.name,
+    dek: `${topic.message_count.toLocaleString()} messages across ${topic.channels.length.toLocaleString()} rooms.`,
+    paragraphs: [
+      `${topic.name} is one of the visible stories in this edition because it appears across ${topic.channels.length.toLocaleString()} rooms.`,
+      topic.channels.length
+        ? `The first rooms to read are ${topic.channels.slice(0, 4).join(", ")}.`
+        : "The room map is thin, so the citations matter more than the label.",
+      topic.people.length
+        ? `${topic.people.slice(0, 5).join(", ")} appear in the available evidence.`
+        : "The current evidence does not show a broad contributor list yet.",
+    ],
+    citation_refs: topic.citation_refs,
+  }));
+
+  const concernStories = atlas.concerns.slice(0, 2).map((concern): WireStory => ({
+    section: concern.kind === "hot_alert" ? "Concern" : "Open Question",
+    title: concern.title,
+    dek: concern.detail,
+    paragraphs: [
+      concern.detail,
+      "This belongs on the front page because it points to a place where the group may need more evidence, a decision, or a follow-up owner.",
+      "Read the citations before treating the signal as settled.",
+    ],
+    citation_refs: concern.citation_refs,
+  }));
+
+  const linkStories = atlas.links.slice(0, 1).map((link): WireStory => ({
+    section: "Links",
+    title: link.title,
+    dek: `${link.shared_by || "A community member"} shared this in ${link.source_group || "the group"}.`,
+    paragraphs: [
+      link.title,
+      link.category ? `Atlas classified the link as ${link.category}.` : "Atlas captured this as follow-up material.",
+      "Use it as supporting material, not as a substitute for the conversation around it.",
+    ],
+    citation_refs: [link.ref],
+  }));
+
+  return {
+    lead,
+    secondary: [...topicStories, ...concernStories, ...linkStories],
+  };
+}
+
+function WireStoryCard({
+  story,
+  atlas,
+  onOpenCitation,
+  lead = false,
+  compact = false,
+}: {
+  story: WireStory;
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+  lead?: boolean;
+  compact?: boolean;
+}) {
+  const paragraphs = lead ? story.paragraphs.slice(0, 5) : story.paragraphs.slice(0, 3);
+  return (
+    <article className={lead ? "" : "border-b border-[#cbbf9d] pb-4 last:border-b-0"}>
+      <WireSectionLabel>{story.section}</WireSectionLabel>
+      <h3 className={`mt-2 font-serif font-black leading-none text-[#1f1a12] ${
+        lead ? "text-3xl sm:text-5xl" : "text-2xl"
+      }`}>
+        {story.title}
+      </h3>
+      <p className={`mt-3 leading-7 text-[#5e5238] ${compact ? "text-sm" : "text-base"}`}>
+        {story.dek}
+      </p>
+      <div className="mt-3 space-y-3">
+        {paragraphs.map((paragraph, index) => (
+          <p key={index} className={`leading-7 text-[#342a1b] ${compact ? "text-sm" : "text-base"}`}>
+            {paragraph}
+          </p>
+        ))}
+      </div>
+      <CitationList
+        atlas={atlas}
+        refs={story.citation_refs.slice(0, lead ? 4 : 2)}
+        onOpenCitation={onOpenCitation}
+      />
+    </article>
+  );
+}
+
+function wireSubtitle(atlas: AtlasSnapshot): string {
+  return `A sourced front page for ${atlas.window.hours} hours of activity: ${atlas.overview.messages.toLocaleString()} messages, ${atlas.overview.people.toLocaleString()} community members, ${atlas.overview.channels.toLocaleString()} rooms, and ${atlas.overview.links.toLocaleString()} shared links.`;
+}
+
+function WireSectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
+      {children}
+    </p>
+  );
+}
+
+function WireList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+      <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
+      <ul className="mt-3 space-y-2 text-sm leading-6 text-[#5e5238]">
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+        {items.length === 0 && <li>No records in this window.</li>}
+      </ul>
+    </div>
+  );
+}
+
+function NewspaperArticleCard({
+  article,
+  issueDate,
+  windowHours,
+  lead = false,
+  compact = false,
+  hideImage = false,
+}: {
+  article: AtlasEditorialArticle;
+  issueDate: string;
+  windowHours: number;
+  lead?: boolean;
+  compact?: boolean;
+  hideImage?: boolean;
+}) {
+  const articleHref = atlasArticleHref(issueDate, article.slug, windowHours);
+  return (
+    <article className={lead ? "" : "border-b border-[#cbbf9d] pb-4 last:border-b-0"}>
+      <ImageBlock article={article} lead={lead} hideImage={hideImage} />
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em]">
+        <span className="text-[#8b5f21]">{article.section}</span>
+        {lead && <span className="text-[#786846]">Lead Story</span>}
+      </div>
+      <h3 className={`mt-1 font-serif font-black leading-none text-slate-950 ${
+        lead ? "text-3xl sm:text-4xl" : "text-2xl"
+      }`}>
+        {article.title}
+      </h3>
+      <p className={`mt-3 leading-7 text-[#5e5238] ${compact ? "text-sm" : "text-base"}`}>
+        {article.summary || article.dek}
+      </p>
+      <Link
+        href={hideImage ? `${articleHref}&images=off` : articleHref}
+        className="mt-3 inline-flex border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold !text-[#1f1a12] hover:bg-[#1f1a12] hover:!text-[#f8f4ea]"
+      >
+        Read full article
+      </Link>
+    </article>
+  );
+}
+
+function ImageBlock({
+  article,
+  lead,
+  hideImage,
+}: {
+  article: AtlasEditorialArticle;
+  lead: boolean;
+  hideImage: boolean;
+}) {
+  if (!hideImage && isRenderableArticleImageUrl(article.image?.url)) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={article.image.url}
+        alt={article.image?.alt || article.title}
+        className={`w-full border border-[#cbbf9d] object-cover ${lead ? "h-64" : "h-32"}`}
+      />
+    );
+  }
+  return (
+    <PhotoPendingBlock
+      prompt={article.image?.prompt || article.dek}
+      status={article.image?.status || "pending"}
+      lead={lead}
+    />
+  );
+}
+
+function PhotoPendingBlock({
+  prompt,
+  status,
+  lead,
+}: {
+  prompt: string;
+  status: "pending" | "ready" | "failed" | "skipped";
+  lead: boolean;
+}) {
+  return (
+    <div
+      data-atlas-photo-status={status === "ready" ? "pending" : status}
+      className={`flex w-full flex-col justify-between border border-[#cbbf9d] bg-[#e8dcc4] p-4 ${
+        lead ? "h-64" : "h-32"
+      }`}
+      aria-label="Photo desk pending"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-[#cbbf9d] pb-2">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#8b5f21]">
+          Photo desk pending
+        </p>
+        <span className="h-2 w-2 rounded-full bg-[#8b5f21]" aria-hidden="true" />
+      </div>
+      <p className={`line-clamp-3 text-[#342a1b] ${lead ? "text-sm leading-6" : "text-xs leading-5"}`}>
+        {prompt}
+      </p>
+    </div>
+  );
+}
+
+function NewspaperList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+      <h3 className="font-serif text-2xl font-bold text-[#1f1a12]">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {items.map((item, index) => (
+          <p key={index} className="text-sm leading-6 text-[#5e5238]">
+            {item}
+          </p>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PeopleDesk({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const newFaces = atlas.people?.new_faces || [];
+  const identitySignals = atlas.people?.identity_signals || [];
+  const topContributors = atlas.people?.top_contributors || [];
+  return (
+    <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#cbbf9d] pb-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+            Society Desk
+          </p>
+          <h2 className="mt-1 font-serif text-2xl font-black">People Desk</h2>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-[#5e5238]">
+          A rolling seven-day read on genuinely new participants, identity signals, and who carried
+          the conversation.
+        </p>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.9fr]">
+        <div className="space-y-4">
+          <div>
+            <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Actually New</h3>
+            <p className="mt-1 text-xs leading-5 text-[#786846]">
+              First observed in the tracked archive during this seven-day window.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+          {newFaces.length > 0 ? (
+            newFaces.slice(0, 6).map((person) => (
+              <article key={`${person.name}-${person.first_seen_ts}`} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8b5f21]">
+                  <span>{person.first_channel}</span>
+                  {person.detection_reasons.slice(0, 2).map((reason) => (
+                    <span key={reason} className="text-[#786846]">
+                      {personReasonLabel(reason)}
+                    </span>
+                  ))}
+                </div>
+                <h3 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">
+                  {person.name}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+                  First seen {formatTimestamp(person.first_seen_ts)}. Posted{" "}
+                  {person.message_count_7d.toLocaleString()} time
+                  {person.message_count_7d === 1 ? "" : "s"} across{" "}
+                  {person.channels.slice(0, 3).join(", ") || "tracked channels"}.
+                </p>
+                {person.intro_refs[0] && (
+                  <button
+                    onClick={() => onOpenCitation(person.intro_refs[0])}
+                    className="mt-3 border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+                  >
+                  Open intro evidence
+                </button>
+              )}
+            </article>
+            ))
+          ) : (
+            <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4 text-sm leading-6 text-[#5e5238] sm:col-span-2">
+              No genuinely new participants in the rolling seven-day window. The identity and contributor
+              list still show who was active.
+            </div>
+          )}
+          </div>
+
+          {identitySignals.length > 0 ? (
+            <div>
+              <h3 className="font-serif text-xl font-bold text-[#1f1a12]">
+                Introductions & Identity Signals
+              </h3>
+              <p className="mt-1 text-xs leading-5 text-[#786846]">
+                Longtime participants with intro, join, or identity-change signals this week.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {identitySignals.slice(0, 4).map((person) => (
+                  <article key={`${person.name}-${person.signal_seen_ts}`} className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8b5f21]">
+                      <span>{person.signal_channel}</span>
+                      {person.signal_reasons.slice(0, 2).map((reason) => (
+                        <span key={reason} className="text-[#786846]">
+                          {personReasonLabel(reason)}
+                        </span>
+                      ))}
+                    </div>
+                    <h4 className="mt-2 font-serif text-lg font-bold text-[#1f1a12]">
+                      {person.name}
+                    </h4>
+                    <p className="mt-2 text-sm leading-6 text-[#5e5238]">
+                      Seen in the archive since {formatTimestamp(person.first_seen_ts)}. Posted{" "}
+                      {person.message_count_7d.toLocaleString()} time
+                      {person.message_count_7d === 1 ? "" : "s"} this week.
+                    </p>
+                    {person.intro_refs[0] && (
+                      <button
+                        onClick={() => onOpenCitation(person.intro_refs[0])}
+                        className="mt-3 border border-[#1f1a12] px-3 py-1.5 text-sm font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+                      >
+                        Open signal evidence
+                      </button>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <aside className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+          <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Top Contributors</h3>
+          {newFaces.length > 6 && (
+            <p className="mt-1 text-xs leading-5 text-[#786846]">
+              Showing 6 of {newFaces.length.toLocaleString()} new-face signals.
+            </p>
+          )}
+          <div className="mt-3 space-y-3">
+            {topContributors.slice(0, 8).map((person, index) => (
+              <div key={`${person.name}-${person.latest_seen_ts}`} className="border-b border-[#d8cba9] pb-3 last:border-b-0 last:pb-0">
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="font-semibold text-[#1f1a12]">
+                    {index + 1}. {person.name}
+                  </p>
+                  <p className="text-xs text-[#786846]">{person.message_count_7d} msgs</p>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-[#5e5238]">
+                  {person.active_days_7d} active day{person.active_days_7d === 1 ? "" : "s"} ·{" "}
+                  {person.channels.slice(0, 3).join(", ") || "tracked channels"}
+                </p>
+                {person.citation_refs[0] && (
+                  <button
+                    onClick={() => onOpenCitation(person.citation_refs[0])}
+                    className="mt-2 text-xs font-semibold text-[#8b5f21] underline decoration-[#cbbf9d] underline-offset-4 hover:text-[#1f1a12]"
+                  >
+                    Open recent evidence
+                  </button>
+                )}
+              </div>
+            ))}
+            {topContributors.length === 0 && (
+              <p className="text-sm text-[#786846]">No contributor activity in the seven-day window.</p>
+            )}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function RoomsDesk({
+  atlas,
+  report,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  report: AtlasEditorialReport | null;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const reports = report?.channel_reports || [];
+  return (
+    <section className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-[#1f1a12]">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#cbbf9d] pb-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+            Rooms Desk
+          </p>
+          <h2 className="mt-1 font-serif text-2xl font-black">Report by Channel</h2>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-[#5e5238]">
+          The front page follows stories across rooms. This desk shows where each room carried the
+          edition and what a reader should notice there.
+        </p>
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        {reports.slice(0, 6).map((roomReport) => (
+          <article key={`${roomReport.channel}-${roomReport.headline}`} className="min-w-0 border border-[#cbbf9d] bg-[#fffaf0]/45 p-4">
+            <p className="break-words text-[11px] font-bold uppercase tracking-[0.16em] text-[#8b5f21]">
+              {roomReport.channel}
+            </p>
+            <h3 className="mt-2 break-words font-serif text-xl font-bold leading-6 text-[#1f1a12]">
+              {roomReport.headline}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-[#5e5238]">{roomReport.summary}</p>
+            <div className="mt-3 grid gap-3 border-t border-[#d8cba9] pt-3 text-sm leading-6">
+              <p className="text-[#342a1b]">
+                <span className="font-semibold">Why it matters: </span>
+                {roomReport.why_it_matters}
+              </p>
+              <p className="text-[#342a1b]">
+                <span className="font-semibold">Watch/action: </span>
+                {roomReport.action}
+              </p>
+            </div>
+            <CitationList
+              atlas={atlas}
+              refs={roomReport.evidence_refs.slice(0, 3)}
+              onOpenCitation={onOpenCitation}
+            />
+          </article>
+        ))}
+        {reports.length === 0 && (
+          <div className="border border-[#cbbf9d] bg-[#fffaf0]/45 p-4 text-sm leading-6 text-[#5e5238] lg:col-span-3">
+            This edition has no model-written channel reports. The next publish should fill this
+            desk when the evidence supports room-level reporting.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function EditionArchive({
+  editions,
+  currentDate,
+  windowHours,
+  onWindowHoursChange,
+}: {
+  editions: AtlasEditionSummary[];
+  currentDate: string;
+  windowHours: number;
+  onWindowHoursChange: (hours: number) => void;
+}) {
+  const [jumpDate, setJumpDate] = useState(currentDate);
+  const [jumpHours, setJumpHours] = useState(48);
+  const openEdition = () => {
+    if (!jumpDate) return;
+    window.location.href = `/atlas/editions/${encodeURIComponent(jumpDate)}?hours=${jumpHours}`;
+  };
+  const latestEdition = editions[0] || null;
+  return (
+    <div className="mx-auto mt-5 max-w-5xl border-t border-[#cbbf9d] pt-4 text-left">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#7b2f20]">Editions</p>
+          <p className="mt-1 truncate text-sm text-[#5e5238]">
+            {latestEdition
+              ? `${latestEdition.edition_label} ${latestEdition.date}: ${latestEdition.title}`
+              : "No saved editions found for this window yet."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex border border-[#b9aa86] bg-[#fffaf0]/70">
+            {[48, 168].map((hours) => (
+              <button
+                key={hours}
+                type="button"
+                onClick={() => onWindowHoursChange(hours)}
+                className={`min-h-9 px-3 text-sm ${
+                  windowHours === hours
+                    ? "bg-[#1f1a12] text-[#f8f4ea]"
+                    : "text-[#342a1b] hover:bg-[#f1e6cf]"
+                }`}
+              >
+                {hours === 48 ? "48h" : "Week"}
+              </button>
+            ))}
+          </div>
+          <input
+            type="date"
+            aria-label="Open edition date"
+            value={jumpDate}
+            onChange={(event) => setJumpDate(event.target.value)}
+            className="min-h-9 w-[9.5rem] border px-2 text-sm"
+          />
+          <select
+            aria-label="Open edition window"
+            value={jumpHours}
+            onChange={(event) => setJumpHours(Number(event.target.value))}
+            className="min-h-9 border px-2 text-sm"
+          >
+            <option value={48}>48h</option>
+            <option value={168}>Week</option>
+          </select>
+          <button
+            type="button"
+            onClick={openEdition}
+            className="min-h-9 border border-[#1f1a12] bg-[#1f1a12] px-3 text-xs font-bold uppercase text-[#f8f4ea]"
+          >
+            Open
+          </button>
+          <Link
+            href="/atlas/editions"
+            className="min-h-9 border border-[#b9aa86] px-3 py-2 text-xs font-bold uppercase text-[#342a1b] hover:border-[#1f1a12] hover:bg-[#fffaf0]"
+          >
+            Archive
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BelowFoldValueDesk({
+  report,
+  atlas,
+  onOpenCitation,
+}: {
+  report: AtlasEditorialReport | null;
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  const signals = [
+    ...(report?.valuable || []),
+    ...(report?.actions || []).map((action) => `Action: ${action}`),
+  ].slice(0, 6);
+  const unresolved = atlas.concerns
+    .filter((concern) => concern.kind === "unresolved_question" || concern.kind === "hot_alert")
+    .slice(0, 4);
+  const usefulLinks = atlas.links.slice(0, 6);
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-2">
+      <BelowFoldPanel title="Signals Worth Acting On">
+        <div className="space-y-3">
+          {signals.map((item, index) => (
+            <p key={index} className="border-t border-[#d8cba9] pt-2 text-sm leading-6 text-[#342a1b] first:border-t-0 first:pt-0">
+              {item}
+            </p>
+          ))}
+          {signals.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              No model-written action signal was published for this edition.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
+
+      <BelowFoldPanel title="Unresolved Questions">
+        <div className="space-y-3">
+          {unresolved.map((concern, index) => {
+            const primaryRef = concern.citation_refs[0];
+            const citation = primaryRef ? atlas.citations[primaryRef] : null;
+            return (
+            <article key={`${concern.kind}-${concern.title}-${primaryRef || index}`} className="border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
+              <h3 className="break-words font-serif text-lg font-bold leading-6 text-[#1f1a12]">
+                {cleanReaderText(concern.title)}
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">{cleanReaderText(concern.detail)}</p>
+              {citation && (
+                <p className="mt-2 text-xs leading-5 text-[#786846]">
+                  Source context: {citation.channel || "unknown channel"}
+                  {citation.sender ? `, ${citation.sender}` : ""}
+                  {citation.timestamp ? `, ${formatTimestamp(citation.timestamp)}` : ""}.
+                </p>
+              )}
+              <CitationList
+                atlas={atlas}
+                refs={concern.citation_refs.slice(0, 2)}
+                onOpenCitation={onOpenCitation}
+              />
+            </article>
+            );
+          })}
+          {unresolved.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              No unresolved-question signal stood out in this edition.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
+
+      <BelowFoldPanel title="Useful Links" className="lg:col-span-2">
+        <div className="space-y-3">
+          {usefulLinks.map((link) => (
+            <article key={link.ref} className="min-w-0 border-t border-[#d8cba9] pt-3 first:border-t-0 first:pt-0">
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex break-words text-sm font-semibold leading-6 text-[#1f1a12] underline decoration-[#cbbf9d] underline-offset-4 hover:text-[#8b5f21]"
+              >
+                {cleanReaderText(link.title)}
+              </a>
+              <p className="mt-1 text-xs leading-5 text-[#786846]">
+                Recent link from {link.source_group || "an unknown channel"}
+                {link.shared_by ? `, shared by ${link.shared_by}` : ""}
+                {link.last_seen ? `, last seen ${formatDateTime(link.last_seen)}` : ""}.
+              </p>
+              <p className="mt-1 text-sm leading-6 text-[#5e5238]">
+                Useful because it was part of the current reporting window and gives the cited
+                conversation a durable source to inspect.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="border border-[#1f1a12] px-2 py-1 text-xs font-semibold text-[#1f1a12] hover:bg-[#1f1a12] hover:text-[#f8f4ea]"
+                >
+                  Open link
+                </a>
+                <button
+                  type="button"
+                  onClick={() => onOpenCitation(link.ref)}
+                  className="border border-[#cbbf9d] px-2 py-1 text-xs font-semibold text-[#5e5238] hover:border-[#1f1a12]"
+                >
+                  Open citation
+                </button>
+              </div>
+            </article>
+          ))}
+          {usefulLinks.length === 0 && (
+            <p className="text-sm leading-6 text-[#786846]">
+              No links were captured in this reporting window.
+            </p>
+          )}
+        </div>
+      </BelowFoldPanel>
+    </section>
+  );
+}
+
+function BelowFoldPanel({
+  title,
+  children,
+  className = "",
+}: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`min-w-0 rounded border border-[#cbbf9d] bg-[#f8f4ea] p-4 ${className}`}>
+      <h3 className="font-serif text-xl font-bold text-[#1f1a12]">{title}</h3>
+      <div className="mt-3">{children}</div>
+    </section>
+  );
+}
+
+function personReasonLabel(reason: AtlasPeopleInsights["new_faces"][number]["detection_reasons"][number]): string {
+  switch (reason) {
+    case "first_seen":
+      return "new";
+    case "intros_channel":
+      return "intro";
+    case "member_event":
+      return "joined";
+    case "phone_or_name_addition":
+      return "identity";
+    default:
+      return reason;
+  }
+}
+
+function Matrix({
+  atlas,
+  channels,
+  topics,
+  selectedCellKey,
+  onSelectCell,
+}: {
+  atlas: AtlasSnapshot;
+  channels: string[];
+  topics: string[];
+  selectedCellKey: string | null;
+  onSelectCell: (cell: AtlasMatrixCell) => void;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+      <div
+        className="grid min-w-[760px] gap-1"
+        style={{ gridTemplateColumns: `minmax(160px, 1.2fr) repeat(${topics.length}, minmax(86px, 1fr))` }}
+      >
+        <div className="px-2 py-2 text-xs font-semibold text-[#786846]">Channel</div>
+        {topics.map((topic) => (
+          <div key={topic} className="px-2 py-2 text-xs font-semibold text-[#342a1b]">
+            {topic}
+          </div>
+        ))}
+        {channels.map((channel) => (
+          <MatrixRow
+            key={channel}
+            atlas={atlas}
+            channel={channel}
+            topics={topics}
+            selectedCellKey={selectedCellKey}
+            onSelectCell={onSelectCell}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MatrixRow({
+  atlas,
+  channel,
+  topics,
+  selectedCellKey,
+  onSelectCell,
+}: {
+  atlas: AtlasSnapshot;
+  channel: string;
+  topics: string[];
+  selectedCellKey: string | null;
+  onSelectCell: (cell: AtlasMatrixCell) => void;
+}) {
+  return (
+    <>
+      <div className="rounded bg-[#e4d7bd] px-2 py-2 text-sm font-medium text-[#1f1a12]">
+        {channel}
+      </div>
+      {topics.map((topic) => {
+        const cell = atlas.matrix.find((item) => item.channel === channel && item.topic === topic);
+        if (!cell) {
+          return <div key={topic} className="rounded border border-[#d8ccb2] bg-[#fffaf0]/35" />;
+        }
+        const selected = selectedCellKey === cellKey(cell);
+        return (
+          <button
+            key={topic}
+            onClick={() => onSelectCell(cell)}
+            className={`rounded border px-2 py-2 text-left transition ${
+              selected
+                ? "border-[#1f1a12] bg-[#1f1a12]/10"
+                : "border-[#cbbf9d] bg-[#fffaf0]/45 hover:border-[#1f1a12]"
+            }`}
+          >
+            <span className="block text-sm font-semibold text-[#1f1a12]">
+              {cell.message_count}
+            </span>
+            <span className="block text-[11px] text-[#786846]">
+              {cell.citation_refs.length} refs
+            </span>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+function DetailRail({
+  atlas,
+  cell,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  cell: AtlasMatrixCell | null;
+  onOpenCitation: (ref: string) => void;
+}) {
+  if (!cell) {
+    return (
+      <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5 text-sm text-[#786846]">
+        Select a matrix cell to inspect its evidence.
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[#8b5f21]">Selected intersection</p>
+      <h2 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">{cell.topic}</h2>
+      <p className="mt-1 text-sm text-[#786846]">{cell.channel}</p>
+      <div className="mt-4 grid gap-2 text-sm text-[#342a1b]">
+        <p>{cell.message_count} messages from {cell.people.length} people.</p>
+        <p>Average relevance: {cell.avg_relevance ?? "n/a"}</p>
+        <p>Latest activity: {formatTimestamp(cell.latest_timestamp)}</p>
+      </div>
+      <div className="mt-4 space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#786846]">Citations</p>
+        {cell.citation_refs.map((ref) => (
+          <CitationButton key={ref} citation={atlas.citations[ref]} onOpen={() => onOpenCitation(ref)} />
+        ))}
+      </div>
+      <div className="mt-5 flex flex-wrap gap-2">
+        <Link href="/stats" className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2.5 py-1 text-xs text-[#342a1b] hover:border-[#1f1a12]">
+          Open Stats
+        </Link>
+        <Link href="/links" className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2.5 py-1 text-xs text-[#342a1b] hover:border-[#1f1a12]">
+          Open Links
+        </Link>
+      </div>
+    </aside>
+  );
+}
+
+function ChannelLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitation: (ref: string) => void }) {
+  return (
+    <LensGrid>
+      {atlas.channels.map((channel) => (
+        <article key={channel.name} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+          <p className="text-sm font-semibold text-[#1f1a12]">{channel.name}</p>
+          <p className="mt-1 text-xs text-[#786846]">
+            {channel.message_count} messages | {channel.people.length} people
+          </p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {channel.top_topics.map((topic) => (
+              <span key={topic.name} className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2 py-0.5 text-xs text-[#342a1b]">
+                {topic.name} | {topic.count}
+              </span>
+            ))}
+          </div>
+          <CitationList atlas={atlas} refs={channel.citation_refs} onOpenCitation={onOpenCitation} />
+        </article>
+      ))}
+    </LensGrid>
+  );
+}
+
+function LinkLens({ atlas, onOpenCitation }: { atlas: AtlasSnapshot; onOpenCitation: (ref: string) => void }) {
+  return (
+    <LensGrid>
+      {atlas.links.map((link) => (
+        <article key={link.ref} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+          <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-[#1f1a12] underline">
+            {link.title}
+          </a>
+          <p className="mt-1 text-xs text-[#786846]">
+            {link.category} | {link.shared_by} | {link.source_group}
+          </p>
+          <button
+            onClick={() => onOpenCitation(link.ref)}
+            className="mt-3 rounded border border-[#1f1a12] bg-[#1f1a12] px-2 py-1 text-xs text-[#f8f4ea]"
+          >
+            Open citation
+          </button>
+        </article>
+      ))}
+    </LensGrid>
+  );
+}
+
+function EvidenceLens({
+  atlas,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  onOpenCitation: (ref: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Open questions</h3>
+        <div className="mt-3 space-y-3">
+          {atlas.concerns.map((concern, index) => (
+            <article key={`${concern.kind}-${index}`} className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4">
+              <p className="text-sm font-semibold text-[#1f1a12]">{concern.title}</p>
+              <p className="mt-2 text-sm leading-relaxed text-[#5e5238]">{concern.detail}</p>
+              <CitationList atlas={atlas} refs={concern.citation_refs} onOpenCitation={onOpenCitation} />
+            </article>
+          ))}
+          {atlas.concerns.length === 0 && (
+            <div className="rounded-xl border border-[#cbbf9d] bg-[#f7edd9] p-4 text-sm text-[#786846]">
+              No open questions stand out in this report.
+            </div>
+          )}
+        </div>
+      </div>
+      <div>
+        <h3 className="font-serif text-xl font-bold text-[#1f1a12]">Shared links</h3>
+        <div className="mt-3">
+          <LinkLens atlas={atlas} onOpenCitation={onOpenCitation} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LensGrid({ children }: { children: ReactNode }) {
+  return <div className="grid gap-4 md:grid-cols-2">{children}</div>;
+}
+
+function CitationList({
+  atlas,
+  refs,
+  onOpenCitation,
+}: {
+  atlas: AtlasSnapshot;
+  refs: string[];
+  onOpenCitation: (ref: string) => void;
+}) {
+  if (refs.length === 0) return null;
+  return (
+    <div className="mt-3 space-y-2">
+      {refs.map((ref) => (
+        <CitationButton key={ref} citation={atlas.citations[ref]} onOpen={() => onOpenCitation(ref)} />
+      ))}
+    </div>
+  );
+}
+
+function CitationButton({ citation, onOpen }: { citation?: AtlasCitation; onOpen: () => void }) {
+  if (!citation) return null;
+  return (
+    <button
+      onClick={onOpen}
+      className="block w-full min-w-0 rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-3 py-2 text-left text-xs text-[#5e5238] hover:border-[#1f1a12]"
+    >
+      <span className="block break-words font-medium text-[#1f1a12]">{citation.label}</span>
+    </button>
+  );
+}
+
+function EvidenceDrawer({ citation, onClose }: { citation: AtlasCitation; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-[#1f1a12]/75 p-4 backdrop-blur-sm" onClick={onClose}>
+      <aside
+        className="ml-auto h-full max-w-xl overflow-y-auto rounded-xl border border-[#cbbf9d] bg-[#f8f4ea] p-5 text-[#1f1a12] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-[#8b5f21]">{citation.type} citation</p>
+            <h2 className="mt-2 font-serif text-xl font-bold text-[#1f1a12]">{citation.label}</h2>
+          </div>
+          <button onClick={onClose} className="rounded border border-[#cbbf9d] bg-[#fffaf0]/45 px-2 py-1 text-xs text-[#342a1b]">
+            Close
+          </button>
+        </div>
+        <dl className="mt-5 grid gap-3 text-sm">
+          {citation.channel && <EvidenceRow label="Channel" value={citation.channel} />}
+          {citation.sender && <EvidenceRow label="Sender" value={citation.sender} />}
+          {citation.timestamp && <EvidenceRow label="Time" value={formatTimestamp(citation.timestamp)} />}
+          {citation.relevance_score !== undefined && (
+            <EvidenceRow label="Relevance" value={String(citation.relevance_score ?? "n/a")} />
+          )}
+          {citation.topics && citation.topics.length > 0 && (
+            <EvidenceRow label="Topics" value={citation.topics.join(", ")} />
+          )}
+        </dl>
+        {citation.body && (
+          <p className="mt-5 rounded-lg border border-[#cbbf9d] bg-[#fffaf0]/55 p-3 text-sm leading-relaxed text-[#342a1b]">
+            {cleanReaderText(citation.body)}
+          </p>
+        )}
+        {citation.url && (
+          <a
+            href={citation.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-5 inline-flex rounded-md border border-[#1f1a12] bg-[#1f1a12] px-3 py-2 text-sm text-[#f8f4ea]"
+          >
+            Open source link
+          </a>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function EvidenceRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs text-[#786846]">{label}</dt>
+      <dd className="mt-0.5 break-words text-[#342a1b]">{value}</dd>
+    </div>
+  );
+}
+
+function cellKey(cell: AtlasMatrixCell): string {
+  return `${cell.channel}||${cell.topic}`;
+}
+
+function cleanReaderText(value: string | null | undefined): string {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|div|pre|code|li|ul|ol)>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/[`*_#>]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatTimestamp(timestamp: number | string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return String(timestamp);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}

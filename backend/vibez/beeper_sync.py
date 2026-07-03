@@ -259,14 +259,14 @@ def fetch_new_messages(
     return all_items, newest_cursor
 
 
-def save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
-    """Save messages to the database. Returns count of new messages inserted."""
+def save_messages(db_path: Path, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Save messages to the database. Returns only newly inserted messages."""
     if not messages:
-        return 0
+        return []
     conn = get_connection(db_path)
-    count = 0
-    for msg in messages:
-        try:
+    inserted: list[dict[str, Any]] = []
+    try:
+        for msg in messages:
             cursor = conn.execute(
                 """INSERT INTO messages
                    (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
@@ -275,17 +275,20 @@ def save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
                 (msg["id"], msg["room_id"], msg["room_name"], msg["sender_id"],
                  msg["sender_name"], msg["body"], msg["timestamp"], msg["raw_event"]),
             )
-            count += cursor.rowcount
-        except Exception:
-            logger.exception("Failed to insert message %s", msg["id"])
-    conn.commit()
-    conn.close()
+            if cursor.rowcount:
+                inserted.append(msg)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     # Extract and upsert any URLs found in the new messages
     try:
-        upsert_message_links(db_path, messages)
+        upsert_message_links(db_path, inserted)
     except Exception:
         logger.exception("Failed to extract links from messages")
-    return count
+    return inserted
 
 
 def poll_once(
@@ -308,15 +311,15 @@ def poll_once(
         parsed = [m for raw in raw_msgs if (m := parse_beeper_message(raw, title)) is not None]
 
         if parsed:
-            saved = save_messages(db_path, parsed)
-            if saved > 0:
-                logger.info("%s: %d new messages", title, saved)
-                all_new.extend(parsed[:saved])
+            inserted = save_messages(db_path, parsed)
+            if inserted:
+                logger.info("%s: %d new messages", title, len(inserted))
+                all_new.extend(inserted)
                 publish_event(
                     "vibez.messages.synced",
                     f"sync-{chat_id}-{int(time.time())}",
                     f"vibez:sync:{chat_id}:{int(time.time())}",
-                    {"count": saved, "room": title},
+                    {"count": len(inserted), "room": title},
                 )
 
         if new_cursor and new_cursor != cursor:

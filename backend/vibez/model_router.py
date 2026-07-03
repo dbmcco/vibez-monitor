@@ -12,8 +12,10 @@ import httpx
 
 PROVIDER_CREDENTIAL_ENVS = {
     "openai": ("VIBEZ_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "anthropic": ("VIBEZ_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
     "openrouter": ("VIBEZ_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
 }
+DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS = 1600
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,22 @@ def _normalize_embedding_dimensions(
     return [value / norm for value in shortened]
 
 
+def _ollama_embedding_input_max_chars() -> int:
+    raw = os.environ.get("VIBEZ_OLLAMA_EMBEDDING_INPUT_MAX_CHARS", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS
+    if value <= 0:
+        return DEFAULT_OLLAMA_EMBEDDING_INPUT_MAX_CHARS
+    return max(256, min(value, 8000))
+
+
+def _normalize_ollama_embedding_inputs(texts: list[str]) -> list[str]:
+    max_chars = _ollama_embedding_input_max_chars()
+    return [str(text or "")[:max_chars] for text in texts]
+
+
 def _build_messages(
     *,
     prompt: str | None,
@@ -156,6 +174,34 @@ def _parse_json_output(raw: str) -> Any:
     if fenced:
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     return json.loads(text)
+
+
+def _run_anthropic(
+    route: ModelRoute,
+    *,
+    prompt: str | None,
+    system: str | None,
+    messages: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    import anthropic
+
+    payload = _build_messages(prompt=prompt, system=None, messages=messages)
+    with anthropic.Anthropic(api_key=resolve_provider_api_key("anthropic")) as client:
+        response = client.messages.create(
+            model=route.model,
+            max_tokens=route.max_tokens,
+            system=system,
+            messages=payload,
+        )
+    text = "\n".join(
+        block.text.strip()
+        for block in getattr(response, "content", []) or []
+        if getattr(block, "text", None)
+    ).strip()
+    return {
+        "text": text,
+        "usage": _usage_dict(getattr(response, "usage", None)),
+    }
 
 
 def _run_openai(
@@ -222,7 +268,8 @@ def _embed_ollama(
         f"{base_url.rstrip('/')}/api/embed",
         json={
             "model": route.model,
-            "input": texts,
+            "input": _normalize_ollama_embedding_inputs(texts),
+            "truncate": True,
         },
         timeout=max(route.timeout_ms / 1000, 1),
     )
@@ -273,9 +320,7 @@ def _run_ollama(
     messages: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
     payload = _build_messages(prompt=prompt, system=system, messages=messages)
-    base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL")
-    if not base_url:
-        raise RuntimeError("OLLAMA_BASE_URL is required by model routing")
+    base_url = route.base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434"
     endpoint = f"{base_url.rstrip('/')}/api/chat"
     response = httpx.post(
         endpoint,
@@ -312,8 +357,8 @@ def generate_text(
 ) -> dict[str, Any]:
     route = get_route(task_id, manifest_path)
     if route.provider == "anthropic":
-        raise ValueError("Anthropic routes are disabled for Vibez; use local Ollama routing")
-    if route.provider == "openai":
+        result = _run_anthropic(route, prompt=prompt, system=system, messages=messages)
+    elif route.provider == "openai":
         result = _run_openai(route, prompt=prompt, system=system, messages=messages)
     elif route.provider == "openrouter":
         result = _run_openrouter(route, prompt=prompt, system=system, messages=messages)

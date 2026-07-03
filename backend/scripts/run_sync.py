@@ -20,6 +20,10 @@ def resolve_pgvector_index_url(config: Config) -> str:
     return config.pgvector_url or config.database_url
 
 
+def resolve_pgvector_index_url(config: Config) -> str:
+    return config.pgvector_url or config.database_url
+
+
 async def main():
     config = Config.from_env()
     config.log_dir.mkdir(parents=True, exist_ok=True)

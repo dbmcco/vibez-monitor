@@ -1,5 +1,6 @@
 .env*
 .venv/
+.vibez-spool/
 vibez.db
 vibez.db-*
 __pycache__/
@@ -13,11 +14,14 @@ dist/
 .amplifier/
 .claude/
 .opencode/
+.superpowers/
 test-results/
 hot_alerts.json
+dashboard/.generated/
 ~/
 *.log
 *.pid
 .DS_Store
 vibez.db*
+.workgraph
 backups/

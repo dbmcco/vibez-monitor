@@ -8,7 +8,7 @@ WG_TASK_ID = "{{task_id}}"
 
 [executor.prompt_template]
 template = """
-You are working in: /Users/braydon/projects/personal/vibez-monitor
+You are working in: /Users/braydon/.config/superpowers/worktrees/vibez-monitor/vibez-atlas-redesign
 
 Task: {{task_id}} - {{task_title}}
 
@@ -46,23 +46,13 @@ Context from dependencies:
 - Artifacts live under `.workgraph/.archdrift/`.
 
 
-
-
-
-
-## Workgraph Rules
-- Stay focused on this task.
-- Log progress: wg log {{task_id}} "message"
-- When complete: wg done {{task_id}}
-- If blocked: wg fail {{task_id}} --reason "description"
-
 ## uxdrift Protocol
 - If this task includes a `uxdrift` block (in the description), run:
   ./.workgraph/uxdrift wg check --task {{task_id}} --write-log --create-followups
 - Or run the unified check (runs uxdrift when a spec is present):
   ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
 - If it fails due to missing URL, set `url = "..."` in the `uxdrift` block or pass --url.
-- Artifacts live under `.workgraph/.uxdrift/`.
+
 
 ## therapydrift Protocol
 - If this task includes a `therapydrift` block (in the description), run:
@@ -71,12 +61,14 @@ Context from dependencies:
   ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
 - Artifacts live under `.workgraph/.therapydrift/`.
 
+
 ## fixdrift Protocol
 - If this task includes a `fixdrift` block (in the description), run:
   ./.workgraph/fixdrift wg check --task {{task_id}} --write-log --create-followups
 - Or run the unified check (runs fixdrift when a spec is present):
   ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
 - Artifacts live under `.workgraph/.fixdrift/`.
+
 
 ## yagnidrift Protocol
 - If this task includes a `yagnidrift` block (in the description), run:
@@ -85,6 +77,7 @@ Context from dependencies:
   ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
 - Artifacts live under `.workgraph/.yagnidrift/`.
 
+
 ## redrift Protocol
 - If this task includes a `redrift` block (in the description), run:
   ./.workgraph/redrift wg check --task {{task_id}} --write-log --create-followups
@@ -92,4 +85,10 @@ Context from dependencies:
   ./.workgraph/drifts check --task {{task_id}} --write-log --create-followups
 - Artifacts live under `.workgraph/.redrift/`.
 
+
+## Workgraph Rules
+- Stay focused on this task.
+- Log progress: wg log {{task_id}} "message"
+- When complete: wg done {{task_id}}
+- If blocked: wg fail {{task_id}} --reason "description"
 """

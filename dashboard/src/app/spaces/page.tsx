@@ -100,6 +100,13 @@ function modeLabel(mode: TriageMode): string {
   return "Explore";
 }
 
+function readableDate(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "" || value === "Invalid Date") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+}
+
 export default function SpacesPage() {
   const publicMode = isPublicMode();
   const [days, setDays] = useState<DayRange>(30);
@@ -148,20 +155,35 @@ export default function SpacesPage() {
 
   if (loading) {
     return (
-      <StatusPanel
-        loading
-        title="Loading Google Groups"
-        detail="Building a prioritized queue from your selected group stream."
-      />
+      <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+        <header className="newspaper-section-header space-y-2">
+          <p className="newspaper-kicker">Rooms Bureau</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">Groups Desk</h1>
+          <p className="vibe-subtitle max-w-2xl text-sm">
+            Channel-by-channel triage for the rooms where the community is doing its work.
+          </p>
+        </header>
+        <StatusPanel
+          loading
+          title="Loading Google Groups"
+          detail="Building a prioritized queue from your selected group stream."
+        />
+      </div>
     );
   }
 
   if (!spaces) {
     return (
-      <StatusPanel
-        title="Google Groups unavailable"
-        detail="Could not load group tracking right now. Try refreshing in a moment."
-      />
+      <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+        <header className="newspaper-section-header space-y-2">
+          <p className="newspaper-kicker">Rooms Bureau</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">Groups Desk</h1>
+        </header>
+        <StatusPanel
+          title="Google Groups unavailable"
+          detail="Could not load group tracking right now. Try refreshing in a moment."
+        />
+      </div>
     );
   }
 
@@ -173,13 +195,15 @@ export default function SpacesPage() {
         : "Using all rooms in DB";
 
   return (
-    <div className="space-y-6">
-      <header className="fade-up space-y-2">
-        <h1 className="vibe-title text-2xl text-slate-100 sm:text-3xl">
-          Google Groups Monitor
+    <div className="newspaper-section atlas-newspaper fade-up space-y-6">
+      <header className="newspaper-section-header space-y-2">
+        <p className="newspaper-kicker">Rooms Bureau</p>
+        <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">
+          Groups Desk
         </h1>
-        <p className="vibe-subtitle">
-          Managed triage view for Google Groups so high-signal threads stay visible first.
+        <p className="vibe-subtitle max-w-2xl">
+          Managed triage by channel, source, and conversation tempo so high-signal rooms
+          do not disappear into the day’s scroll.
         </p>
       </header>
 
@@ -201,7 +225,7 @@ export default function SpacesPage() {
             </button>
           ))}
           <span className="text-xs text-slate-400">
-            Last computed: {new Date(spaces.generated_at).toLocaleString()}
+            Last computed: {readableDate(spaces.generated_at) || "unknown"}
           </span>
         </div>
 
@@ -387,7 +411,7 @@ export default function SpacesPage() {
                   <td className="px-3 py-2 text-slate-200">{space.room_name}</td>
                   <td className="px-3 py-2 text-right text-slate-300">{space.messages}</td>
                   <td className="px-3 py-2 text-right text-slate-300">{space.people}</td>
-                  <td className="px-3 py-2 text-slate-400">{space.last_seen}</td>
+                  <td className="px-3 py-2 text-slate-400">{readableDate(space.last_seen) || "unknown"}</td>
                 </tr>
               ))}
             </tbody>
@@ -456,7 +480,9 @@ export default function SpacesPage() {
               >
                 <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                   <span>
-                    {message.date} · {message.sender_name}
+                    {[readableDate(message.date) || readableDate(message.timestamp), message.sender_name]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </span>
                   <span className="rounded bg-slate-800/80 px-1.5 py-0.5 text-slate-300">
                     score {message.priority_score}

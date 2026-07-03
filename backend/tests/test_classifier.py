@@ -1,15 +1,14 @@
 import asyncio
 import json
-from uuid import uuid4
 from pathlib import Path
 
 from vibez.classifier import (
     build_classify_prompt,
     classify_messages,
     parse_classification,
-    save_classification,
     strip_contribution_intel,
 )
+from vibez import classifier
 from vibez.config import Config
 from vibez.db import get_connection, init_db
 
@@ -113,59 +112,51 @@ def test_strip_contribution_intel_zeros_personalized_fields():
     assert sanitized["relevance_score"] == 8
 
 
-def test_save_classification_stores_contribution_flag_as_integer(tmp_db):
-    init_db(tmp_db)
-    message_id = f"msg-int-flag-{uuid4().hex}"
-    conn = get_connection(tmp_db)
-    conn.execute(
-        """INSERT INTO messages
-           (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-        (
-            message_id,
-            "room-1",
-            "The vibez (code code code)",
-            "sender-1",
-            "Ben",
-            "Local models should classify this",
-            1776404042000,
-            "{}",
-        ),
-    )
-    conn.commit()
-    conn.close()
+def test_save_classification_writes_integer_contribution_flag(monkeypatch):
+    captured: dict[str, object] = {}
 
-    save_classification(
-        tmp_db,
-        message_id,
+    class FakeConnection:
+        def execute(self, _sql, params):
+            captured["params"] = params
+
+        def commit(self):
+            captured["committed"] = True
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(classifier, "get_connection", lambda _db_path: FakeConnection())
+
+    classifier.save_classification(
+        None,
+        "m1",
         {
             "relevance_score": 8,
-            "topics": ["local-models"],
-            "entities": ["Ollama"],
+            "topics": ["agents"],
+            "entities": [],
             "contribution_flag": True,
-            "contribution_themes": ["local-first-tools"],
-            "contribution_hint": "Share the local routing pattern",
+            "contribution_themes": ["follow-up"],
+            "contribution_hint": "Worth reviewing",
             "alert_level": "digest",
         },
     )
 
-    saved = get_connection(tmp_db).execute(
-        "SELECT contribution_flag FROM classifications WHERE message_id = %s",
-        (message_id,),
-    ).fetchone()
-    assert saved == (1,)
+    params = captured["params"]
+    assert isinstance(params, tuple)
+    assert params[4] == 1
+    assert type(params[4]) is int
+    assert captured["committed"] is True
 
 
 def test_classify_messages_uses_named_route(tmp_db, monkeypatch):
     init_db(tmp_db)
-    message_id = f"msg-route-{uuid4().hex}"
     conn = get_connection(tmp_db)
     conn.execute(
         """INSERT INTO messages
            (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            message_id,
+            "msg-1",
             "room-1",
             "The vibez (code code code)",
             "sender-1",
@@ -213,7 +204,7 @@ def test_classify_messages_uses_named_route(tmp_db, monkeypatch):
             config,
             [
                 {
-                    "id": message_id,
+                    "id": "msg-1",
                     "room_id": "room-1",
                     "room_name": "The vibez (code code code)",
                     "sender_name": "Ben",
@@ -225,8 +216,8 @@ def test_classify_messages_uses_named_route(tmp_db, monkeypatch):
     )
 
     saved = get_connection(tmp_db).execute(
-        "SELECT relevance_score, alert_level FROM classifications WHERE message_id = %s",
-        (message_id,),
+        "SELECT relevance_score, alert_level FROM classifications WHERE message_id = ?",
+        ("msg-1",),
     ).fetchone()
     assert captured["task_id"] == "classification.inline"
     assert saved == (7, "digest")

@@ -4,6 +4,36 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+load_env_file() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    case "$raw" in
+      "" | \#*) continue
+    esac
+    local key="${raw%%=*}"
+    local value="${raw#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    if [[ "${#value}" -ge 2 ]]; then
+      local first_char="${value:0:1}"
+      local last_char="${value: -1}"
+      if { [[ "$first_char" == '"' && "$last_char" == '"' ]]; } || {
+        [[ "$first_char" == "'" && "$last_char" == "'" ]];
+      }; then
+        value="${value:1:${#value}-2}"
+      fi
+    fi
+    export "$key=$value"
+  done <"$env_file"
+}
+
+load_env_file "${VIBEZ_ENV_FILE:-}"
+load_env_file "$ROOT_DIR/.env"
+
 PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/backend/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "Python venv not found at $PYTHON_BIN" >&2
@@ -92,11 +122,12 @@ fi
 
 echo "Pushing local data to Railway (lookback=${LOOKBACK_DAYS}d)..."
 "$PYTHON_BIN" backend/scripts/push_remote.py \
+  --capture-only \
   --lookback-days "$LOOKBACK_DAYS" \
   --batch-size "${VIBEZ_PUSH_BATCH_SIZE:-400}"
 
 REMOTE_PGVECTOR_URL="${VIBEZ_REMOTE_PGVECTOR_URL:-}"
-if [[ -n "$REMOTE_PGVECTOR_URL" ]]; then
+if [[ "${VIBEZ_REMOTE_PGVECTOR_MIRROR:-0}" == "1" && -n "$REMOTE_PGVECTOR_URL" ]]; then
   echo "Mirroring local pgvector embeddings to Railway Postgres (lookback=${LOOKBACK_DAYS}d)..."
   "$PYTHON_BIN" backend/scripts/pgvector_index.py \
     --pg-url "$REMOTE_PGVECTOR_URL" \
@@ -106,7 +137,7 @@ if [[ -n "$REMOTE_PGVECTOR_URL" ]]; then
     --lookback-days "$LOOKBACK_DAYS" \
     --kind both
 else
-  echo "Skipping Railway pgvector mirror (VIBEZ_REMOTE_PGVECTOR_URL not set)."
+  echo "Skipping local pgvector mirror; Railway enrichment owns remote embeddings."
 fi
 
 echo "Local -> Railway sync complete."

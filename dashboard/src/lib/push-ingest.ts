@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { Pool } from "pg";
 
 const ALLOWED_SYNC_STATE_KEYS = new Set([
@@ -11,6 +12,7 @@ const ALLOWED_SYNC_STATE_KEYS = new Set([
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 const EMBEDDING_BATCH_SIZE = 100;
 let pgPool: Pool | null = null;
+let pgvectorPool: Pool | null = null;
 
 export interface MessagePayload {
   id: string;
@@ -27,7 +29,7 @@ export interface ClassificationPayload {
   relevance_score?: number;
   topics?: unknown;
   entities?: unknown;
-  contribution_flag?: boolean;
+  contribution_flag?: boolean | number | string | null;
   contribution_themes?: unknown;
   contribution_hint?: string;
   alert_level?: string;
@@ -138,6 +140,7 @@ export interface LinkEmbeddingPayload {
 export interface PushPayload {
   records?: unknown;
   links?: unknown;
+  replace_links?: unknown;
   daily_reports?: unknown;
   wisdom_topics?: unknown;
   wisdom_items?: unknown;
@@ -160,9 +163,42 @@ export interface PushResult {
   sync_state_written: number;
 }
 
+export interface RawBeeperEventPayload {
+  source_event_key: string;
+  source_room_id: string;
+  room_name: string;
+  sender_key: string;
+  sender_display_name: string;
+  source_timestamp: string | number;
+  body: string;
+  attachments_json?: unknown;
+  raw_payload_json?: unknown;
+}
+
+export interface BeeperBatchPayload {
+  source?: string;
+  batch_key: string;
+  events: RawBeeperEventPayload[];
+}
+
+export interface BeeperBatchIngestResult {
+  ok: true;
+  source: string;
+  batch_key: string;
+  record_count: number;
+  inserted_count: number;
+  deduped_count: number;
+}
+
 export interface PgvectorWriter {
   writeMessageEmbeddings(rows: MessageEmbeddingPayload[]): Promise<number>;
   writeLinkEmbeddings(rows: LinkEmbeddingPayload[]): Promise<number>;
+}
+
+function corePostgresConfigured(): boolean {
+  return Boolean(
+    (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim(),
+  );
 }
 
 function parseJsonList(value: unknown): string[] {
@@ -176,6 +212,15 @@ function normalizeAlertLevel(raw: unknown): string {
   const value = String(raw || "").trim().toLowerCase();
   if (value === "hot" || value === "digest" || value === "none") return value;
   return "none";
+}
+
+export function toContributionFlag(raw: unknown): 0 | 1 {
+  if (typeof raw === "boolean") return raw ? 1 : 0;
+  if (typeof raw === "number") return raw > 0 ? 1 : 0;
+  const value = String(raw ?? "").trim().toLowerCase();
+  return value === "true" || value === "t" || value === "yes" || value === "y" || value === "on" || value === "1"
+    ? 1
+    : 0;
 }
 
 function toIntScore(raw: unknown): number {
@@ -218,6 +263,12 @@ function parseEmbeddingLiteral(value: unknown): string {
   return trimmed.startsWith("[") ? trimmed : `[${trimmed}]`;
 }
 
+function optionalTrimmedText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+}
+
 function messageTableName(): string {
   const raw = (process.env.VIBEZ_PGVECTOR_TABLE || "vibez_message_embeddings")
     .trim()
@@ -244,8 +295,8 @@ function pgvectorDimensions(): number {
   return Math.max(64, Math.min(value, 3072));
 }
 
-function getPgPool(): Pool | null {
-  const url = (process.env.VIBEZ_PGVECTOR_URL || "").trim();
+export function getPgPool(): Pool | null {
+  const url = (process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim();
   if (!url) return null;
   if (!pgPool) {
     pgPool = new Pool({
@@ -256,6 +307,473 @@ function getPgPool(): Pool | null {
     });
   }
   return pgPool;
+}
+
+export function getPgvectorPool(): Pool | null {
+  const url = (process.env.VIBEZ_PGVECTOR_URL || process.env.VIBEZ_DATABASE_URL || process.env.DATABASE_URL || "").trim();
+  if (!url) return null;
+  if (!pgvectorPool) {
+    pgvectorPool = new Pool({
+      connectionString: url,
+      max: 4,
+      idleTimeoutMillis: 10_000,
+      allowExitOnIdle: true,
+    });
+  }
+  return pgvectorPool;
+}
+
+export async function ensurePostgresCoreSchema(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      room_name TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      timestamp BIGINT NOT NULL,
+      raw_event TEXT NOT NULL DEFAULT '{}'
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS classifications (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      relevance_score INTEGER NOT NULL DEFAULT 0,
+      topics TEXT NOT NULL DEFAULT '[]',
+      entities TEXT NOT NULL DEFAULT '[]',
+      contribution_flag INTEGER NOT NULL DEFAULT 0,
+      contribution_themes TEXT NOT NULL DEFAULT '[]',
+      contribution_hint TEXT,
+      alert_level TEXT NOT NULL DEFAULT 'none'
+    )
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'classifications'
+          AND column_name = 'contribution_flag'
+          AND data_type = 'boolean'
+      ) THEN
+        ALTER TABLE classifications
+          ALTER COLUMN contribution_flag DROP DEFAULT,
+          ALTER COLUMN contribution_flag TYPE INTEGER
+            USING CASE WHEN contribution_flag THEN 1 ELSE 0 END,
+          ALTER COLUMN contribution_flag SET DEFAULT 0;
+      END IF;
+    END $$;
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS links (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      url TEXT NOT NULL,
+      url_hash TEXT NOT NULL UNIQUE,
+      title TEXT,
+      category TEXT,
+      relevance TEXT,
+      shared_by TEXT,
+      source_group TEXT,
+      first_seen TEXT,
+      last_seen TEXT,
+      mention_count INTEGER NOT NULL DEFAULT 1,
+      value_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      report_date TEXT,
+      authored_by TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS daily_reports (
+      id BIGSERIAL PRIMARY KEY,
+      report_date TEXT UNIQUE NOT NULL,
+      briefing_md TEXT,
+      briefing_json TEXT,
+      contributions TEXT,
+      trends TEXT,
+      daily_memo TEXT,
+      conversation_arcs TEXT,
+      stats TEXT,
+      generated_at TEXT
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sync_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_room_name ON messages (room_name)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links (last_seen DESC)");
+}
+
+export async function ensureCanonicalIngestSchema(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ingest_batches (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      batch_key TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'running',
+      record_count INTEGER NOT NULL DEFAULT 0,
+      inserted_count INTEGER NOT NULL DEFAULT 0,
+      deduped_count INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      UNIQUE (source, batch_key)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS source_watermarks (
+      source TEXT NOT NULL,
+      room_id TEXT NOT NULL,
+      latest_source_event_id TEXT,
+      latest_source_timestamp TIMESTAMPTZ,
+      last_successful_batch_id BIGINT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (source, room_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS raw_events (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_event_key TEXT NOT NULL,
+      source_room_id TEXT NOT NULL,
+      room_name TEXT NOT NULL,
+      sender_key TEXT NOT NULL,
+      sender_display_name TEXT NOT NULL,
+      source_timestamp TIMESTAMPTZ NOT NULL,
+      body TEXT NOT NULL,
+      attachments_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      body_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (source, source_event_key)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS raw_event_links (
+      raw_event_id BIGINT NOT NULL REFERENCES raw_events(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      normalized_url TEXT NOT NULL,
+      host TEXT,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (raw_event_id, normalized_url, position)
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_raw_events_timestamp ON raw_events (source_timestamp DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_raw_events_room ON raw_events (source_room_id)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_raw_event_links_host ON raw_event_links (host)");
+}
+
+function stableJson(value: unknown, defaultValue: unknown): string {
+  if (value === undefined || value === null) return JSON.stringify(defaultValue);
+  if (typeof value === "string") {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      return JSON.stringify(value);
+    }
+  }
+  return JSON.stringify(value);
+}
+
+function bodyHash(body: string): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+function linkHash(url: string): string {
+  return createHash("sha256").update(url).digest("hex");
+}
+
+function normalizeSourceTimestamp(value: string | number): string {
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Invalid source_timestamp in Beeper batch.");
+  }
+  return date.toISOString();
+}
+
+function sourceTimestampMs(value: string | number): number {
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Invalid source_timestamp in Beeper batch.");
+  }
+  return date.getTime();
+}
+
+function isValidRawBeeperEvent(event: RawBeeperEventPayload): boolean {
+  return Boolean(
+    event?.source_event_key &&
+      event.source_room_id &&
+      event.room_name &&
+      event.sender_key &&
+      event.sender_display_name &&
+      typeof event.body === "string" &&
+      event.source_timestamp !== undefined &&
+      event.source_timestamp !== null,
+  );
+}
+
+function extractLinks(body: string): Array<{ url: string; normalized_url: string; host: string | null; position: number }> {
+  const matches = body.matchAll(/https?:\/\/[^\s<>"']+/gi);
+  const links: Array<{ url: string; normalized_url: string; host: string | null; position: number }> = [];
+  for (const match of matches) {
+    const url = match[0].replace(/[),.;!?]+$/, "");
+    let normalizedUrl = url;
+    let host: string | null = null;
+    try {
+      const parsed = new URL(url);
+      parsed.hash = "";
+      normalizedUrl = parsed.toString();
+      host = parsed.host.toLowerCase();
+    } catch {
+      normalizedUrl = url.trim();
+    }
+    if (isMatrixProfileUrl(url)) {
+      continue;
+    }
+    links.push({
+      url,
+      normalized_url: normalizedUrl,
+      host,
+      position: match.index ?? links.length,
+    });
+  }
+  return links;
+}
+
+function isMatrixProfileUrl(url: string | null | undefined): boolean {
+  const raw = String(url || "").trim().toLowerCase();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.hostname === "matrix.to" && parsed.hash.startsWith("#/@");
+  } catch {
+    return raw.startsWith("https://matrix.to/#/@") || raw.startsWith("http://matrix.to/#/@");
+  }
+}
+
+export async function applyBeeperBatchPayload(
+  payload: BeeperBatchPayload,
+  pool: Pool | null = getPgPool(),
+): Promise<BeeperBatchIngestResult> {
+  if (!pool) {
+    throw new Error("Postgres is not configured for Beeper ingest.");
+  }
+  const source = (payload.source || "beeper").trim();
+  const batchKey = String(payload.batch_key || "").trim();
+  const events = asArray<RawBeeperEventPayload>(payload.events);
+  if (!source || !batchKey) {
+    throw new Error("Beeper batch requires source and batch_key.");
+  }
+  if (events.length === 0) {
+    throw new Error("Beeper batch requires at least one event.");
+  }
+
+  await ensureCanonicalIngestSchema(pool);
+  await ensurePostgresCoreSchema(pool);
+  await pool.query("BEGIN");
+  let batchId: number | string | null = null;
+  let insertedCount = 0;
+  try {
+    const batchResult = await pool.query(
+      `
+        INSERT INTO ingest_batches
+          (source, batch_key, started_at, status, record_count, inserted_count, deduped_count, error)
+        VALUES ($1, $2, now(), 'running', $3, 0, 0, NULL)
+        ON CONFLICT (source, batch_key) DO UPDATE SET
+          started_at = now(),
+          status = 'running',
+          record_count = EXCLUDED.record_count,
+          error = NULL
+        RETURNING id
+      `,
+      [source, batchKey, events.length],
+    );
+    batchId = batchResult.rows?.[0]?.id ?? null;
+
+    const latestByRoom = new Map<string, RawBeeperEventPayload>();
+    for (const event of events) {
+      if (!isValidRawBeeperEvent(event)) {
+        throw new Error("Invalid event in Beeper batch.");
+      }
+      const timestamp = normalizeSourceTimestamp(event.source_timestamp);
+      const insertResult = await pool.query(
+        `
+          INSERT INTO raw_events
+            (source, source_event_key, source_room_id, room_name, sender_key,
+             sender_display_name, source_timestamp, body, attachments_json,
+             raw_payload_json, body_hash)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9::jsonb, $10::jsonb, $11)
+          ON CONFLICT (source, source_event_key) DO NOTHING
+          RETURNING id
+        `,
+        [
+          source,
+          event.source_event_key.trim(),
+          event.source_room_id.trim(),
+          event.room_name.trim(),
+          event.sender_key.trim(),
+          event.sender_display_name.trim(),
+          timestamp,
+          event.body,
+          stableJson(event.attachments_json, []),
+          stableJson(event.raw_payload_json, {}),
+          bodyHash(event.body),
+        ],
+      );
+      const rawEventId = insertResult.rows?.[0]?.id;
+      await pool.query(
+        `
+          INSERT INTO messages
+            (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (id) DO UPDATE SET
+            room_id = EXCLUDED.room_id,
+            room_name = EXCLUDED.room_name,
+            sender_id = EXCLUDED.sender_id,
+            sender_name = EXCLUDED.sender_name,
+            body = EXCLUDED.body,
+            timestamp = EXCLUDED.timestamp,
+            raw_event = EXCLUDED.raw_event
+        `,
+        [
+          event.source_event_key.trim(),
+          event.source_room_id.trim(),
+          event.room_name.trim(),
+          event.sender_key.trim(),
+          event.sender_display_name.trim(),
+          event.body,
+          sourceTimestampMs(event.source_timestamp),
+          stableJson(event.raw_payload_json, {}),
+        ],
+      );
+      if (insertResult.rowCount && rawEventId) {
+        insertedCount += 1;
+        for (const link of extractLinks(event.body)) {
+          await pool.query(
+            `
+              INSERT INTO raw_event_links
+                (raw_event_id, url, normalized_url, host, position)
+              VALUES ($1, $2, $3, $4, $5)
+              ON CONFLICT (raw_event_id, normalized_url, position) DO NOTHING
+            `,
+            [rawEventId, link.url, link.normalized_url, link.host, link.position],
+          );
+          await pool.query(
+            `
+              INSERT INTO links
+                (url, url_hash, title, category, relevance, shared_by, source_group,
+                 first_seen, last_seen, mention_count, value_score, report_date,
+                 authored_by, pinned)
+              VALUES ($1, $2, NULL, NULL, NULL, $3, $4, $5, $5, 1, 0, $6, NULL, 0)
+              ON CONFLICT (url_hash) DO UPDATE SET
+                url = EXCLUDED.url,
+                shared_by = COALESCE(links.shared_by, EXCLUDED.shared_by),
+                source_group = COALESCE(links.source_group, EXCLUDED.source_group),
+                first_seen = COALESCE(links.first_seen, EXCLUDED.first_seen),
+                last_seen = CASE
+                  WHEN NULLIF(links.last_seen::text, '') IS NULL THEN EXCLUDED.last_seen
+                  WHEN NULLIF(EXCLUDED.last_seen::text, '') IS NULL THEN links.last_seen
+                  WHEN NULLIF(EXCLUDED.last_seen::text, '')::timestamptz
+                    >= NULLIF(links.last_seen::text, '')::timestamptz
+                  THEN EXCLUDED.last_seen
+                  ELSE links.last_seen
+                END,
+                mention_count = links.mention_count + 1
+            `,
+            [
+              link.normalized_url,
+              linkHash(link.normalized_url),
+              event.sender_display_name.trim(),
+              event.room_name.trim(),
+              timestamp,
+              timestamp.slice(0, 10),
+            ],
+          );
+        }
+      }
+      const previous = latestByRoom.get(event.source_room_id);
+      if (!previous || normalizeSourceTimestamp(previous.source_timestamp) <= timestamp) {
+        latestByRoom.set(event.source_room_id, event);
+      }
+    }
+
+    for (const [roomId, event] of latestByRoom.entries()) {
+      await pool.query(
+        `
+          INSERT INTO source_watermarks
+            (source, room_id, latest_source_event_id, latest_source_timestamp,
+             last_successful_batch_id, updated_at)
+          VALUES ($1, $2, $3, $4::timestamptz, $5, now())
+          ON CONFLICT (source, room_id) DO UPDATE SET
+            latest_source_event_id = CASE
+              WHEN source_watermarks.latest_source_timestamp IS NULL
+                OR EXCLUDED.latest_source_timestamp >= source_watermarks.latest_source_timestamp
+              THEN EXCLUDED.latest_source_event_id
+              ELSE source_watermarks.latest_source_event_id
+            END,
+            latest_source_timestamp = GREATEST(
+              COALESCE(source_watermarks.latest_source_timestamp, '-infinity'::timestamptz),
+              EXCLUDED.latest_source_timestamp
+            ),
+            last_successful_batch_id = EXCLUDED.last_successful_batch_id,
+            updated_at = now()
+        `,
+        [
+          source,
+          roomId,
+          event.source_event_key.trim(),
+          normalizeSourceTimestamp(event.source_timestamp),
+          batchId,
+        ],
+      );
+    }
+
+    const dedupedCount = events.length - insertedCount;
+    await pool.query(
+      `
+        UPDATE ingest_batches
+        SET completed_at = now(),
+            status = 'succeeded',
+            inserted_count = $3,
+            deduped_count = $4,
+            error = NULL
+        WHERE source = $1 AND batch_key = $2
+      `,
+      [source, batchKey, insertedCount, dedupedCount],
+    );
+    await pool.query("COMMIT");
+    return {
+      ok: true,
+      source,
+      batch_key: batchKey,
+      record_count: events.length,
+      inserted_count: insertedCount,
+      deduped_count: dedupedCount,
+    };
+  } catch (error) {
+    await pool.query("ROLLBACK");
+    await pool.query(
+      `
+        UPDATE ingest_batches
+        SET completed_at = now(),
+            status = 'failed',
+            error = $3
+        WHERE source = $1 AND batch_key = $2
+      `,
+      [source, batchKey, error instanceof Error ? error.message : String(error || "unknown error")],
+    );
+    throw error;
+  }
 }
 
 function isValidMessageEmbedding(row: MessageEmbeddingPayload): boolean {
@@ -680,11 +1198,11 @@ async function upsertLinkEmbeddingBatch(
       row.relevance ?? null,
       row.shared_by ?? null,
       row.source_group ?? null,
-      row.first_seen ?? null,
-      row.last_seen ?? null,
+      optionalTrimmedText(row.first_seen),
+      optionalTrimmedText(row.last_seen),
       Number(row.mention_count ?? 0),
       Number(row.value_score ?? 0),
-      row.report_date ? String(row.report_date).trim() || null : null,
+      optionalTrimmedText(row.report_date),
       row.authored_by ?? null,
       Boolean(row.pinned),
       parseEmbeddingLiteral(row.embedding),
@@ -698,9 +1216,9 @@ async function upsertLinkEmbeddingBatch(
         first_seen, last_seen, mention_count, value_score, report_date, authored_by,
         pinned, embedding, updated_at
       ) VALUES ${values.join(", ")}
-      ON CONFLICT (link_id) DO UPDATE SET
+      ON CONFLICT (url_hash) DO UPDATE SET
+        link_id = EXCLUDED.link_id,
         url = EXCLUDED.url,
-        url_hash = EXCLUDED.url_hash,
         title = EXCLUDED.title,
         category = EXCLUDED.category,
         relevance = EXCLUDED.relevance,
@@ -722,7 +1240,7 @@ async function upsertLinkEmbeddingBatch(
 }
 
 function createDefaultPgvectorWriter(): PgvectorWriter | null {
-  const pool = getPgPool();
+  const pool = getPgvectorPool();
   if (!pool) return null;
   return {
     async writeMessageEmbeddings(rows: MessageEmbeddingPayload[]) {
@@ -758,7 +1276,7 @@ export async function applyPgvectorPayload(
     (row) => row && isValidMessageEmbedding(row),
   );
   const linkEmbeddings = asArray<LinkEmbeddingPayload>(payload.link_embeddings).filter(
-    (row) => row && isValidLinkEmbedding(row),
+    (row) => row && isValidLinkEmbedding(row) && !isMatrixProfileUrl(row.url),
   );
 
   const result = {
@@ -785,12 +1303,347 @@ export async function applyPgvectorPayload(
   return result;
 }
 
+export async function applyPostgresPayload(
+  payload: PushPayload,
+): Promise<Omit<PushResult, "message_embeddings_written" | "link_embeddings_written"> | null> {
+  if (!corePostgresConfigured()) return null;
+  const pool = getPgPool();
+  if (!pool) return null;
+  await ensurePostgresCoreSchema(pool);
+
+  const records = asArray<RecordPayload>(payload.records);
+  const links = asArray<LinkPayload>(payload.links).filter((link) => !isMatrixProfileUrl(link?.url));
+  const dailyReports = asArray<DailyReportPayload>(payload.daily_reports);
+  const syncStateEntries = sanitizeSyncState(payload.sync_state);
+  const messageEmbeddings = asArray<MessageEmbeddingPayload>(payload.message_embeddings).filter(
+    (row) => row && isValidMessageEmbedding(row),
+  );
+  const linkEmbeddings = asArray<LinkEmbeddingPayload>(payload.link_embeddings).filter(
+    (row) => row && isValidLinkEmbedding(row) && !isMatrixProfileUrl(row.url),
+  );
+
+  const result = {
+    messages_written: 0,
+    classifications_written: 0,
+    links_written: 0,
+    daily_reports_written: 0,
+    wisdom_topics_written: 0,
+    wisdom_items_written: 0,
+    wisdom_recommendations_written: 0,
+    sync_state_written: 0,
+  };
+
+  if (payload.replace_links === true && links.length > 0) {
+    await pool.query("DELETE FROM links");
+  }
+
+  for (const record of records) {
+    const message = record?.message as MessagePayload;
+    if (!message || !isValidMessage(message)) {
+      throw new Error("Invalid message record in payload.");
+    }
+    await pool.query(
+      `INSERT INTO messages
+       (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO UPDATE SET
+         room_id = EXCLUDED.room_id,
+         room_name = EXCLUDED.room_name,
+         sender_id = EXCLUDED.sender_id,
+         sender_name = EXCLUDED.sender_name,
+         body = EXCLUDED.body,
+         timestamp = EXCLUDED.timestamp,
+         raw_event = EXCLUDED.raw_event`,
+      [
+        message.id.trim(),
+        message.room_id.trim(),
+        message.room_name.trim(),
+        message.sender_id.trim(),
+        message.sender_name.trim(),
+        message.body,
+        Math.trunc(Number(message.timestamp)),
+        typeof message.raw_event === "string" ? message.raw_event : "{}",
+      ],
+    );
+    result.messages_written += 1;
+
+    const classification = record?.classification;
+    if (classification && typeof classification === "object") {
+      await pool.query(
+        `INSERT INTO classifications
+         (message_id, relevance_score, topics, entities, contribution_flag,
+          contribution_themes, contribution_hint, alert_level)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (message_id) DO UPDATE SET
+           relevance_score = EXCLUDED.relevance_score,
+           topics = EXCLUDED.topics,
+           entities = EXCLUDED.entities,
+           contribution_flag = EXCLUDED.contribution_flag,
+           contribution_themes = EXCLUDED.contribution_themes,
+           contribution_hint = EXCLUDED.contribution_hint,
+           alert_level = EXCLUDED.alert_level`,
+        [
+          message.id.trim(),
+          toIntScore(classification.relevance_score),
+          JSON.stringify(parseJsonList(classification.topics)),
+          JSON.stringify(parseJsonList(classification.entities)),
+          toContributionFlag(classification.contribution_flag),
+          JSON.stringify(parseJsonList(classification.contribution_themes)),
+          String(classification.contribution_hint || ""),
+          normalizeAlertLevel(classification.alert_level),
+        ],
+      );
+      result.classifications_written += 1;
+    }
+  }
+
+  for (const row of messageEmbeddings) {
+    await pool.query(
+      `INSERT INTO messages
+       (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, '{}')
+       ON CONFLICT (id) DO UPDATE SET
+         room_id = EXCLUDED.room_id,
+         room_name = EXCLUDED.room_name,
+         sender_id = EXCLUDED.sender_id,
+         sender_name = EXCLUDED.sender_name,
+         body = EXCLUDED.body,
+         timestamp = EXCLUDED.timestamp`,
+      [
+        row.message_id.trim(),
+        row.room_id.trim(),
+        row.room_name.trim(),
+        row.sender_id.trim(),
+        row.sender_name.trim(),
+        row.body,
+        Math.trunc(Number(row.timestamp)),
+      ],
+    );
+    await pool.query(
+      `INSERT INTO classifications
+       (message_id, relevance_score, topics, entities, contribution_flag,
+        contribution_themes, contribution_hint, alert_level)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (message_id) DO UPDATE SET
+         relevance_score = EXCLUDED.relevance_score,
+         topics = EXCLUDED.topics,
+         entities = EXCLUDED.entities,
+         contribution_flag = EXCLUDED.contribution_flag,
+         contribution_themes = EXCLUDED.contribution_themes,
+         contribution_hint = EXCLUDED.contribution_hint,
+         alert_level = EXCLUDED.alert_level`,
+      [
+        row.message_id.trim(),
+        toIntScore(row.relevance_score),
+        parseJsonText(row.topics),
+        parseJsonText(row.entities),
+        toContributionFlag(row.contribution_flag),
+        parseJsonText(row.contribution_themes),
+        row.contribution_hint ?? "",
+        normalizeAlertLevel(row.alert_level),
+      ],
+    );
+  }
+
+  for (const link of links) {
+    await pool.query(
+      `INSERT INTO links
+       (url, url_hash, title, category, relevance, shared_by, source_group,
+        first_seen, last_seen, mention_count, value_score, report_date, authored_by, pinned)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       ON CONFLICT (url_hash) DO UPDATE SET
+         url = EXCLUDED.url,
+         title = EXCLUDED.title,
+         category = EXCLUDED.category,
+         relevance = EXCLUDED.relevance,
+         shared_by = EXCLUDED.shared_by,
+         source_group = EXCLUDED.source_group,
+         first_seen = EXCLUDED.first_seen,
+         last_seen = EXCLUDED.last_seen,
+         mention_count = EXCLUDED.mention_count,
+         value_score = EXCLUDED.value_score,
+         report_date = EXCLUDED.report_date,
+         authored_by = EXCLUDED.authored_by,
+         pinned = EXCLUDED.pinned`,
+      [
+        link.url,
+        link.url_hash,
+        link.title ?? null,
+        link.category ?? null,
+        link.relevance ?? null,
+        link.shared_by ?? null,
+        link.source_group ?? null,
+        link.first_seen ?? null,
+        link.last_seen ?? null,
+        Number(link.mention_count ?? 1),
+        Number(link.value_score ?? 0),
+        link.report_date ?? null,
+        link.authored_by ?? null,
+        Number(link.pinned ?? 0),
+      ],
+    );
+    result.links_written += 1;
+  }
+
+  for (const row of linkEmbeddings) {
+    await pool.query(
+      `INSERT INTO links
+       (id, url, url_hash, title, category, relevance, shared_by, source_group,
+        first_seen, last_seen, mention_count, value_score, report_date, authored_by, pinned)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (url_hash) DO UPDATE SET
+         url = EXCLUDED.url,
+         title = EXCLUDED.title,
+         category = EXCLUDED.category,
+         relevance = EXCLUDED.relevance,
+         shared_by = EXCLUDED.shared_by,
+         source_group = EXCLUDED.source_group,
+         first_seen = EXCLUDED.first_seen,
+         last_seen = EXCLUDED.last_seen,
+         mention_count = EXCLUDED.mention_count,
+         value_score = EXCLUDED.value_score,
+         report_date = EXCLUDED.report_date,
+         authored_by = EXCLUDED.authored_by,
+         pinned = EXCLUDED.pinned`,
+      [
+        Math.trunc(Number(row.link_id)),
+        row.url,
+        row.url_hash,
+        row.title ?? null,
+        row.category ?? null,
+        row.relevance ?? null,
+        row.shared_by ?? null,
+        row.source_group ?? null,
+        row.first_seen ?? null,
+        row.last_seen ?? null,
+        Number(row.mention_count ?? 1),
+        Number(row.value_score ?? 0),
+        row.report_date ? String(row.report_date).trim() || null : null,
+        row.authored_by ?? null,
+        Number(row.pinned ?? 0),
+      ],
+    );
+  }
+
+  for (const report of dailyReports) {
+    await pool.query(
+      `INSERT INTO daily_reports
+       (report_date, briefing_md, briefing_json, contributions, trends, daily_memo,
+        conversation_arcs, stats, generated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (report_date) DO UPDATE SET
+         briefing_md = EXCLUDED.briefing_md,
+         briefing_json = EXCLUDED.briefing_json,
+         contributions = EXCLUDED.contributions,
+         trends = EXCLUDED.trends,
+         daily_memo = EXCLUDED.daily_memo,
+         conversation_arcs = EXCLUDED.conversation_arcs,
+         stats = EXCLUDED.stats,
+         generated_at = EXCLUDED.generated_at`,
+      [
+        report.report_date,
+        report.briefing_md ?? null,
+        report.briefing_json ?? null,
+        report.contributions ?? null,
+        report.trends ?? null,
+        report.daily_memo ?? null,
+        report.conversation_arcs ?? null,
+        report.stats ?? null,
+        report.generated_at ?? null,
+      ],
+    );
+    result.daily_reports_written += 1;
+  }
+
+  for (const [key, value] of syncStateEntries) {
+    await pool.query(
+      `INSERT INTO sync_state (key, value)
+       VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [key, value],
+    );
+    result.sync_state_written += 1;
+  }
+
+  return result;
+}
+
+export async function backfillPostgresCoreFromEmbeddings(): Promise<{
+  messages_backfilled: number;
+  links_backfilled: number;
+}> {
+  const pool = getPgPool();
+  if (!pool) {
+    throw new Error("Postgres is not configured.");
+  }
+  await ensurePostgresCoreSchema(pool);
+  const messageTable = messageTableName();
+  const linkTable = linkTableName();
+  const messageResult = await pool.query(`
+    INSERT INTO messages (id, room_id, room_name, sender_id, sender_name, body, timestamp, raw_event)
+    SELECT message_id, room_id, room_name, sender_id, sender_name, body, timestamp, '{}'
+    FROM ${messageTable}
+    ON CONFLICT (id) DO UPDATE SET
+      room_id = EXCLUDED.room_id,
+      room_name = EXCLUDED.room_name,
+      sender_id = EXCLUDED.sender_id,
+      sender_name = EXCLUDED.sender_name,
+      body = EXCLUDED.body,
+      timestamp = EXCLUDED.timestamp
+  `);
+  await pool.query(`
+    INSERT INTO classifications
+      (message_id, relevance_score, topics, entities, contribution_flag,
+       contribution_themes, contribution_hint, alert_level)
+    SELECT message_id, coalesce(relevance_score, 0)::integer, topics::text, entities::text,
+           coalesce(contribution_flag::integer, 0), contribution_themes::text, contribution_hint, coalesce(alert_level, 'none')
+    FROM ${messageTable}
+    ON CONFLICT (message_id) DO UPDATE SET
+      relevance_score = EXCLUDED.relevance_score,
+      topics = EXCLUDED.topics,
+      entities = EXCLUDED.entities,
+      contribution_flag = EXCLUDED.contribution_flag,
+      contribution_themes = EXCLUDED.contribution_themes,
+      contribution_hint = EXCLUDED.contribution_hint,
+      alert_level = EXCLUDED.alert_level
+  `);
+  const linkResult = await pool.query(`
+    INSERT INTO links
+      (id, url, url_hash, title, category, relevance, shared_by, source_group,
+       first_seen, last_seen, mention_count, value_score, report_date, authored_by, pinned)
+    SELECT link_id, url, url_hash, title, category, relevance, shared_by, source_group,
+           first_seen, last_seen, mention_count, value_score, report_date::text, authored_by,
+           CASE WHEN pinned THEN 1 ELSE 0 END
+    FROM ${linkTable}
+    WHERE url NOT LIKE 'https://matrix.to/#/@%'
+      AND url NOT LIKE 'http://matrix.to/#/@%'
+    ON CONFLICT (url_hash) DO UPDATE SET
+      url = EXCLUDED.url,
+      title = EXCLUDED.title,
+      category = EXCLUDED.category,
+      relevance = EXCLUDED.relevance,
+      shared_by = EXCLUDED.shared_by,
+      source_group = EXCLUDED.source_group,
+      first_seen = EXCLUDED.first_seen,
+      last_seen = EXCLUDED.last_seen,
+      mention_count = EXCLUDED.mention_count,
+      value_score = EXCLUDED.value_score,
+      report_date = EXCLUDED.report_date,
+      authored_by = EXCLUDED.authored_by,
+      pinned = EXCLUDED.pinned
+  `);
+  return {
+    messages_backfilled: messageResult.rowCount || 0,
+    links_backfilled: linkResult.rowCount || 0,
+  };
+}
+
 export function applyPushPayload(
   db: Database.Database,
   payload: PushPayload,
 ): PushResult {
   const records = asArray<RecordPayload>(payload.records);
-  const links = asArray<LinkPayload>(payload.links);
+  const links = asArray<LinkPayload>(payload.links).filter((link) => !isMatrixProfileUrl(link?.url));
   const dailyReports = asArray<DailyReportPayload>(payload.daily_reports);
   const wisdomTopics = asArray<WisdomTopicPayload>(payload.wisdom_topics);
   const wisdomItems = asArray<WisdomItemPayload>(payload.wisdom_items);
@@ -827,6 +1680,11 @@ export function applyPushPayload(
   };
 
   const transaction = db.transaction(() => {
+    if (payload.replace_links === true && links.length > 0) {
+      db.prepare("DELETE FROM links").run();
+      db.exec("DROP TABLE IF EXISTS links_fts");
+    }
+
     for (const record of records) {
       const message = record?.message as MessagePayload;
       if (!message || !isValidMessage(message)) {

@@ -34,6 +34,8 @@ def test_local_sync_script_does_not_trigger_remote_analysis():
     assert "--skip-remote-refresh" not in script
     assert "RUN_REMOTE_REFRESH" not in script
     assert "railway ssh" not in script
+    assert "VIBEZ_SYNC_ONCE_CLASSIFY=false" in script
+    assert "push_remote.py \\\n  --capture-only" in script
     assert "Local -> Railway sync complete." in script
 
 

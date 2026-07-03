@@ -28,8 +28,19 @@ describe("semantic pgvector search", () => {
 
   afterEach(() => {
     delete process.env.VIBEZ_PGVECTOR_URL;
+    delete process.env.VIBEZ_DATABASE_URL;
+    delete process.env.DATABASE_URL;
     delete process.env.VIBEZ_PGVECTOR_DIM;
     delete process.env.VIBEZ_PGVECTOR_TABLE;
+  });
+
+  test("enables pgvector through the dashboard database URL when no dedicated URL is set", async () => {
+    delete process.env.VIBEZ_PGVECTOR_URL;
+    process.env.VIBEZ_DATABASE_URL = "postgresql://dashboard-db";
+
+    const semantic = await import("./semantic");
+
+    expect(semantic.isPgvectorEnabled()).toBe(true);
   });
 
   test("searchHybridMessages embeds the query through the shared model router", async () => {
@@ -117,6 +128,7 @@ describe("semantic pgvector search", () => {
       dimensions: 64,
     });
     expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(String(queryMock.mock.calls[0][0])).toContain("matrix.to/#/@");
     expect(rows?.[0]).toMatchObject({
       url: "https://wiki.thirdgulfwar.com/",
       title: "wiki.thirdgulfwar.com",

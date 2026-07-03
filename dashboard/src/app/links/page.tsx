@@ -1,11 +1,12 @@
 // ABOUTME: Links page with NLP search, source/sharer filtering, sort, and browse.
-// ABOUTME: Responsive browse view with mobile cards, category filters, and local starring.
+// ABOUTME: Responsive browse view with mobile cards, category filters, and persistent counted starring.
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { StarButton } from "@/components/StarButton";
-import { linkStarKey, useStars } from "@/lib/stars";
+import { useLinkStars } from "@/lib/link-stars-client";
 
 interface Link {
   id: number;
@@ -25,6 +26,9 @@ interface Link {
 
 interface LinkStats {
   total: number;
+  total_mentions: number;
+  first_seen: string | null;
+  last_seen: string | null;
   sources: { name: string; count: number }[];
   sharers: { name: string; count: number }[];
   categories: { name: string; count: number }[];
@@ -86,12 +90,36 @@ function hostname(url: string): string {
   }
 }
 
+function cleanLinkText(value: string | null | undefined): string {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|div|li|ul|ol)>/gi, " ")
+    .replace(/<a\b[^>]*>/gi, " ")
+    .replace(/<\/a>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function smartTitle(link: Link): string {
   const { url, title } = link;
+  const cleanedTitle = cleanLinkText(title);
   // Use stored title if it's actually meaningful (not just the domain/hostname)
   const host = hostname(url);
-  if (title && title !== host && !title.endsWith(".com") && !title.endsWith(".io") && !title.endsWith(".org") && title.length > host.length + 3) {
-    return title;
+  if (
+    cleanedTitle &&
+    cleanedTitle !== host &&
+    !cleanedTitle.endsWith(".com") &&
+    !cleanedTitle.endsWith(".io") &&
+    !cleanedTitle.endsWith(".org") &&
+    cleanedTitle.length > host.length + 3
+  ) {
+    return cleanedTitle;
   }
   try {
     const parsed = new URL(url);
@@ -115,7 +143,7 @@ function smartTitle(link: Link): string {
     }
     // YouTube: use title if available, else "YouTube video"
     if (parsed.hostname.includes("youtube.com") || parsed.hostname === "youtu.be") {
-      return title || "YouTube video";
+      return cleanedTitle || "YouTube video";
     }
     // Substack: user.substack.com/p/slug → humanise slug
     if (parsed.hostname.endsWith(".substack.com") && parts[0] === "p" && parts[1]) {
@@ -153,7 +181,7 @@ function categoryBadge(cat: string | null): { color: string; label: string } | n
 }
 
 function extractDescription(link: Link): string {
-  const title = link.title || "";
+  const title = cleanLinkText(link.title);
   const domain = hostname(link.url);
 
   if (title && title !== domain && title.length > domain.length + 5) {
@@ -161,7 +189,7 @@ function extractDescription(link: Link): string {
   }
 
   if (link.relevance) {
-    let text = link.relevance;
+    let text = cleanLinkText(link.relevance);
     text = text.replace(/\s*\[[\w\s,+\-.'()]+\s+topics:.*?\]\s*/g, "");
     text = text.replace(/https?:\/\/\S+/g, "");
     const chunks = text.split(/\s*\|\s*/).filter((chunk) => chunk.trim().length > 10);
@@ -188,6 +216,13 @@ function formatDate(iso: string | null): string {
   if (diffDays < 7) return `${diffDays}d ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function formatArchiveDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function firstName(name: string): string {
@@ -232,7 +267,21 @@ export default function LinksPage() {
   const [starredOnly, setStarredOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const { stars, isLinkStarred, toggleLinkStar } = useStars();
+  const starUrls = useMemo(
+    () => [...links, ...pinnedLinks].map((link) => link.url),
+    [links, pinnedLinks],
+  );
+  const { stars, isLinkStarred, linkStarCount, toggleLinkStar } = useLinkStars(starUrls);
+
+  const openLink = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const openLinkFromKeyboard = useCallback((event: KeyboardEvent, url: string) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openLink(url);
+  }, [openLink]);
 
   const fetchLinks = useCallback(async (filters: LinkFilters) => {
     setLoading(true);
@@ -326,23 +375,33 @@ export default function LinksPage() {
   const topCategories = (stats?.categories || []).slice(0, 8);
   const topAuthors = (stats?.authors || []).slice(0, 10);
   const visibleLinks = starredOnly
-    ? links.filter((link) => Boolean(stars.links[linkStarKey(link.url)]))
+    ? links.filter((link) => Boolean(stars[link.url]?.starred))
     : links;
-  const starredCount = Object.keys(stars.links).length;
+  const starredCount = Object.values(stars).filter((entry) => entry.starred).length;
+  const archiveRange =
+    stats?.first_seen && stats.last_seen
+      ? `${formatArchiveDate(stats.first_seen)} to ${formatArchiveDate(stats.last_seen)}`
+      : "Archive range loading";
 
   return (
-    <div className="fade-up space-y-4">
-      <header className="flex items-baseline justify-between gap-3">
+    <div className="newspaper-section atlas-newspaper fade-up space-y-5">
+      <header className="newspaper-section-header flex items-baseline justify-between gap-3">
         <div>
-          <h1 className="vibe-title text-2xl text-slate-100">Links</h1>
-          <p className="vibe-subtitle text-sm">
-            Browse or search {stats ? stats.total.toLocaleString() : ""} shared links.
+          <p className="newspaper-kicker">Reference Desk</p>
+          <h1 className="vibe-title text-3xl text-slate-100 sm:text-4xl">Links Desk</h1>
+          <p className="vibe-subtitle mt-1 max-w-2xl text-sm">
+            Browse and search the community record: shared tools, papers, repos, articles,
+            and the small practical clues that explain what people are actually using.
           </p>
         </div>
         <div className="hidden rounded-full border border-slate-700/60 bg-slate-950/70 px-3 py-1 text-xs text-slate-400 sm:block">
-          {starredCount} starred
+          {starredCount} starred · {stats ? stats.total.toLocaleString() : ""} links
         </div>
       </header>
+      <div className="rounded-lg border border-[#d6cdb8] bg-[#f7f0e2] px-3 py-2 text-xs text-[#5b4f3b]">
+        Link archive: {archiveRange}
+        {stats ? ` · ${stats.total_mentions.toLocaleString()} mentions` : ""}
+      </div>
 
       <input
         type="text"
@@ -363,7 +422,7 @@ export default function LinksPage() {
               const author = authoredBadge(link.authored_by);
               return (
                 <div key={link.id} className="flex items-start gap-2">
-                  <span className="mt-0.5 text-[13px] leading-none text-amber-600/60">📌</span>
+                  <span className="mt-0.5 text-[10px] font-bold uppercase leading-none text-amber-600/60">Pin</span>
                   <div className="min-w-0 flex-1">
                     <a
                       href={link.url}
@@ -376,7 +435,7 @@ export default function LinksPage() {
                     </a>
                     {author ? (
                       <span className="ml-2 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
-                        ✍ {author}
+                        By {author}
                       </span>
                     ) : null}
                     {desc ? (
@@ -526,12 +585,20 @@ export default function LinksPage() {
               const author = authoredBadge(link.authored_by);
 
               return (
-                <article key={link.id} className="vibe-panel rounded-xl p-4">
+                <article
+                  key={link.id}
+                  role="link"
+                  tabIndex={0}
+                  onClick={() => openLink(link.url)}
+                  onKeyDown={(event) => openLinkFromKeyboard(event, link.url)}
+                  className="vibe-panel cursor-pointer rounded-xl p-4 transition hover:border-[#1f1a12]"
+                >
                   <div className="flex items-start gap-3">
                     <a
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
                       className="block min-w-0 flex-1"
                     >
                       <div className="flex items-center gap-2">
@@ -539,7 +606,7 @@ export default function LinksPage() {
                         {badge ? <span className={`shrink-0 text-[10px] ${badge.color}`}>{badge.label}</span> : null}
                         {author ? (
                           <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
-                            ✍ {author}
+                            By {author}
                           </span>
                         ) : null}
                       </div>
@@ -548,14 +615,16 @@ export default function LinksPage() {
                     <StarButton
                       compact
                       active={isLinkStarred(link.url)}
+                      count={linkStarCount(link.url)}
                       label={link.url}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        toggleLinkStar(link.url);
+                        void toggleLinkStar(link.url);
                       }}
                     />
                   </div>
+                  <div className="mt-3 text-xs font-bold uppercase text-[#7b2f20]">Open link</div>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
                     {sharer ? (
                       <span className="rounded-full border border-slate-800/60 px-2 py-0.5">from {sharer}</span>
@@ -577,13 +646,13 @@ export default function LinksPage() {
           </div>
 
           <div className="hidden overflow-hidden rounded-lg border border-slate-800/60 sm:block">
-            <table className="w-full text-left text-sm">
+            <table className="w-full table-fixed text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-800/60 text-[10px] font-medium uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Link</th>
-                  <th className="hidden px-3 py-2 sm:table-cell">From</th>
-                  <th className="px-3 py-2 text-right">When</th>
-                  <th className="px-3 py-2 text-right">Shares</th>
+                  <th className="hidden w-24 px-3 py-2 sm:table-cell">From</th>
+                  <th className="w-20 px-3 py-2 text-right">When</th>
+                  <th className="w-24 px-3 py-2 text-right">Open</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">
@@ -595,13 +664,21 @@ export default function LinksPage() {
                   const author = authoredBadge(link.authored_by);
 
                   return (
-                    <tr key={link.id} className="group transition hover:bg-slate-800/20">
+                    <tr
+                      key={link.id}
+                      role="link"
+                      tabIndex={0}
+                      onClick={() => openLink(link.url)}
+                      onKeyDown={(event) => openLinkFromKeyboard(event, link.url)}
+                      className="group cursor-pointer transition hover:bg-[#fffaf0]/70"
+                    >
                       <td className="px-3 py-2">
                         <div className="flex items-start gap-3">
                           <a
                             href={link.url}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(event) => event.stopPropagation()}
                             className="block min-w-0 flex-1"
                           >
                             <div className="flex items-center gap-2">
@@ -613,7 +690,7 @@ export default function LinksPage() {
                               ) : null}
                               {author ? (
                                 <span className="shrink-0 rounded-full border border-rose-800/50 bg-rose-950/30 px-1.5 py-0 text-[10px] text-rose-300">
-                                  ✍ {author}
+                                  By {author}
                                 </span>
                               ) : null}
                             </div>
@@ -622,11 +699,12 @@ export default function LinksPage() {
                           <StarButton
                             compact
                             active={isLinkStarred(link.url)}
+                            count={linkStarCount(link.url)}
                             label={link.url}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
-                              toggleLinkStar(link.url);
+                              void toggleLinkStar(link.url);
                             }}
                           />
                         </div>
@@ -636,7 +714,12 @@ export default function LinksPage() {
                         {formatDate(link.last_seen)}
                       </td>
                       <td className="px-3 py-2 text-right text-xs text-slate-500">
-                        {link.mention_count > 1 ? `${link.mention_count}x` : ""}
+                        <span className="font-bold uppercase text-[#7b2f20]">
+                          Open
+                        </span>
+                        {link.mention_count > 1 ? (
+                          <span className="ml-2 text-[#786846]">{link.mention_count}x</span>
+                        ) : null}
                       </td>
                     </tr>
                   );
