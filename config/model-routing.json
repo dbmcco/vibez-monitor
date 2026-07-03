@@ -19,57 +19,69 @@
     },
     "synthesis.daily": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "model": "z-ai/glm-5.1",
       "mode": "text",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 16384,
       "temperature": 0.2,
-      "timeout_ms": 120000
+      "timeout_ms": 120000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "wisdom.extract": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "model": "z-ai/glm-4.6",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 2048,
       "temperature": 0.1,
-      "timeout_ms": 120000
+      "timeout_ms": 120000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "wisdom.summarize": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "model": "z-ai/glm-4.6",
       "mode": "text",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 256,
       "temperature": 0.1,
-      "timeout_ms": 120000
+      "timeout_ms": 120000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "links.author_enrichment": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "model": "z-ai/glm-4.6",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 256,
       "temperature": 0.1,
-      "timeout_ms": 30000
+      "timeout_ms": 30000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "chat.interactive": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "model": "z-ai/glm-5.1",
       "mode": "text",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.2,
-      "timeout_ms": 60000
+      "timeout_ms": 60000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "dashboard.catchup": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "model": "z-ai/glm-5.1",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 4096,
       "temperature": 0.2,
-      "timeout_ms": 120000
+      "timeout_ms": 120000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "dashboard.atlas_report": {
       "provider": "openrouter",
@@ -82,44 +94,52 @@
       "context_window": 202800,
       "reasoning_effort": "none",
       "reasoning_exclude": true,
-      "fallback_model": "openai/gpt-4.1",
+      "fallback_model": "z-ai/glm-4.6",
       "fallback_timeout_ms": 180000
     },
     "dashboard.atlas_deeper_dive": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1",
+      "model": "z-ai/glm-5.1",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 4096,
       "temperature": 0.2,
-      "timeout_ms": 120000
+      "timeout_ms": 120000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "dashboard.topic_analysis": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "model": "z-ai/glm-4.6",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.1,
-      "timeout_ms": 60000
+      "timeout_ms": 60000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "dashboard.wisdom_enhance": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "model": "z-ai/glm-4.6",
       "mode": "text",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.2,
-      "timeout_ms": 60000
+      "timeout_ms": 60000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     },
     "dashboard.contributions": {
       "provider": "openrouter",
-      "model": "openai/gpt-4.1-mini",
+      "model": "z-ai/glm-4.6",
       "mode": "json",
       "base_url": "https://openrouter.ai/api/v1",
       "max_tokens": 1024,
       "temperature": 0.1,
-      "timeout_ms": 60000
+      "timeout_ms": 60000,
+      "reasoning_effort": "none",
+      "reasoning_exclude": true
     }
   }
 }
