@@ -118,6 +118,20 @@ class Config:
         token = os.environ.get("MATRIX_ACCESS_TOKEN", "")
         if not token and beeper_db.exists():
             token = read_beeper_token(beeper_db)
+
+        # Beeper Desktop API token: prefer the live session token Beeper keeps
+        # current in its own account database — the Desktop API (localhost:23373)
+        # accepts it and it auto-rotates, whereas a static BEEPER_API_TOKEN goes
+        # inactive within ~24h. Fall back to the env var only when no local DB
+        # exists (e.g. remote / non-Desktop deployments).
+        beeper_token = ""
+        if beeper_db.exists():
+            try:
+                beeper_token = read_beeper_token(beeper_db)
+            except Exception:
+                beeper_token = ""
+        if not beeper_token:
+            beeper_token = os.environ.get("BEEPER_API_TOKEN", "")
         subject_name = get_subject_name(os.environ.get("VIBEZ_SUBJECT_NAME"))
         self_aliases = get_self_aliases(
             subject_name=subject_name,
@@ -143,7 +157,7 @@ class Config:
             matrix_access_token=token,
             beeper_db_path=beeper_db,
             beeper_api_url=os.environ.get("BEEPER_API_URL", "http://localhost:23373"),
-            beeper_api_token=os.environ.get("BEEPER_API_TOKEN", ""),
+            beeper_api_token=beeper_token,
             google_groups_imap_host=os.environ.get(
                 "GOOGLE_GROUPS_IMAP_HOST", "imap.gmail.com"
             ),
