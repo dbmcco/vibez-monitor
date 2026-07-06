@@ -18,6 +18,10 @@
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TZ</key>
         <string>America/New_York</string>
+        <key>VIBEZ_ENV_FILE</key>
+        <string>__VIBEZ_ENV_FILE__</string>
+        <key>PYTHON_BIN</key>
+        <string>__PYTHON_BIN__</string>
     </dict>
     <key>RunAtLoad</key>
     <false/>

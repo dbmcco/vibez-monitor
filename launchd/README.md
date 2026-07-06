@@ -14,26 +14,31 @@ cd /path/to/vibez-monitor
 mkdir -p ~/Library/Logs/vibez-monitor
 
 for f in launchd/*.plist; do
+  # When the nightly runs from a worktree but credentials live in the main
+  # checkout (or a specific venv python is required), export these before
+  # rendering — they are substituted into the daily-update template:
+  #   export VIBEZ_ENV_FILE=/Users/you/projects/vibez-monitor/.env
+  #   export PYTHON_BIN=/Users/you/projects/vibez-monitor/backend/.venv/bin/python
   sed \
     -e "s|__VIBEZ_ROOT__|$(pwd)|g" \
     -e "s|__LOG_DIR__|$HOME/Library/Logs/vibez-monitor|g" \
+    -e "s|__VIBEZ_ENV_FILE__|${VIBEZ_ENV_FILE:-}|g" \
+    -e "s|__PYTHON_BIN__|${PYTHON_BIN:-}|g" \
     "$f" > "$HOME/Library/LaunchAgents/$(basename "$f")"
 done
 
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.sync.plist 2>/dev/null || true
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.synthesis.plist 2>/dev/null || true
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.dashboard.plist 2>/dev/null || true
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.classify-missing.plist 2>/dev/null || true
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.enrich-link-authors.plist 2>/dev/null || true
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist 2>/dev/null || true
-launchctl unload ~/Library/LaunchAgents/com.vibez-monitor.daily-update.plist 2>/dev/null || true
-
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.sync.plist
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.synthesis.plist
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.dashboard.plist
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.enrich-link-authors.plist
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.push-railway.plist
-launchctl load ~/Library/LaunchAgents/com.vibez-monitor.daily-update.plist
+# Use the modern bootout/bootstrap API. The legacy unload/load pair can leave
+# StartCalendarInterval timers registered-but-unarmed (runs stays 0), which
+# silently skipped the 4:30 daily-update run in July 2026.
+DOMAIN="gui/$(id -u)"
+for plist in ~/Library/LaunchAgents/com.vibez-monitor.{sync,synthesis,dashboard,classify-missing,enrich-link-authors,push-railway,daily-update}.plist; do
+  [[ -f "$plist" ]] || continue
+  launchctl bootout "$DOMAIN/$(basename "${plist%.plist}")" 2>/dev/null || true
+done
+for plist in ~/Library/LaunchAgents/com.vibez-monitor.{sync,synthesis,dashboard,enrich-link-authors,push-railway,daily-update}.plist; do
+  [[ -f "$plist" ]] || continue
+  launchctl bootstrap "$DOMAIN" "$plist"
+done
 ```
 
 The `com.vibez-monitor.daily-update.plist` template is the canonical daily public-site refresh:

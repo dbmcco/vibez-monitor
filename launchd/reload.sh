@@ -29,7 +29,9 @@ JOBS=(
   com.vibez-monitor.daily-update
 )
 
-echo "Reloading vibez-monitor launchd jobs..."
+UID_NUM="$(id -u)"
+DOMAIN="gui/${UID_NUM}"
+echo "Reloading vibez-monitor launchd jobs (bootout/bootstrap into $DOMAIN)..."
 fail=0
 for j in "${JOBS[@]}"; do
   plist="$LA/$j.plist"
@@ -37,11 +39,14 @@ for j in "${JOBS[@]}"; do
     echo "  SKIP  $j (no plist installed at $plist)"
     continue
   fi
-  launchctl unload "$plist" 2>/dev/null || true
-  if launchctl load "$plist" 2>/dev/null; then
+  # Use the modern bootout/bootstrap API. The legacy unload/load pair can leave
+  # StartCalendarInterval timers registered-but-unarmed (launchctl print shows
+  # runs = 0 forever), which silently killed the 4:30 daily-update run in Jul 2026.
+  launchctl bootout "$DOMAIN/$j" 2>/dev/null || true
+  if launchctl bootstrap "$DOMAIN" "$plist" 2>/dev/null; then
     echo "  OK    $j"
   else
-    echo "  FAIL  $j (launchctl load returned non-zero)"
+    echo "  FAIL  $j (launchctl bootstrap returned non-zero)"
     fail=1
   fi
 done
