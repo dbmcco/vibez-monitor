@@ -108,13 +108,18 @@ class _PoolConnection:
     def rollback(self) -> None:
         self._raw.execute("ROLLBACK")
 
+    def _adapt_placeholders(self, sql: str) -> str:
+        return sql.replace("?", "%s")
+
     def execute(self, sql: str, params: Any = None) -> Any:
+        sql = self._adapt_placeholders(sql)
         if params is not None:
             return self._raw.execute(sql, params)
         return self._raw.execute(sql)
 
     def executemany(self, sql: str, params: Any) -> Any:
-        return self._raw.executemany(sql, params)
+        with self._raw.cursor() as cursor:
+            return cursor.executemany(self._adapt_placeholders(sql), params)
 
     def executescript(self, _sql: str) -> None:
         # SQLite compat — split into statements

@@ -46,8 +46,31 @@ export interface CatchupLink {
   relevance: string;
 }
 
+export interface ThemeMapBranch {
+  theme: string;
+  timeline: string;
+  drivers: string[];
+  evidence: string[];
+  people: string[];
+  tension: string;
+  implication: string;
+}
+
+export interface ThemeMapConvergence {
+  themes: string[];
+  meaning: string;
+}
+
 export interface CatchupResult {
   catchup_memo: string;
+  week_in_review?: {
+    title: string;
+    paragraphs: string[];
+    theme_map: {
+      branches: ThemeMapBranch[];
+      convergences: ThemeMapConvergence[];
+    };
+  };
   conversation_arcs: CatchupArc[];
   themes: string[];
   trends: {
@@ -63,6 +86,7 @@ export interface CatchupResult {
 
 const EMPTY_RESULT: CatchupResult = {
   catchup_memo: "",
+  week_in_review: undefined,
   conversation_arcs: [],
   themes: [],
   trends: { emerging: [], fading: [], shifts: "" },
@@ -71,6 +95,13 @@ const EMPTY_RESULT: CatchupResult = {
   unresolved_threads: [],
   hot_on_return: [],
 };
+
+export function isCatchupCacheUsable(result: CatchupResult): boolean {
+  return (
+    (result.week_in_review?.paragraphs?.filter(Boolean).length ?? 0) === 5 &&
+    (result.week_in_review?.theme_map?.branches?.length ?? 0) > 0
+  );
+}
 
 export function getCatchupCache(
   startDate: string,
@@ -84,7 +115,8 @@ export function getCatchupCache(
       .get(startDate, endDate) as { result_json: string } | undefined;
     if (!row) return null;
     try {
-      return JSON.parse(row.result_json) as CatchupResult;
+      const parsed = JSON.parse(row.result_json) as CatchupResult;
+      return isCatchupCacheUsable(parsed) ? parsed : null;
     } catch {
       return null;
     }
@@ -224,6 +256,8 @@ ${linksText}`;
 
 Below are the daily briefings for that period. Identify cross-day through-lines, what escalated, what resolved, who drove conversations, what is still unresolved, and what is hot as of the last day (${lastDate}).
 
+Also produce a Week in Review that handles multiple fast-moving topics without forcing them into one false narrative. Use a branching theme map: time runs left to right; each branch is a theme; each branch has Ishikawa-style ribs for drivers, evidence, people, tension, and implication; convergence nodes show where branches combine into a larger story.
+
 Informational only — no contribution suggestions.
 
 ${daysBlock}
@@ -231,6 +265,29 @@ ${daysBlock}
 Respond with JSON matching this exact schema:
 {
   "catchup_memo": "<3-5 sentence headline narrative of the entire period>",
+  "week_in_review": {
+    "title": "<plain-language title for the week-level theme map>",
+    "paragraphs": ["<paragraph 1>", "<paragraph 2>", "<paragraph 3>", "<paragraph 4>", "<paragraph 5>"],
+    "theme_map": {
+      "branches": [
+        {
+          "theme": "<theme name>",
+          "timeline": "<how this theme moved across the window>",
+          "drivers": ["<why it gained attention>"],
+          "evidence": ["<specific evidence from the supplied daily reports>"],
+          "people": ["<people associated with this branch>"],
+          "tension": "<central tension, tradeoff, or unresolved question>",
+          "implication": "<what this branch changes or points toward>"
+        }
+      ],
+      "convergences": [
+        {
+          "themes": ["<theme name>", "<theme name>"],
+          "meaning": "<what becomes visible when these branches connect>"
+        }
+      ]
+    }
+  },
   "conversation_arcs": [
     {
       "title": "<arc title>",
@@ -275,6 +332,8 @@ Respond with JSON matching this exact schema:
 }
 
 RULES:
+- week_in_review.paragraphs: Exactly 5 paragraphs, each 2-4 sentences; synthesize the whole map, not one forced main topic.
+- week_in_review.theme_map: preserve multiple simultaneous themes; do not collapse distinct branches unless the supplied reports show a real convergence.
 - conversation_arcs: synthesize cross-day through-lines, not per-day summaries
 - people_activity: who drove the most significant conversations; describe their specific contribution
 - unresolved_threads: arcs with no clear resolution by ${endDate}

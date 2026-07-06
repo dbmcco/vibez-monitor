@@ -17,21 +17,43 @@ from vibez.db import get_connection, init_db
 logger = logging.getLogger("vibez.sync")
 
 
+def _matrix_message_id(event_id: str, source_name: str | None) -> str:
+    if not source_name:
+        return event_id
+    return f"matrix:{source_name}:{event_id}"
+
+
+def _sender_name_from_mxid(sender_id: str) -> str:
+    localpart = sender_id.split(":", 1)[0].lstrip("@")
+    if localpart.startswith("whatsapp_"):
+        localpart = localpart.removeprefix("whatsapp_")
+        if localpart.isdigit():
+            return f"+{localpart}"
+    return localpart
+
+
 def parse_message_event(
-    event: dict[str, Any], room_id: str, room_name: str
+    event: dict[str, Any],
+    room_id: str,
+    room_name: str,
+    source_name: str | None = None,
 ) -> dict[str, Any] | None:
     """Parse a Matrix m.room.message event into our message format."""
     if event.get("type") != "m.room.message":
         return None
 
     content = event.get("content", {})
-    sender_name = content.get("com.beeper.sender_name", "")
+    sender_name = (
+        content.get("com.beeper.sender_name", "")
+        or content.get("com.mautrix.displayname", "")
+        or content.get("displayname", "")
+    )
     if not sender_name:
         sender_id = event.get("sender", "")
-        sender_name = sender_id.split(":")[0].lstrip("@").replace("whatsapp_", "+")
+        sender_name = _sender_name_from_mxid(sender_id)
 
     return {
-        "id": event["event_id"],
+        "id": _matrix_message_id(event["event_id"], source_name),
         "room_id": room_id,
         "room_name": room_name,
         "sender_id": event.get("sender", ""),
@@ -53,8 +75,18 @@ def filter_whatsapp_rooms(
         room_name = room_id
         for ev in state_events:
             if ev.get("type") == "m.bridge":
-                bridge_name = ev.get("content", {}).get("com.beeper.bridge_name", "")
-                if bridge_name == "whatsapp":
+                content = ev.get("content", {})
+                bridge_name = content.get("com.beeper.bridge_name", "")
+                protocol = content.get("protocol", {})
+                protocol_id = protocol.get("id", "") if isinstance(protocol, dict) else ""
+                bridgebot = content.get("bridgebot", "")
+                network = content.get("network", "")
+                if (
+                    bridge_name == "whatsapp"
+                    or protocol_id == "whatsapp"
+                    or network == "whatsapp"
+                    or str(bridgebot).startswith("@whatsappbot:")
+                ):
                     is_whatsapp = True
             if ev.get("type") == "m.room.name":
                 room_name = ev.get("content", {}).get("name", room_id)
@@ -64,7 +96,9 @@ def filter_whatsapp_rooms(
 
 
 def extract_messages_from_sync(
-    sync_response: dict[str, Any], known_rooms: dict[str, str]
+    sync_response: dict[str, Any],
+    known_rooms: dict[str, str],
+    source_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Extract messages from a sync response, filtering to known WhatsApp rooms."""
     messages = []
@@ -75,7 +109,7 @@ def extract_messages_from_sync(
         room_name = known_rooms[room_id]
         timeline_events = room_data.get("timeline", {}).get("events", [])
         for event in timeline_events:
-            msg = parse_message_event(event, room_id, room_name)
+            msg = parse_message_event(event, room_id, room_name, source_name=source_name)
             if msg is not None:
                 messages.append(msg)
     return messages
@@ -104,21 +138,30 @@ def save_messages(db_path: Path, messages: list[dict[str, Any]]) -> int:
     return count
 
 
-def load_sync_token(db_path: Path) -> str | None:
+def matrix_sync_state_key(source_name: str | None = None) -> str:
+    if not source_name:
+        return "next_batch"
+    return f"matrix_next_batch:{source_name}"
+
+
+def load_sync_token(db_path: Path, source_name: str | None = None) -> str | None:
     """Load the next_batch sync token from the database."""
     conn = get_connection(db_path)
-    cursor = conn.execute("SELECT value FROM sync_state WHERE key = 'next_batch'")
+    cursor = conn.execute(
+        "SELECT value FROM sync_state WHERE key = %s",
+        (matrix_sync_state_key(source_name),),
+    )
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
 
 
-def save_sync_token(db_path: Path, token: str) -> None:
+def save_sync_token(db_path: Path, token: str, source_name: str | None = None) -> None:
     """Save the next_batch sync token."""
     conn = get_connection(db_path)
     conn.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('next_batch', ?)",
-        (token,),
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        (matrix_sync_state_key(source_name), token),
     )
     conn.commit()
     conn.close()
@@ -128,7 +171,8 @@ async def sync_loop(config: Config, on_messages=None) -> None:
     """Main sync loop. Long-polls the Matrix server continuously."""
     init_db(config.db_path)
     known_rooms: dict[str, str] = {}
-    next_batch = load_sync_token(config.db_path)
+    source_name = config.matrix_source_name
+    next_batch = load_sync_token(config.db_path, source_name=source_name)
     backoff = 1
 
     headers = {"Authorization": f"Bearer {config.matrix_access_token}"}
@@ -157,7 +201,11 @@ async def sync_loop(config: Config, on_messages=None) -> None:
                     known_rooms.update(new_wa_rooms)
                     logger.info("WhatsApp rooms: %s", list(known_rooms.values()))
 
-                messages = extract_messages_from_sync(data, known_rooms)
+                messages = extract_messages_from_sync(
+                    data,
+                    known_rooms,
+                    source_name=source_name,
+                )
                 if messages:
                     saved = save_messages(config.db_path, messages)
                     logger.info("Saved %d new messages (of %d)", saved, len(messages))
@@ -167,7 +215,7 @@ async def sync_loop(config: Config, on_messages=None) -> None:
                 new_batch = data.get("next_batch", "")
                 if new_batch:
                     next_batch = new_batch
-                    save_sync_token(config.db_path, next_batch)
+                    save_sync_token(config.db_path, next_batch, source_name=source_name)
 
                 backoff = 1
 

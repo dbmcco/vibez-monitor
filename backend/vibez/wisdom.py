@@ -470,7 +470,7 @@ def _persist_wisdom_results(
 def run_wisdom_extraction(
     db_path: Path,
     api_key: str = "",
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "hermes3:8b",
     full_rebuild: bool = False,
     manifest_path: Path | str | None = None,
 ) -> dict[str, int]:

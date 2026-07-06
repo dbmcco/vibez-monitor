@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.vibez-monitor.daily-update</string>
+    <string>com.vibez-monitor.healthcheck</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>cd __VIBEZ_ROOT__ &amp;&amp; ./scripts/daily_update_to_railway.sh</string>
+        <string>cd __VIBEZ_ROOT__ &amp;&amp; ./scripts/vibez_healthcheck.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__VIBEZ_ROOT__</string>
@@ -18,23 +18,14 @@
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>TZ</key>
         <string>America/New_York</string>
-        <key>VIBEZ_ENV_FILE</key>
-        <string>__VIBEZ_ENV_FILE__</string>
-        <key>PYTHON_BIN</key>
-        <string>__PYTHON_BIN__</string>
     </dict>
     <key>RunAtLoad</key>
     <false/>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>4</integer>
-        <key>Minute</key>
-        <integer>30</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>1800</integer>
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/daily-update-stdout.log</string>
+    <string>__LOG_DIR__/healthcheck-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/daily-update-stderr.log</string>
+    <string>__LOG_DIR__/healthcheck-stderr.log</string>
 </dict>
 </plist>

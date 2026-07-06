@@ -58,8 +58,8 @@ def test_config_defaults(tmp_path):
     assert cfg.sync_timeout_ms == 30000
     assert cfg.google_groups_bootstrap_days == 14
     assert cfg.google_groups_bootstrap_max_uids == 2000
-    assert cfg.classifier_model == "claude-sonnet-4-6"
-    assert cfg.synthesis_model == "claude-sonnet-4-6"
+    assert cfg.classifier_model == "hermes3:8b"
+    assert cfg.synthesis_model == "hermes3:8b"
     assert cfg.classify_on_sync is False
     assert cfg.pgvector_index_on_sync is False
     assert cfg.subject_name == "User"

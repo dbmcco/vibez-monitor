@@ -47,6 +47,8 @@ class Config:
     ollama_base_url: str = "http://localhost:11434"
     matrix_homeserver: str = "https://matrix.beeper.com"
     matrix_access_token: str = ""
+    matrix_sync_enabled: bool = False
+    matrix_source_name: str = "matrix"
     beeper_db_path: Path = field(
         default_factory=lambda: Path.home()
         / "Library/Application Support/BeeperTexts/account.db"
@@ -71,8 +73,8 @@ class Config:
     classify_on_sync: bool = False
     sync_timeout_ms: int = 30000
     poll_interval: int = 30
-    classifier_model: str = "claude-sonnet-4-6"
-    synthesis_model: str = "claude-sonnet-4-6"
+    classifier_model: str = "hermes3:8b"
+    synthesis_model: str = "hermes3:8b"
     synthesis_hour: int = 6
     subject_name: str = DEFAULT_SUBJECT_NAME
     self_aliases: tuple[str, ...] = field(default_factory=get_self_aliases)
@@ -155,6 +157,11 @@ class Config:
                 "MATRIX_HOMESERVER", "https://matrix.beeper.com"
             ),
             matrix_access_token=token,
+            matrix_sync_enabled=_parse_bool(
+                os.environ.get("MATRIX_SYNC_ENABLED"), False
+            ),
+            matrix_source_name=os.environ.get("MATRIX_SOURCE_NAME", "matrix").strip()
+            or "matrix",
             beeper_db_path=beeper_db,
             beeper_api_url=os.environ.get("BEEPER_API_URL", "http://localhost:23373"),
             beeper_api_token=beeper_token,
@@ -204,8 +211,8 @@ class Config:
             not in {"0", "false", "no", "off"},
             sync_timeout_ms=int(os.environ.get("SYNC_TIMEOUT_MS", "30000")),
             poll_interval=int(os.environ.get("POLL_INTERVAL", "30")),
-            classifier_model=os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-6"),
-            synthesis_model=os.environ.get("SYNTHESIS_MODEL", "claude-sonnet-4-6"),
+            classifier_model=os.environ.get("CLASSIFIER_MODEL", "hermes3:8b"),
+            synthesis_model=os.environ.get("SYNTHESIS_MODEL", "hermes3:8b"),
             synthesis_hour=int(os.environ.get("SYNTHESIS_HOUR", "6")),
             subject_name=subject_name,
             self_aliases=self_aliases,

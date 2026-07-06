@@ -37,6 +37,45 @@ def test_parse_message_event_extracts_beeper_sender_name():
     assert msg["sender_name"] == "Harper"
 
 
+def test_parse_mautrix_message_uses_source_prefix_and_mxid_sender():
+    event = {
+        "event_id": "$ev1",
+        "sender": "@whatsapp_15551234567:matrix.vibez",
+        "type": "m.room.message",
+        "origin_server_ts": 1770000000000,
+        "content": {"msgtype": "m.text", "body": "hello"},
+    }
+    msg = parse_message_event(
+        event,
+        "!wa:matrix.vibez",
+        "AGI Builders",
+        source_name="mautrix",
+    )
+    assert msg["id"] == "matrix:mautrix:$ev1"
+    assert msg["sender_name"] == "+15551234567"
+
+
+def test_parse_message_event_prefers_displayname_for_mautrix_sender():
+    event = {
+        "event_id": "$ev2",
+        "sender": "@whatsapp_15551234567:matrix.vibez",
+        "type": "m.room.message",
+        "origin_server_ts": 1770000001000,
+        "content": {
+            "msgtype": "m.text",
+            "body": "hello",
+            "com.mautrix.displayname": "Riley",
+        },
+    }
+    msg = parse_message_event(
+        event,
+        "!wa:matrix.vibez",
+        "AGI Builders",
+        source_name="mautrix",
+    )
+    assert msg["sender_name"] == "Riley"
+
+
 def test_filter_whatsapp_rooms():
     rooms_state = {
         "!wa_room:beeper.local": {
@@ -55,6 +94,31 @@ def test_filter_whatsapp_rooms():
     assert "!wa_room:beeper.local" in wa_rooms
     assert "!slack_room:beeper.local" not in wa_rooms
     assert wa_rooms["!wa_room:beeper.local"] == "The vibez (code code code)"
+
+
+def test_filter_whatsapp_rooms_detects_mautrix_bridge_info():
+    rooms_state = {
+        "!wa_room:matrix.vibez": {
+            "state": {"events": [
+                {
+                    "type": "m.bridge",
+                    "content": {
+                        "bridgebot": "@whatsappbot:matrix.vibez",
+                        "protocol": {"id": "whatsapp"},
+                    },
+                },
+                {"type": "m.room.name", "content": {"name": "AGI Builders"}},
+            ]}
+        },
+        "!general:matrix.vibez": {
+            "state": {"events": [
+                {"type": "m.room.name", "content": {"name": "General"}},
+            ]}
+        },
+    }
+    assert filter_whatsapp_rooms(rooms_state) == {
+        "!wa_room:matrix.vibez": "AGI Builders"
+    }
 
 
 def test_extract_messages_from_sync():

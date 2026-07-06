@@ -24,3 +24,4 @@ dashboard/.generated/
 .DS_Store
 vibez.db*
 .workgraph
+backups/
