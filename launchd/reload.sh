@@ -27,6 +27,7 @@ JOBS=(
   com.vibez-monitor.synthesis
   com.vibez-monitor.push-railway
   com.vibez-monitor.daily-update
+  com.vibez-monitor.healthcheck
 )
 
 UID_NUM="$(id -u)"
