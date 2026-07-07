@@ -319,7 +319,7 @@ def poll_once(
     """Poll IMAP mailbox once and return newly parsed Google Groups messages."""
     uid_cursor = _load_uid_cursor(db_path, mailbox)
     mailbox_arg = _imap_mailbox_arg(mailbox)
-    with imaplib.IMAP4_SSL(host=host, port=port) as client:
+    with imaplib.IMAP4_SSL(host=host, port=port, timeout=30) as client:
         client.login(user, password)
         status, _ = client.select(mailbox_arg, readonly=True)
         if status != "OK":
@@ -423,7 +423,8 @@ async def sync_loop(
     backoff = 1
     while True:
         try:
-            new_messages = poll_once(
+            new_messages = await asyncio.to_thread(
+                poll_once,
                 db_path=db_path,
                 host=host,
                 port=port,

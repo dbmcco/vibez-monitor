@@ -56,7 +56,12 @@ def _get_pool() -> Any:
     url = os.environ.get("VIBEZ_DATABASE_URL") or os.environ.get("VIBEZ_PGVECTOR_URL") or DEFAULT_DATABASE_URL
     _pool = _ConnectionPool(url, min_size=1, max_size=16, open=True, timeout=30, max_lifetime=3600)
     _pool_url = url
-    logger.info("Postgres pool created (min=1, max=8) for %s", url.split("@")[-1] if "@" in url else url)
+    logger.info(
+        "Postgres pool created (min=%d, max=%d) for %s",
+        _pool.min_size,
+        _pool.max_size,
+        url.split("@")[-1] if "@" in url else url,
+    )
     return _pool
 
 

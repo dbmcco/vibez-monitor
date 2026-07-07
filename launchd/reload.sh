@@ -44,10 +44,11 @@ for j in "${JOBS[@]}"; do
   # StartCalendarInterval timers registered-but-unarmed (launchctl print shows
   # runs = 0 forever), which silently killed the 4:30 daily-update run in Jul 2026.
   launchctl bootout "$DOMAIN/$j" 2>/dev/null || true
-  if launchctl bootstrap "$DOMAIN" "$plist" 2>/dev/null; then
+  if err="$(launchctl bootstrap "$DOMAIN" "$plist" 2>&1)"; then
     echo "  OK    $j"
   else
     echo "  FAIL  $j (launchctl bootstrap returned non-zero)"
+    [[ -n "$err" ]] && printf '        %s\n' "$err"
     fail=1
   fi
 done

@@ -367,7 +367,9 @@ async def sync_loop(
 
     while True:
         try:
-            new_messages = poll_once(db_path, api_base, api_token, groups)
+            new_messages = await asyncio.to_thread(
+                poll_once, db_path, api_base, api_token, groups
+            )
 
             if new_messages and on_messages:
                 await on_messages(new_messages)

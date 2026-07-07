@@ -1,6 +1,7 @@
 """Entry point for the Beeper Desktop API sync service."""
 
 import asyncio
+import faulthandler
 import logging
 import sys
 from pathlib import Path
@@ -205,4 +206,8 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Self-dump all thread stacks to stderr every 60s so the next silent stall
+    # leaves its true stack in sync-stderr.log (py-spy needs root on macOS).
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(60, repeat=True, file=sys.stderr)
     asyncio.run(main())
